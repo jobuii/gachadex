@@ -122,3 +122,29 @@ negative-NAV finding the live exercise surfaced. Off by default; ~3000–5000 fo
 **Still to validate before real-funds launch (doc §7):** measure the actual DAILY single-card price gap
 `g` (the governing input — verified data is only monthly); size the insurance fund for the liquidation→
 next-print slippage (no daily-oracle precedent); backtest the caps; re-pull venue params at build time.
+
+## 5. Real-money referral program (post-launch, deferred)
+
+Today's referral bonus is **play-money only**: `redeemReferral` credits from `FAUCET_SOURCE` and is
+hard-gated `!config.realFunds` (`referral.ts:142`), and the panel blurb hides when `rewardsEnabled`
+is false. So at the real-funds launch there is **no referral incentive** — the bonus and the
+"$X play-USDC" copy both turn off automatically. (Same gate as the faucet.)
+
+A real-money referral program is a deliberate feature, not a flag flip, because real payouts change
+the risk:
+- **Cost:** every referral pays real USDC out of the house. `FAUCET_SOURCE` doesn't exist for real
+  funds — a real bonus needs a funded budget bucket (e.g. `FEE_REVENUE` or an operator allocation,
+  mirroring the insurance-fund pattern). Never credit unbacked USDC into `USER_COLLATERAL` — that
+  breaks proof-of-reserves, exactly what the current gate prevents.
+- **Abuse:** a flat signup bonus is sybil-farmed (one person, many wallets). `MAX_REFERRALS_PAID`
+  caps per-referrer count, but real money raises the incentive — tie rewards to *real activity*, not
+  a flat signup credit.
+- **Compliance:** paying real value sits on the same KYC/AML surface as deposits/withdrawals.
+
+**Options (decision pending):**
+1. **No real referral program** — simplest; launch without one.
+2. **Fee rev-share** *(recommended if any)* — referrer earns a % of the referred user's trading fees.
+   Real activity → real reward, low farming risk, self-funding from fees. Common in crypto.
+3. **Deposit-matched / volume-milestone bonus** — pay after the referred user deposits or trades $N.
+   Cuts signup farming; still a marketing cost.
+4. **Flat signup bonus** — highest abuse risk; only with strong KYC + tight caps.
