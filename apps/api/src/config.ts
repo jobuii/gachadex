@@ -128,7 +128,8 @@ export const config = {
   usdcMint: process.env.USDC_MINT ?? '', // per-network SPL mint
   treasuryPubkey: process.env.TREASURY_PUBKEY ?? '', // Squads multisig (cold) address
   depositSeedKmsRef: process.env.DEPOSIT_SEED_KMS_REF ?? '',
-  jupiterBase: process.env.JUPITER_BASE ?? 'https://quote-api.jup.ag',
+  jupiterBase: process.env.JUPITER_BASE ?? 'https://api.jup.ag', // Jupiter Swap API v1 host (the old quote-api.jup.ag/v6 is retired; lite-api is "phase-out")
+  jupiterApiKey: process.env.JUPITER_API_KEY ?? '', // optional Portal x-api-key; keyless works at 0.5 RPS — fine for per-deposit swaps
   swapSlippageBps: num('SWAP_SLIPPAGE_BPS', 100), // 1% max slippage on SOL->USDC deposit swaps
   // SOL->USDC deposit swaps need a Jupiter route, which only exists on MAINNET. Off-route networks
   // (devnet) park SOL deposits as 'detected' rows — no swap attempts, no retry spam — until a

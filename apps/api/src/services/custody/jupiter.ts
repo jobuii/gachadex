@@ -3,7 +3,11 @@ import { config } from '../../config.ts';
 import { getLimits } from './limits.ts';
 
 /**
- * Thin Jupiter v6 client (custody P1.5): swap a deposit wallet's SOL into USDC, in place.
+ * Thin Jupiter Swap API v1 client (custody P1.5): swap a deposit wallet's SOL into USDC, in place.
+ * Host is api.jup.ag (`/swap/v1/quote` + `/swap/v1/swap`) — the old quote-api.jup.ag/v6 host is retired.
+ * TODO: v1 (Metis) is on Jupiter's deprecation path. Migrate to Swap API v2 (`/swap/v2/order` +
+ * `/swap/v2/execute`, a different quote→order→execute contract) before v1 sunsets — a tracked
+ * follow-up, not this host hotfix.
  * The output lands on the wallet's own USDC ATA, where the regular USDC deposit path
  * detects and credits the ACTUAL proceeds — this module never touches the ledger.
  *
@@ -23,18 +27,20 @@ interface QuoteResponse {
 }
 
 export async function swapSolToUsdcViaJupiter(conn: Connection, from: Keypair, lamports: bigint): Promise<string> {
+  // Optional Portal API key (x-api-key) for higher rate limits; keyless works at 0.5 RPS.
+  const authHeaders: Record<string, string> = config.jupiterApiKey ? { 'x-api-key': config.jupiterApiKey } : {};
   const quoteUrl =
-    `${config.jupiterBase}/v6/quote?inputMint=${SOL_MINT}&outputMint=${config.usdcMint}` +
+    `${config.jupiterBase}/swap/v1/quote?inputMint=${SOL_MINT}&outputMint=${config.usdcMint}` +
     `&amount=${lamports.toString()}&slippageBps=${getLimits().swapSlippageBps}`;
-  const quote = (await (await fetch(quoteUrl)).json()) as QuoteResponse;
+  const quote = (await (await fetch(quoteUrl, { headers: authHeaders })).json()) as QuoteResponse;
   if (!quote || quote.error || !quote.outAmount) {
     throw new Error(`jupiter quote failed: ${quote?.error ?? 'no route'}`);
   }
 
   const swapRes = (await (
-    await fetch(`${config.jupiterBase}/v6/swap`, {
+    await fetch(`${config.jupiterBase}/swap/v1/swap`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         quoteResponse: quote,
         userPublicKey: from.publicKey.toBase58(),
