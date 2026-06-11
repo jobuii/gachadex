@@ -131,6 +131,34 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Delegated trading keys (perp-dex "agent wallets"). A master wallet authorizes a fresh ed25519
+-- keypair to TRADE on its account — open/close positions, never withdraw or move funds — with
+-- optional expiry and instant revocation. Bots/agents run on a delegate key and never touch the
+-- master key; a leaked delegate caps damage at "bad trades until revoked". A delegate logs in via
+-- the normal SIWS flow with its OWN pubkey and is mapped to the master's user_id at a 'trade' scope.
+-- The pubkey is the PRIMARY KEY (a key delegates for at most one account) and, once revoked, the
+-- row is permanent (the pubkey is burned — re-authorizing a revoked key is rejected). See
+-- docs/cli-spec.md Part 1.
+CREATE TABLE IF NOT EXISTS delegated_keys (
+  pubkey     TEXT PRIMARY KEY,                    -- delegate's ed25519 pubkey (base58)
+  user_id    TEXT NOT NULL REFERENCES users(id),  -- the MASTER account this key trades for
+  label      TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ,                          -- NULL = no expiry
+  revoked_at TIMESTAMPTZ                           -- NULL = active; once set the row is permanent
+);
+CREATE INDEX IF NOT EXISTS idx_delegated_keys_user ON delegated_keys(user_id);
+
+-- Sessions carry their scope + delegate so refresh can't silently re-mint a delegate's session as
+-- full-scope, and so revocation re-checks the delegate row on rotation (added in-place; no-op on a
+-- fresh DB). delegate_pubkey is NULL for a normal (master, full-scope) session.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS scope           TEXT NOT NULL DEFAULT 'full';
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS delegate_pubkey TEXT REFERENCES delegated_keys(pubkey);
+
+-- Nonce purpose tag (login | withdraw | delegate). Cheap defense-in-depth on top of the per-purpose
+-- message rendering: a nonce minted for one flow can't be claimed by another.
+ALTER TABLE auth_nonces ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'login';
+
 -- =========================================================================
 -- Markets (cards AND indices) + index composition
 -- =========================================================================
@@ -261,6 +289,9 @@ CREATE TABLE IF NOT EXISTS orders (
 ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_idempotency_key_key;
 DROP INDEX IF EXISTS orders_idempotency_key_key;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_user_idem ON orders(user_id, idempotency_key);
+-- Audit: which key actually placed the order. NULL = the account's own (master) key; set to the
+-- delegate pubkey when a trade-scoped delegated key placed it. (no-op on a fresh DB)
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS actor_pubkey TEXT;
 
 CREATE TABLE IF NOT EXISTS fills (
   id                 TEXT PRIMARY KEY,

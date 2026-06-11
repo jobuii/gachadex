@@ -11,14 +11,14 @@ const WithdrawReq = z.object({ shares: z.string().regex(/^\d+$/, 'shares must be
 export async function lpRoutes(app: FastifyInstance): Promise<void> {
   app.get('/lp/pool', async () => getPool(await getDb()));
 
-  app.get('/lp/position', { preHandler: authenticate }, async (req) => getLpPosition(await getDb(), req.userId!));
+  app.get('/lp/position', { preHandler: authenticate, config: { scope: 'trade' } }, async (req) => getLpPosition(await getDb(), req.userId!));
 
-  app.post('/lp/deposit', { preHandler: authenticate }, async (req) => {
+  app.post('/lp/deposit', { preHandler: authenticate, config: { scope: 'full' } }, async (req) => {
     const { amountUsd } = DepositReq.parse(req.body);
     return lpDeposit(await getDb(), req.userId!, usdc(amountUsd));
   });
 
-  app.post('/lp/withdraw', { preHandler: authenticate }, async (req) => {
+  app.post('/lp/withdraw', { preHandler: authenticate, config: { scope: 'full' } }, async (req) => {
     const { shares } = WithdrawReq.parse(req.body);
     return lpWithdraw(await getDb(), req.userId!, BigInt(shares));
   });

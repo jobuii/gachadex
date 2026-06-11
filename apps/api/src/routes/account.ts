@@ -8,7 +8,7 @@ import { creditFaucet, getUserBalances } from '../services/faucet.ts';
 import { getUserUnrealizedPnl } from '../services/engine.ts';
 
 export async function accountRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/account/balance', { preHandler: authenticate }, async (req) => {
+  app.get('/account/balance', { preHandler: authenticate, config: { scope: 'trade' } }, async (req) => {
     const db = await getDb();
     const [b, uPnl] = await Promise.all([getUserBalances(db, req.userId!), getUserUnrealizedPnl(db, req.userId!)]);
     return {
@@ -19,7 +19,7 @@ export async function accountRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  app.post('/faucet', rl(config.routeRateLimits.faucet, { preHandler: authenticate }), async (req) => {
+  app.post('/faucet', rl(config.routeRateLimits.faucet, { preHandler: authenticate, config: { scope: 'trade' as const } }), async (req) => {
     const { amountUsd } = FaucetRequest.parse(req.body ?? {});
     const r = await creditFaucet(await getDb(), req.userId!, amountUsd);
     return { ok: true, txnId: r.txnId, availableUusdc: r.availableUusdc.toString() };

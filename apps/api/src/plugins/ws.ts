@@ -27,10 +27,19 @@ export async function registerWs(app: FastifyInstance): Promise<void> {
     const channels = new Set<string>();
     const seq = new Map<string, number>();
     let userId: string | null = null;
+    let authExpMs = 0; // when the auth'd token expires (ms); 0 = not authed
     let authReady: Promise<void> = Promise.resolve();
+    // Auth is bounded by the access token's lifetime: a revoked/expired key can't keep streaming
+    // private data by holding the socket open — once the token expires the client MUST re-auth.
+    const authed = () => userId !== null && Date.now() < authExpMs;
 
     const unsub = onMessage((m) => {
       if (!channels.has(m.channel)) return;
+      // stop delivering a private channel the moment the token expires, and drop the dead sub
+      if (isPrivate(m.channel) && !authed()) {
+        channels.delete(m.channel);
+        return;
+      }
       const n = (seq.get(m.channel) ?? 0) + 1;
       seq.set(m.channel, n);
       try {
@@ -49,10 +58,12 @@ export async function registerWs(app: FastifyInstance): Promise<void> {
       }
       if (msg.op === 'auth' && typeof msg.token === 'string') {
         // assign authReady synchronously so a following 'sub' awaits this verification
-        authReady = verifyAccessToken(msg.token).then((r) => { userId = r.userId; }).catch(() => { userId = null; });
+        authReady = verifyAccessToken(msg.token)
+          .then((r) => { userId = r.userId; authExpMs = r.exp * 1000; })
+          .catch(() => { userId = null; authExpMs = 0; });
         await authReady;
         try {
-          socket.send(JSON.stringify({ ch: '_', type: 'authed', seq: 0, data: { ok: userId !== null } }));
+          socket.send(JSON.stringify({ ch: '_', type: 'authed', seq: 0, data: { ok: authed() } }));
         } catch {
           /* noop */
         }
@@ -60,7 +71,7 @@ export async function registerWs(app: FastifyInstance): Promise<void> {
         await authReady;
         for (const c of msg.channels) {
           if (isPrivate(c)) {
-            if (userId && c.split(':')[1] === userId) channels.add(c); // only your own private channel
+            if (authed() && c.split(':')[1] === userId) channels.add(c); // only your own private channel, while authed
           } else {
             channels.add(c);
           }

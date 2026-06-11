@@ -137,6 +137,22 @@ test('concurrent same-key partial close replays instead of double-charging or cr
   await closeAll(userId);
 });
 
+test('the slippage guard rejects a fill past the limit; feeBps is exposed on the markets list', async () => {
+  assert.equal(market.feeBps, 10); // FEE_BPS=10 (set above) surfaced so clients can preview the real fee
+  const userId = await newUser();
+  // mark is $1000; a long with a $999 ceiling must reject before any side effects
+  await assert.rejects(
+    () => openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 5_000_000n, leverage: 10, limitPriceE6: 999_000_000n, idempotencyKey: randomUUID() }),
+    /limit/,
+  );
+  assert.equal((await getUserPositions(db, userId)).length, 0); // nothing opened
+  // a $1000 ceiling fills at the $1000 mark
+  await openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 5_000_000n, leverage: 10, limitPriceE6: 1_000_000_000n, idempotencyKey: randomUUID() });
+  const [pos] = await getUserPositions(db, userId);
+  assert.equal(pos.avgEntryE6, U(1000));
+  await closeAll(userId);
+});
+
 test('reconciler stays balanced after all trading activity', async () => {
   const report = await reconcile(db);
   assert.equal(report.ok, true, JSON.stringify(report, null, 2));

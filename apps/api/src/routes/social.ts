@@ -26,16 +26,16 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     return getLeaderboard(db, { limit, viewerUserId });
   });
 
-  app.get('/referral/me', { preHandler: authenticate }, async (req) => {
+  app.get('/referral/me', { preHandler: authenticate, config: { scope: 'trade' } }, async (req) => {
     return getReferralInfo(await getDb(), req.userId!);
   });
 
-  app.post('/referral/redeem', rl(config.routeRateLimits.referralRedeem, { preHandler: authenticate }), async (req) => {
+  app.post('/referral/redeem', rl(config.routeRateLimits.referralRedeem, { preHandler: authenticate, config: { scope: 'full' } }), async (req) => {
     const { code } = ReferralRedeemRequest.parse(req.body ?? {});
     return redeemReferral(await getDb(), req.userId!, code);
   });
 
-  app.post('/referral/code', rl(config.routeRateLimits.referralCode, { preHandler: authenticate }), async (req) => {
+  app.post('/referral/code', rl(config.routeRateLimits.referralCode, { preHandler: authenticate, config: { scope: 'full' } }), async (req) => {
     const { code } = ReferralCodeRequest.parse(req.body ?? {});
     return setReferralCode(await getDb(), req.userId!, code);
   });

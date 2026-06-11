@@ -20,13 +20,13 @@ export async function walletRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.get('/wallet/deposit-address', { preHandler: authenticate }, async (req) => {
+  app.get('/wallet/deposit-address', { preHandler: authenticate, config: { scope: 'full' } }, async (req) => {
     const r = await getOrCreateDepositAddress(await getDb(), req.userId!);
     return { address: r.address };
   });
 
   // Step 1 of a withdrawal: get the exact message the wallet must sign (binds amount + dest).
-  app.post('/wallet/withdraw/nonce', rl(config.routeRateLimits.withdrawNonce, { preHandler: authenticate }), async (req) => {
+  app.post('/wallet/withdraw/nonce', rl(config.routeRateLimits.withdrawNonce, { preHandler: authenticate, config: { scope: 'full' } }), async (req) => {
     const input = WithdrawNonceRequest.parse(req.body);
     return createWithdrawalNonce(await getDb(), req.pubkey!, {
       amountE6: BigInt(input.amountE6),
@@ -35,7 +35,7 @@ export async function walletRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Step 2: submit the signed message. Validates + debits atomically; payout follows on approval.
-  app.post('/wallet/withdraw', rl(config.routeRateLimits.withdraw, { preHandler: authenticate }), async (req) => {
+  app.post('/wallet/withdraw', rl(config.routeRateLimits.withdraw, { preHandler: authenticate, config: { scope: 'full' } }), async (req) => {
     const input = WithdrawRequest.parse(req.body);
     const w = await requestWithdrawal(await getDb(), req.userId!, req.pubkey!, {
       ...input,
@@ -45,7 +45,7 @@ export async function walletRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Deposit/withdrawal lifecycle (the on-chain status the ledger history doesn't carry).
-  app.get('/wallet/transactions', { preHandler: authenticate }, async (req) => {
+  app.get('/wallet/transactions', { preHandler: authenticate, config: { scope: 'full' } }, async (req) => {
     return { transactions: await getWalletTransactions(await getDb(), req.userId!, lim(req)) };
   });
 }

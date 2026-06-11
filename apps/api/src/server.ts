@@ -16,6 +16,19 @@ import { adminRoutes, type AdminChains } from './routes/admin.ts';
 import { adminOpsRoutes } from './routes/admin-ops.ts';
 import { registerWs } from './plugins/ws.ts';
 
+// Bumped when the REST/WS contract the public SDK consumes changes in a way clients should notice.
+// Surfaced on /health so the SDK can warn "upgrade gachadex" instead of failing mysteriously.
+// Additive field/route changes do NOT bump this; breaking ones do.
+export const API_VERSION = 1;
+
+/** One route's auth/scope policy, collected at registration for the scope route-walk test. */
+export interface RouteInfo {
+  method: string | string[];
+  url: string;
+  preHandler: unknown;
+  scope?: string;
+}
+
 export interface BuildServerOpts {
   /** Chain overrides for the operator routes — tests inject fakes; production lazily wires Solana. */
   adminChains?: AdminChains;
@@ -38,6 +51,15 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
     },
   });
 
+  // Collect every route's auth policy at registration so a test can assert that each authenticated
+  // route declares an explicit scope (fail-closed: a route that forgets defaults to 'full'). The
+  // onRoute hook fires for routes registered in plugins added AFTER it, so register it up front.
+  const routeTable: RouteInfo[] = [];
+  app.addHook('onRoute', (r) => {
+    routeTable.push({ method: r.method, url: r.url, preHandler: r.preHandler, scope: (r.config as { scope?: string } | undefined)?.scope });
+  });
+  app.decorate('routeTable', routeTable);
+
   await app.register(cors, {
     origin: config.webOrigins,
     credentials: true,
@@ -54,7 +76,8 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
   }
 
   app.setErrorHandler((err, req, reply) => {
-    if (err instanceof HttpError) return reply.code(err.statusCode).send({ error: err.message });
+    if (err instanceof HttpError)
+      return reply.code(err.statusCode).send({ error: err.message, ...(err.code ? { code: err.code } : {}) });
     // zod ValidationError (may be a different zod instance than ours, so check structurally)
     if (err && (err as { name?: string }).name === 'ZodError') {
       return reply.code(400).send({ error: 'validation failed', issues: (err as { issues?: unknown }).issues });
@@ -73,6 +96,7 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
     service: 'gachadex-api',
     env: config.env,
     realFunds: config.realFunds,
+    apiVersion: API_VERSION,
     time: new Date().toISOString(),
   }));
 

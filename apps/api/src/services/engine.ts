@@ -94,13 +94,13 @@ async function getPositionById(q: Queryer, id: string): Promise<PositionRow | nu
  */
 async function anchorOrder(
   q: Queryer,
-  o: { id: string; userId: string; marketId: string; idempotencyKey: string; kind: string; side: string; qtyE6: bigint; leverageE2: number },
+  o: { id: string; userId: string; marketId: string; idempotencyKey: string; kind: string; side: string; qtyE6: bigint; leverageE2: number; actorPubkey?: string },
 ): Promise<{ orderId: string; inserted: boolean }> {
   const ins = await q.query<{ id: string }>(
-    `INSERT INTO orders(id,user_id,market_id,idempotency_key,kind,side,qty_e6,leverage_e2,status)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,'filled')
+    `INSERT INTO orders(id,user_id,market_id,idempotency_key,kind,side,qty_e6,leverage_e2,actor_pubkey,status)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'filled')
      ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id`,
-    [o.id, o.userId, o.marketId, o.idempotencyKey, o.kind, o.side, o.qtyE6.toString(), o.leverageE2],
+    [o.id, o.userId, o.marketId, o.idempotencyKey, o.kind, o.side, o.qtyE6.toString(), o.leverageE2, o.actorPubkey ?? null],
   );
   if (ins.rows[0]) return { orderId: ins.rows[0].id, inserted: true };
   const existing = await q.query<{ id: string }>(`SELECT id FROM orders WHERE user_id=$1 AND idempotency_key=$2`, [o.userId, o.idempotencyKey]);
@@ -279,22 +279,27 @@ export interface OpenInput {
   side: 'long' | 'short';
   qtyE6: bigint;
   leverage: number;
+  // slippage guard (optional): worst acceptable fill mark (micro-USD). long rejects if mark > this;
+  // short rejects if mark < this. Bounds the gap between an agent's preview mark and the fill.
+  limitPriceE6?: bigint;
   idempotencyKey: string;
+  actorPubkey?: string; // delegate pubkey when a trade-scoped key placed it (audit); undefined for master
 }
 export interface CloseInput {
   positionId: string;
   fractionBps: number;
   idempotencyKey: string;
+  actorPubkey?: string;
 }
 
 async function validateMarketAndOrder(q: Queryer, input: OpenInput): Promise<MarketRow> {
   const market = await getMarketById(q, input.marketId);
   if (!market) throw new HttpError(404, 'market not found');
-  if (!market.tradeable || market.status !== 'active') throw new HttpError(400, 'market not tradeable');
+  if (!market.tradeable || market.status !== 'active') throw new HttpError(400, 'market not tradeable', 'market_halted');
   const leverageE2 = input.leverage * 100;
-  if (input.leverage < 1 || leverageE2 > market.max_leverage_e2) throw new HttpError(400, 'leverage out of range');
-  if (input.qtyE6 < BigInt(market.min_qty_e6)) throw new HttpError(400, 'quantity below market minimum');
-  if (input.qtyE6 % BigInt(market.qty_step_e6) !== 0n) throw new HttpError(400, 'quantity not on step');
+  if (input.leverage < 1 || leverageE2 > market.max_leverage_e2) throw new HttpError(400, 'leverage out of range', 'leverage_out_of_range');
+  if (input.qtyE6 < BigInt(market.min_qty_e6)) throw new HttpError(400, 'quantity below market minimum', 'quantity_below_min');
+  if (input.qtyE6 % BigInt(market.qty_step_e6) !== 0n) throw new HttpError(400, 'quantity not on step', 'quantity_off_step');
   return market;
 }
 
@@ -310,12 +315,16 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
       const mi = await getLatestMarkIndex(q, market.id);
       if (!mi) throw new HttpError(400, 'no price available for market');
       const { markE6, indexE6 } = mi;
+      // slippage guard: reject if the fill mark moved past the caller's limit (long: cap, short: floor)
+      if (input.limitPriceE6 != null && (input.side === 'long' ? markE6 > input.limitPriceE6 : markE6 < input.limitPriceE6)) {
+        throw new HttpError(400, 'fill price moved past your limit price', 'slippage_exceeded');
+      }
       const leverageE2 = input.leverage * 100;
 
       // In-tx idempotency guard: the order row is the anchor. A racing duplicate inserts
       // nothing and replays the prior result instead of running the side effects twice.
       const orderId = randomUUID();
-      const anchor = await anchorOrder(q, { id: orderId, userId, marketId: market.id, idempotencyKey: input.idempotencyKey, kind: 'market', side: input.side, qtyE6: input.qtyE6, leverageE2 });
+      const anchor = await anchorOrder(q, { id: orderId, userId, marketId: market.id, idempotencyKey: input.idempotencyKey, kind: 'market', side: input.side, qtyE6: input.qtyE6, leverageE2, actorPubkey: input.actorPubkey });
       if (!anchor.inserted) return replayOpen(q, anchor.orderId);
 
       const opp = input.side === 'long' ? 'short' : 'long';
@@ -333,7 +342,7 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
       const sideOi = (await openNotionalBySide(q, market.id))[input.side === 'long' ? 'longOi' : 'shortOi'];
       // 1) static per-market OI cap (0 = no static cap) — cheapest, in-memory; reject before any NAV read
       if (sideCap > 0n && sideOi + notion > sideCap) {
-        throw new HttpError(400, 'open interest cap reached for this side');
+        throw new HttpError(400, 'open interest cap reached for this side', 'oi_cap_exceeded');
       }
       // NAV is read once and shared by both NAV-relative checks below (only when one is enabled).
       const nav = config.oiCapNavBps > 0 || config.maxPnlFactorBps > 0 ? await lpDepth(q) : 0n;
@@ -341,7 +350,7 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
       // market's worst-case PnL vs the pool can't outgrow the vault as NAV shrinks (calibration 0.3-0.5×NAV).
       // Always enforced when enabled — at NAV≤0 the cap is 0, so an uncapitalized pool takes no new risk.
       if (config.oiCapNavBps > 0 && sideOi + notion > (nav * BigInt(config.oiCapNavBps)) / 10_000n) {
-        throw new HttpError(400, 'open interest cap reached for this side (pool-relative)');
+        throw new HttpError(400, 'open interest cap reached for this side (pool-relative)', 'oi_cap_exceeded');
       }
       // 3) pool-health gate (GMX-style MAX_PNL_FACTOR): once the pool already owes traders more than
       // maxPnlFactor of NAV, pause new opens so a thin/underfunded pool can't be drained by net winners.
@@ -358,7 +367,7 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
       // both pass the balance check and overdraw it.
       await q.query('SELECT amount_uusdc FROM balances WHERE account_id=$1 FOR UPDATE', [collAcct]);
       const available = await getBalance(q, collAcct);
-      if (available < margin + openFee) throw new HttpError(400, 'insufficient balance');
+      if (available < margin + openFee) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
 
       // lock margin, then charge the open fee
       await postTxn(q, {
@@ -439,7 +448,7 @@ export async function closePosition(db: Db, userId: string, input: CloseInput): 
       // In-tx idempotency anchor BEFORE any side effects: a racing duplicate (same user+key)
       // replays the prior result instead of re-running margin/PnL/fee.
       const orderId = randomUUID();
-      const anchor = await anchorOrder(q, { id: orderId, userId, marketId: market.id, idempotencyKey: input.idempotencyKey, kind: 'reduce_only', side: pos.side, qtyE6: closeQty, leverageE2: pos.leverage_e2 });
+      const anchor = await anchorOrder(q, { id: orderId, userId, marketId: market.id, idempotencyKey: input.idempotencyKey, kind: 'reduce_only', side: pos.side, qtyE6: closeQty, leverageE2: pos.leverage_e2, actorPubkey: input.actorPubkey });
       if (!anchor.inserted) return replayClose(q, anchor.orderId);
 
       await settlePositionFunding(q, pos, market.id); // settle accrued funding first
