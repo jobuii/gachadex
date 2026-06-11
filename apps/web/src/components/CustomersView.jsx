@@ -95,10 +95,10 @@ export function CustomersView({ adminKey }) {
             {rows.map((c) => (
               <tr key={c.userId}>
                 <td className="addr" title={c.pubkey} onClick={() => copy(c.pubkey)}>
-                  {copied === c.pubkey ? 'copied!' : short(c.pubkey)}
+                  {copied && copied === c.pubkey ? 'copied!' : short(c.pubkey)}
                 </td>
                 <td className="addr" title={c.depositAddress || ''} onClick={() => copy(c.depositAddress)}>
-                  {copied === c.depositAddress ? 'copied!' : short(c.depositAddress)}
+                  {copied && copied === c.depositAddress ? 'copied!' : short(c.depositAddress)}
                 </td>
                 <td className="num">{usd(c.freeE6)}</td>
                 <td className="num">{usd(c.lockedE6)}</td>
