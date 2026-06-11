@@ -90,7 +90,12 @@ async function signaturesSince(
   return { sigs, highWater: until }; // capped: never advance past unfetched history
 }
 
-// Below this, residual SOL on a deposit address isn't worth a consolidation tx — leave it as dust.
+// Native SOL left on the deposit address when consolidating: above the ~0.00089 rent-exempt minimum (a
+// System account can't be drained below rent-exempt, and draining to exactly 0 is rejected — that's the
+// bug this guards), so the account stays valid + reusable. (Its USDC ATA's own ~0.002 SOL rent is
+// irreducible regardless.)
+const SOL_KEEP_LAMPORTS = 1_000_000n; // 0.001 SOL — the rent floor we leave behind
+// Don't pay a tx fee to move less than this above the keep floor (avoids churning on tiny residue).
 const SOL_SWEEP_MIN_LAMPORTS = 1_000_000n; // 0.001 SOL
 
 export function solanaDepositChain(): DepositChain {
@@ -173,17 +178,19 @@ export function solanaDepositChain(): DepositChain {
     },
 
     async sweepSolToHot(from: Keypair) {
-      const lamports = BigInt(await conn.getBalance(from.publicKey, 'finalized'));
-      if (lamports < SOL_SWEEP_MIN_LAMPORTS) return null; // dust — not worth a tx
+      const balance = BigInt(await conn.getBalance(from.publicKey, 'finalized'));
+      const sweepable = balance - SOL_KEEP_LAMPORTS;
+      if (sweepable < SOL_SWEEP_MIN_LAMPORTS) return null; // not worth a tx fee
       const hot = hotWallet();
-      // Hot wallet pays the fee, so the deposit address drains fully to 0. Its USDC ATA is a separate
-      // account and is untouched — the swapped USDC stays put until the USDC sweep moves it.
+      // Hot wallet pays the fee. We move everything ABOVE SOL_KEEP_LAMPORTS and leave that floor so the
+      // System account stays rent-exempt + valid (transferring the whole balance to 0 is rejected). The
+      // USDC ATA is a separate account, untouched — the swapped USDC stays until the USDC sweep moves it.
       const tx = new Transaction().add(
-        SystemProgram.transfer({ fromPubkey: from.publicKey, toPubkey: hot.publicKey, lamports }),
+        SystemProgram.transfer({ fromPubkey: from.publicKey, toPubkey: hot.publicKey, lamports: sweepable }),
       );
       tx.feePayer = hot.publicKey;
       const sig = await sendAndConfirmTransaction(conn, tx, [hot, from], { commitment: 'finalized' });
-      return { sig, lamports };
+      return { sig, lamports: sweepable };
     },
   };
 }

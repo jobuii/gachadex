@@ -80,9 +80,10 @@ export interface DepositChain {
    *  (config.minSweepUsd: don't pay a hot-wallet fee to move dust; small credits accumulate
    *  until a sweep is economic — F5 anti-griefing). */
   sweepAll(from: Keypair): Promise<SweepResult | null>;
-  /** Drain the deposit wallet's residual native SOL into the hot wallet (hot = fee payer, so the
-   *  address can go to ~0; its USDC ATA is a separate account, untouched). Recycles the post-swap fee
-   *  reserve into hot-wallet gas. Returns null when the balance is too small to be worth a tx. */
+  /** Sweep the deposit wallet's residual native SOL into the hot wallet (hot = fee payer), leaving the
+   *  rent-exempt floor so the System account stays valid — draining it to 0 is rejected. Its USDC ATA is
+   *  a separate account, untouched. Recycles the post-swap fee reserve into hot-wallet gas; returns null
+   *  when there's too little above the floor to be worth a tx. */
   sweepSolToHot(from: Keypair): Promise<{ sig: string; lamports: bigint } | null>;
 }
 
@@ -232,8 +233,10 @@ export async function scanDeposits(
             // TODO: a low-frequency ops sweep over all deposit addresses would close that gap.
             try {
               await chain.sweepSolToHot(kp);
-            } catch {
-              /* leave the residue; recycled on the next swap */
+            } catch (e) {
+              // Best-effort: never abort the credit/sweep. But DO surface it — a silent swallow is what
+              // hid an earlier drain-to-0 failure. The residue stays and is retried on the next swap.
+              log?.error(e, 'residual SOL consolidation failed');
             }
           } else {
             for (const { id } of solPending.rows) {

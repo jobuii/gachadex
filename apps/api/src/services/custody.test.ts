@@ -24,6 +24,8 @@ const db = await getDb();
 
 const LAMPORTS_PER_SOL = 1_000_000_000n;
 const FEE_RESERVE = 5_000_000n; // mirrors SOL_FEE_RESERVE_LAMPORTS in deposits.ts
+const SOL_KEEP = 1_000_000n; // mirrors SOL_KEEP_LAMPORTS in solana.ts (rent-exempt floor left on the address)
+const SOL_SWEEP_MIN = 1_000_000n; // mirrors SOL_SWEEP_MIN_LAMPORTS in solana.ts (min above the floor worth a tx)
 const FAKE_RATE_E6_PER_SOL = 150_000_000n; // $150/SOL in the fake chain
 
 async function newUser(): Promise<string> {
@@ -97,10 +99,11 @@ function fakeChain() {
     async sweepSolToHot(from: Keypair): Promise<{ sig: string; lamports: bigint } | null> {
       const addr = from.publicKey.toBase58();
       const bal = chain.solBalances.get(addr) ?? 0n;
-      if (bal < 1_000_000n) return null; // mirrors SOL_SWEEP_MIN_LAMPORTS — leave true dust
-      chain.solBalances.set(addr, 0n);
-      chain.solSweeps.push({ from: addr, lamports: bal });
-      return { sig: `solsweep-${chain.solSweeps.length}`, lamports: bal };
+      const sweepable = bal - SOL_KEEP; // mirrors SOL_KEEP_LAMPORTS — leave the rent-exempt floor
+      if (sweepable < SOL_SWEEP_MIN) return null;
+      chain.solBalances.set(addr, SOL_KEEP);
+      chain.solSweeps.push({ from: addr, lamports: sweepable });
+      return { sig: `solsweep-${chain.solSweeps.length}`, lamports: sweepable };
     },
   };
   return chain;
@@ -240,16 +243,16 @@ test('SOL deposits swap in place and credit the ACTUAL proceeds — never the SO
   assert.equal((await reconcile(db)).ok, true);
 });
 
-test('after a SOL swap the leftover fee reserve is consolidated into the hot wallet (~$0 SOL left)', async () => {
+test('after a SOL swap the leftover fee reserve is swept to hot, leaving the rent-exempt floor (not 0)', async () => {
   const u = await newUser();
   const addr = await getOrCreateDepositAddress(db, u);
   const chain = fakeChain();
   chain.depositSol(addr.address, 'sig-consolidate', LAMPORTS_PER_SOL); // 1 SOL
 
-  await scanDeposits(db, chain); // detect + swap (keeps FEE_RESERVE back) + consolidate that reserve
+  await scanDeposits(db, chain); // detect + swap (keeps FEE_RESERVE) + sweep the reserve down to the floor
   assert.deepEqual(chain.swaps, [{ from: addr.address, lamports: LAMPORTS_PER_SOL - FEE_RESERVE }]);
-  assert.equal(await chain.solBalance(addr.address), 0n); // residue recycled -> ~$0 SOL on the deposit address
-  assert.deepEqual(chain.solSweeps, [{ from: addr.address, lamports: FEE_RESERVE }]); // it went to the hot wallet
+  assert.equal(await chain.solBalance(addr.address), SOL_KEEP); // left at the rent-exempt floor, NOT drained to 0
+  assert.deepEqual(chain.solSweeps, [{ from: addr.address, lamports: FEE_RESERVE - SOL_KEEP }]); // the rest -> hot wallet
 });
 
 test('an unrecorded swap cannot strand or double-credit: proceeds credit via the USDC path', async () => {
