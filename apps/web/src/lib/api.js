@@ -198,6 +198,9 @@ export const adminSetCustodyLimits = (limits, adminKey) => adminReq('/admin/cust
 // Live trading fee (bps; 1 bps = 0.01%). GET -> { bps, default }; POST { bps } -> the new effective fee.
 export const adminGetFee = (adminKey) => adminGet('/admin/fee', adminKey);
 export const adminSetFee = (bps, adminKey) => adminReq('/admin/fee', adminKey, { bps });
+// Live liquidation penalty (bps; charged on a liquidated position's notional -> insurance fund).
+export const adminGetLiqFee = (adminKey) => adminGet('/admin/liq-fee', adminKey);
+export const adminSetLiqFee = (bps, adminKey) => adminReq('/admin/liq-fee', adminKey, { bps });
 // Withdrawal queue (real-funds). GET by status; approve = sign+broadcast; reverse = re-credit an unpaid row.
 export const adminGetWithdrawals = (status, adminKey) => adminGet(`/admin/withdrawals?status=${encodeURIComponent(status)}`, adminKey);
 export const adminApproveWithdrawal = (id, adminKey) => adminReq(`/admin/withdrawals/${id}/approve`, adminKey);

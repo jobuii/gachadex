@@ -7,7 +7,7 @@ import { scanDeposits } from './services/custody/deposits.ts';
 import { recoverInFlight, processAllRequested } from './services/custody/withdrawals.ts';
 import { treasuryPass } from './services/custody/treasury.ts';
 import { loadLimits } from './services/custody/limits.ts';
-import { loadFee } from './services/fees.ts';
+import { loadFee, loadLiqFee } from './services/fees.ts';
 import { solanaDepositChain, solanaWithdrawChain, solanaTreasuryChain } from './services/custody/solana.ts';
 import type { Db } from './db/client.ts';
 import type { FastifyBaseLogger } from 'fastify';
@@ -137,8 +137,9 @@ async function main() {
     startLiquidationLoop(db, app.log);
     // Live trading-fee override (works in both modes — trading happens in play money too). Loaded on
     // boot, then refreshed for multi-instance convergence + to pick up admin edits within ~30s.
-    await loadFee(db);
-    setInterval(() => void loadFee(db).catch((e) => app.log.warn(e, 'fee refresh failed')), 30_000);
+    const loadFees = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d)]);
+    await loadFees(db);
+    setInterval(() => void loadFees(db).catch((e) => app.log.warn(e, 'fee refresh failed')), 30_000);
     if (config.realFunds) {
       await loadLimits(db); // pull operator overrides over the config defaults before custody runs
       setInterval(() => void loadLimits(db).catch((e) => app.log.warn(e, 'limits refresh failed')), 30_000);

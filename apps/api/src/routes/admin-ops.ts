@@ -6,7 +6,7 @@ import { rl } from './_ratelimit.ts';
 import { requireAdminKey } from './admin.ts';
 import { setManualPrice, setPricePin } from '../services/admin-pricing.ts';
 import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from '../services/insurance.ts';
-import { feeView, setFee } from '../services/fees.ts';
+import { feeView, setFee, liqFeeView, setLiqFee } from '../services/fees.ts';
 
 /**
  * Non-custody operator endpoints (ROADMAP §2). Unlike the custody admin routes, these register
@@ -60,5 +60,14 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     const { bps } = FeeRequest.parse(req.body);
     await setFee(await getDb(), bps);
     return feeView();
+  });
+
+  // Live-tunable liquidation penalty (bps of a liquidated position's notional, routed to the insurance
+  // fund). Same shape as /admin/fee.
+  app.get('/admin/liq-fee', rl(config.routeRateLimits.admin), async () => liqFeeView());
+  app.post('/admin/liq-fee', rl(config.routeRateLimits.admin), async (req) => {
+    const { bps } = FeeRequest.parse(req.body);
+    await setLiqFee(await getDb(), bps);
+    return liqFeeView();
   });
 }

@@ -64,6 +64,8 @@ export function AdminPanel() {
   const [limitDrafts, setLimitDrafts] = useState({}); // limit key -> string
   const [fee, setFeeState] = useState(null); // { bps, default } | null — trading fee (works in both modes)
   const [feeDraft, setFeeDraft] = useState(''); // operator enters a PERCENT (0.01 = 0.01%)
+  const [liqFee, setLiqFeeState] = useState(null); // { bps, default } | null — liquidation penalty
+  const [liqFeeDraft, setLiqFeeDraft] = useState('');
   const [withdrawals, setWithdrawals] = useState([]); // requested withdrawal queue (real-funds)
   const [wbusy, setWbusy] = useState(null); // withdrawal id being approved/reversed
 
@@ -142,6 +144,13 @@ export function AdminPanel() {
       })(),
       (async () => {
         try {
+          setLiqFeeState(await api.adminGetLiqFee(key));
+        } catch {
+          setLiqFeeState(null);
+        }
+      })(),
+      (async () => {
+        try {
           setWithdrawals((await api.adminGetWithdrawals('requested', key)).withdrawals || []); // real-funds-only
         } catch {
           setWithdrawals([]);
@@ -186,6 +195,7 @@ export function AdminPanel() {
     setInsuranceE6(null);
     setCustodyLimits(null);
     setFeeState(null);
+    setLiqFeeState(null);
     setWithdrawals([]);
     setMsg(null);
     setErr(null);
@@ -254,6 +264,28 @@ export function AdminPanel() {
       setFeeState(r);
       setFeeDraft('');
       setMsg(`Trading fee set to ${(r.bps / 100).toFixed(2)}% (charged on open + close).`);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Liquidation penalty: same percent->bps convention as the trading fee.
+  const saveLiqFee = async () => {
+    setErr(null);
+    setMsg(null);
+    const pct = Number(liqFeeDraft);
+    if (!Number.isFinite(pct) || pct < 0) {
+      setErr('Enter a liquidation penalty percentage (e.g. 1 for 1%).');
+      return;
+    }
+    setBusy('liqFee');
+    try {
+      const r = await api.adminSetLiqFee(Math.round(pct * 100), adminKey.trim());
+      setLiqFeeState(r);
+      setLiqFeeDraft('');
+      setMsg(`Liquidation penalty set to ${(r.bps / 100).toFixed(2)}% (taken into the insurance fund).`);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -520,6 +552,25 @@ export function AdminPanel() {
         <span className="muted" style={{ fontSize: '0.85rem' }}>%</span>
         <button className="btn-primary sm" disabled={busy === 'fee'} onClick={saveFee}>
           {busy === 'fee' ? '…' : 'Save fee'}
+        </button>
+      </div>
+
+      {/* ---- Liquidation penalty ---- */}
+      <h3 style={{ marginTop: '1.25rem' }}>Liquidation penalty</h3>
+      <p className="ref-blurb">
+        Charged on a <strong>liquidated</strong> position's size and routed to the <strong>insurance fund</strong>.
+        Enter a percentage: <code>1</code> means 1%. Currently{' '}
+        <strong>{liqFee ? `${(liqFee.bps / 100).toFixed(2)}%` : '—'}</strong>
+        {liqFee ? ` (env default ${(liqFee.default / 100).toFixed(2)}%)` : ''}.
+      </p>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.35rem 0' }}>
+        <input
+          className="wallet-input" type="number" min="0" step="0.01" placeholder="1"
+          value={liqFeeDraft} onChange={(e) => setLiqFeeDraft(e.target.value)} style={{ width: 120 }}
+        />
+        <span className="muted" style={{ fontSize: '0.85rem' }}>%</span>
+        <button className="btn-primary sm" disabled={busy === 'liqFee'} onClick={saveLiqFee}>
+          {busy === 'liqFee' ? '…' : 'Save penalty'}
         </button>
       </div>
 

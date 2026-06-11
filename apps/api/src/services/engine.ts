@@ -6,7 +6,7 @@ import { advisoryXactLock, type Db, type Queryer } from '../db/client.ts';
 import { getMarketById, type MarketRow } from './markets.ts';
 import { recomputeMark } from './marks.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, getBalance, postTxn } from './ledger.ts';
-import { getFeeBps } from './fees.ts';
+import { getFeeBps, getLiqFeeBps } from './fees.ts';
 import { refreshReserved } from './lp.ts';
 import { getCumulativeFundingE6, settlePositionFunding } from './funding.ts';
 import { openNotionalBySide } from './oi.ts';
@@ -580,7 +580,7 @@ async function liquidatePositionInTx(q: Queryer, pos: PositionRow, market: Marke
   const margin = BigInt(pos.margin_uusdc);
   const pnl = unrealizedPnl(pos.side, qty, entry, markE6);
   const lossAbs = pnl < 0n ? -pnl : 0n;
-  const liqFee = fee(notional(qty, markE6), config.liqFeeBps);
+  const liqFee = fee(notional(qty, markE6), getLiqFeeBps());
 
   const coll = await getOrCreateUserAccount(q, pos.user_id, 'USER_COLLATERAL');
   const marginAcct = await getOrCreateUserAccount(q, pos.user_id, 'USER_POSITION_MARGIN');
