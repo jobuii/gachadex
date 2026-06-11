@@ -55,6 +55,17 @@ export interface CardUpsert {
   imageLarge?: string | null;
   setLogo?: string | null;
   metadata?: unknown;
+  // Stable cross-provider identity (see schema). Optional: the legacy pokemontcg feed doesn't know
+  // them; tcgpricelookup supplies both. Never erased on re-upsert (COALESCE keeps the stored value).
+  tcgplayerId?: number | null;
+  providerCardId?: string | null;
+}
+
+/** Symbol for a provider-created card market: game-namespaced so provider ids can never collide across
+ *  games or with the `INDEX:` namespace. Legacy pokemontcg markets keep their bare `c.id` symbols (the
+ *  upsert key for the live feed) — cutover joins them via tcgplayer_id/provider_card_id, not symbol. */
+export function cardSymbol(game: string, providerCardId: string): string {
+  return `${game}:${providerCardId}`;
 }
 
 export async function upsertCardMarket(q: Queryer, opts: CardUpsert): Promise<string> {
@@ -62,12 +73,17 @@ export async function upsertCardMarket(q: Queryer, opts: CardUpsert): Promise<st
   const meta = opts.metadata != null ? JSON.stringify(opts.metadata) : null;
   await q.query(
     `INSERT INTO markets(id, kind, game, symbol, display_name, card_id, variant, image_small, image_large, set_logo, metadata, tradeable,
-       max_oi_long_uusdc, max_oi_short_uusdc)
-     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10)
+       max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id)
+     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13)
      ON CONFLICT(symbol) DO UPDATE
        SET display_name = EXCLUDED.display_name, image_small = EXCLUDED.image_small, image_large = EXCLUDED.image_large,
-           set_logo = EXCLUDED.set_logo, metadata = EXCLUDED.metadata, variant = EXCLUDED.variant`,
-    [id, opts.symbol, opts.displayName, opts.cardId, opts.variant, opts.imageSmall, opts.imageLarge ?? null, opts.setLogo ?? null, meta, CARD_OI_CAP, opts.game ?? 'pokemon'],
+           set_logo = EXCLUDED.set_logo, metadata = EXCLUDED.metadata, variant = EXCLUDED.variant,
+           tcgplayer_id = COALESCE(EXCLUDED.tcgplayer_id, markets.tcgplayer_id),
+           provider_card_id = COALESCE(EXCLUDED.provider_card_id, markets.provider_card_id)`,
+    [
+      id, opts.symbol, opts.displayName, opts.cardId, opts.variant, opts.imageSmall, opts.imageLarge ?? null,
+      opts.setLogo ?? null, meta, CARD_OI_CAP, opts.game ?? 'pokemon', opts.tcgplayerId ?? null, opts.providerCardId ?? null,
+    ],
   );
   const r = await q.query<{ id: string }>(`SELECT id FROM markets WHERE symbol = $1`, [opts.symbol]);
   return r.rows[0].id;

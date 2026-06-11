@@ -10,6 +10,15 @@ function num(name: string, fallback: number): number {
   return v ? Number(v) : fallback;
 }
 
+/** ORACLE_PRIMARY: which price feed drives the oracle. Fails fast on a typo. */
+function oraclePrimary(): 'pokemontcg' | 'tcgpricelookup' {
+  const v = process.env.ORACLE_PRIMARY ?? 'pokemontcg';
+  if (v !== 'pokemontcg' && v !== 'tcgpricelookup') {
+    throw new Error(`ORACLE_PRIMARY must be 'pokemontcg' or 'tcgpricelookup', got '${v}'`);
+  }
+  return v;
+}
+
 const MAINNET_USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
 export const config = {
@@ -61,6 +70,9 @@ export const config = {
   pokemontcgBase: 'https://api.pokemontcg.io/v2',
   oracleRefreshMs: num('ORACLE_REFRESH_MS', 6 * 60 * 60 * 1000), // 6h; source updates ~daily
   oraclePageSize: num('ORACLE_PAGE_SIZE', 250), // pokemontcg.io v2 caps pageSize at 250 (clamps silently); >250 is a no-op
+  // Which feed drives the oracle (tcgpricelookup migration). Cutover/rollback = flip this env var, no
+  // deploy. Validated here so a typo fails the boot loudly instead of silently never cutting over.
+  oraclePrimary: oraclePrimary(),
 
   // JustTCG graded (PSA-10) pricing — server-side, optional. When set, the Graded index
   // becomes tradeable; without it, Graded stays gated.

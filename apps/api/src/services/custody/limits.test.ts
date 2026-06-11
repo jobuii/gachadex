@@ -1,6 +1,11 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 
+// Hermetic in-memory DB (set BEFORE importing config/db, like every other test file — without this,
+// the file silently used the on-disk ./.pglite dev database, and a corrupted/locked dir aborts the run).
+process.env.PGLITE_DIR = 'memory://';
+process.env.DATABASE_URL = '';
+
 const { config } = await import('../../config.ts');
 const { getDb, closeDb } = await import('../../db/client.ts');
 const { initDb } = await import('../../db/init.ts');

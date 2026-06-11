@@ -163,6 +163,12 @@ CREATE TABLE IF NOT EXISTS markets (
   price_tick_e6      BIGINT NOT NULL DEFAULT 10000,   -- $0.01
   price_pinned       BOOLEAN NOT NULL DEFAULT false,  -- operator manual-price override; auto-oracle skips pinned markets
   cumulative_volume_uusdc BIGINT NOT NULL DEFAULT 0,   -- Σ traded notional; drives B' adaptive mark depth
+  -- Stable cross-provider identity (tcgpricelookup migration P0): symbol/card_id are provider DISPLAY
+  -- ids (pokemontcg today, tcgpricelookup UUIDs later) and differ per provider, so a feed cutover must
+  -- join on something stable. tcgplayer_id = TCGplayer product id of the canonical variant (shared
+  -- across providers); provider_card_id = the tcgpricelookup card UUID once matched/created.
+  tcgplayer_id       BIGINT,
+  provider_card_id   TEXT,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_markets_kind ON markets(kind, status);
@@ -175,6 +181,12 @@ ALTER TABLE markets ADD COLUMN IF NOT EXISTS metadata JSONB;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS price_pinned BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS graded_psa10_e6 BIGINT;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS cumulative_volume_uusdc BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS tcgplayer_id BIGINT;
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS provider_card_id TEXT;
+-- One market per provider card / per TCGplayer product (partial: legacy rows are NULL until backfilled).
+-- This is the duplicate-market guard: a second create for the same physical card must conflict, not insert.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_provider_card ON markets(provider_card_id) WHERE provider_card_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_tcgplayer ON markets(tcgplayer_id) WHERE tcgplayer_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS index_constituents (
   id        TEXT PRIMARY KEY,

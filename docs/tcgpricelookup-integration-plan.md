@@ -224,6 +224,14 @@ card at 20x. Required controls (all of these, before search-and-bet ships):
 
 - **P0 — Migration foundation:** stable provider-id column + backfill + game-namespaced symbols; feature
   flag; additive, no behavior change. *(Blocks all cutover.)*
+  **STATUS: DONE (2026-06-11).** Shipped: `markets.tcgplayer_id` + `markets.provider_card_id` columns with
+  partial UNIQUE indexes (the duplicate-market guard), `upsertCardMarket` persists them (COALESCE — a
+  provider that doesn't know them never erases them), the `cardSymbol(game, id)` namespacing convention,
+  and the validated `ORACLE_PRIMARY` flag (default `pokemontcg`). **Finding that adjusts P1:** pokemontcg's
+  `tcgplayer` object has NO `productId` (only prices/updatedAt/url — verified live), so existing markets
+  CANNOT be matched by tcgplayer id from our side; the backfill must match by **name + set + number** via
+  the tcgpricelookup search API → the backfill script lands in **P1** (it needs the client), writing both
+  ids onto matched markets via the now-existing write-path.
 - **P1 — Client + key + global limiter:** tcgpricelookup client, `TCGPRICELOOKUP_API_KEY` (Railway env),
   DB-backed token bucket + leader guard + priority queue + retry/backoff. Confirm batch-by-IDs.
 - **P2 — Normalize:** `OracleCard` type with the price fallback chain + variant rule + provider
