@@ -201,6 +201,9 @@ export const adminSetFee = (bps, adminKey) => adminReq('/admin/fee', adminKey, {
 // Live liquidation penalty (bps; charged on a liquidated position's notional -> insurance fund).
 export const adminGetLiqFee = (adminKey) => adminGet('/admin/liq-fee', adminKey);
 export const adminSetLiqFee = (bps, adminKey) => adminReq('/admin/liq-fee', adminKey, { bps });
+// Per-customer operator view (paginated + sortable) -> { customers: [...], total }.
+export const adminGetCustomers = ({ limit = 50, offset = 0, sort = 'volume' } = {}, adminKey) =>
+  adminGet(`/admin/customers?limit=${limit}&offset=${offset}&sort=${encodeURIComponent(sort)}`, adminKey);
 // Withdrawal queue (real-funds). GET by status; approve = sign+broadcast; reverse = re-credit an unpaid row.
 export const adminGetWithdrawals = (status, adminKey) => adminGet(`/admin/withdrawals?status=${encodeURIComponent(status)}`, adminKey);
 export const adminApproveWithdrawal = (id, adminKey) => adminReq(`/admin/withdrawals/${id}/approve`, adminKey);

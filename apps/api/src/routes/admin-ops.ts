@@ -7,6 +7,7 @@ import { requireAdminKey } from './admin.ts';
 import { setManualPrice, setPricePin } from '../services/admin-pricing.ts';
 import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from '../services/insurance.ts';
 import { feeView, setFee, liqFeeView, setLiqFee } from '../services/fees.ts';
+import { listCustomers } from '../services/customers.ts';
 
 /**
  * Non-custody operator endpoints (ROADMAP §2). Unlike the custody admin routes, these register
@@ -69,5 +70,14 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     const { bps } = FeeRequest.parse(req.body);
     await setLiqFee(await getDb(), bps);
     return liqFeeView();
+  });
+
+  // Operator "Customers" view — one row per user (wallet, deposit address, balances, lifetime volume,
+  // fees, P/L). Paginated + sortable; `sort` is whitelisted inside listCustomers.
+  app.get('/admin/customers', rl(config.routeRateLimits.admin), async (req) => {
+    const q = req.query as { limit?: string; offset?: string; sort?: string };
+    const limit = Math.min(200, Math.max(1, Math.floor(Number(q.limit)) || 50));
+    const offset = Math.max(0, Math.floor(Number(q.offset)) || 0);
+    return listCustomers(await getDb(), { limit, offset, sort: q.sort ?? 'volume' });
   });
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { formatUsd, toE6, shortenPubkey } from '@pokex/pricing';
 import * as api from '../lib/api.js';
+import { CustomersView } from './CustomersView.jsx';
 
 /**
  * Operator manual-pricing panel (ROADMAP §2). Reached at #admin — not in the public nav.
@@ -66,6 +67,7 @@ export function AdminPanel() {
   const [feeDraft, setFeeDraft] = useState(''); // operator enters a PERCENT (0.01 = 0.01%)
   const [liqFee, setLiqFeeState] = useState(null); // { bps, default } | null — liquidation penalty
   const [liqFeeDraft, setLiqFeeDraft] = useState('');
+  const [tab, setTab] = useState('main'); // 'main' (the operator tools) | 'customers'
   const [withdrawals, setWithdrawals] = useState([]); // requested withdrawal queue (real-funds)
   const [wbusy, setWbusy] = useState(null); // withdrawal id being approved/reversed
 
@@ -196,6 +198,7 @@ export function AdminPanel() {
     setCustodyLimits(null);
     setFeeState(null);
     setLiqFeeState(null);
+    setTab('main');
     setWithdrawals([]);
     setMsg(null);
     setErr(null);
@@ -432,6 +435,15 @@ export function AdminPanel() {
       {msg && <div className="ref-msg up">{msg}</div>}
       {err && <div className="order-error">{err}</div>}
 
+      <div className="admin-tabs">
+        <button className={`admin-tab ${tab === 'main' ? 'active' : ''}`} onClick={() => setTab('main')}>Main</button>
+        <button className={`admin-tab ${tab === 'customers' ? 'active' : ''}`} onClick={() => setTab('customers')}>Customers</button>
+      </div>
+
+      {tab === 'customers' && <CustomersView adminKey={adminKey} />}
+
+      {tab === 'main' && (
+        <>
       {/* ---- Overview dashboard ---- */}
       <h3 style={{ marginTop: '1rem' }}>Overview</h3>
       {treasury ? (
@@ -674,6 +686,8 @@ export function AdminPanel() {
           ))}
         </tbody>
       </table>
+        </>
+      )}
     </div>
   );
 }
