@@ -9,15 +9,15 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 const { getDb, closeDb } = await import('../../db/client.ts');
 const { initDb } = await import('../../db/init.ts');
 const { upsertCardMarket } = await import('../markets.ts');
-const { normNumber, normSet, setsMatch, matchCard, backfillProviderIds } = await import('./backfill.ts');
+const { normNumber, normSet, setsMatch, normVariant, matchCard, backfillProviderIds } = await import('./backfill.ts');
 const { parseDisplayName } = await import('./display.ts');
 
 await initDb();
 const db = await getDb();
 after(() => closeDb());
 
-const tpl = (id: string, name: string, number: string, setName: string, tcgplayerId: number | null = null, priceUsd?: number) => ({
-  id, tcgplayer_id: tcgplayerId, name, number, rarity: null, variant: 'Standard', image_url: null,
+const tpl = (id: string, name: string, number: string, setName: string, tcgplayerId: number | null = null, priceUsd?: number, variant = 'Standard') => ({
+  id, tcgplayer_id: tcgplayerId, name, number, rarity: null, variant, image_url: null,
   updated_at: null, set: { slug: normSet(setName) ?? '', name: setName }, game: { slug: 'pokemon', name: 'Pokemon' },
   prices: priceUsd != null ? { raw: { near_mint: { tcgplayer: { market: priceUsd } } } } : null,
 });
@@ -42,6 +42,29 @@ test('setsMatch: provider set-code prefixes agree by suffix; sibling sets do NOT
   assert.equal(setsMatch('Base Set 2', 'Base Set'), false); // sibling set is NOT a suffix match
   assert.equal(setsMatch('Prize Pack Series Cards', 'Evolving Skies'), false); // reprint set excluded
   assert.equal(setsMatch(null, 'Evolving Skies'), false);
+});
+
+test('set aliases: pokemontcg "Base" and "Expedition Base Set" agree with tpl naming', () => {
+  assert.equal(setsMatch('Base Set', 'Base'), true); // tpl 'Base Set' vs pokemontcg 'Base'
+  assert.equal(setsMatch('Base Set 2', 'Base'), false); // alias never bleeds into the sibling set
+  assert.equal(setsMatch('Expedition', 'Expedition Base Set'), true);
+  assert.equal(normVariant('Reverse Holofoil'), 'reverseholofoil'); // tpl ~ pokemontcg 'reverseHolofoil'
+});
+
+test('same-set printing rows are picked by the market variant (exact first, then suffix+price)', () => {
+  // Expedition Blastoise 004/165: Holofoil ($400) + Reverse Holofoil ($345) rows — too close for the
+  // price band, but the market KNOWS it is the holofoil printing.
+  const holo = tpl('uuid-holo', 'Blastoise', '004/165', 'Expedition', 1, 400, 'Holofoil');
+  const reverse = tpl('uuid-rev', 'Blastoise', '004/165', 'Expedition', 2, 345, 'Reverse Holofoil');
+  const market = { number: '4', setName: 'Expedition Base Set', variant: 'holofoil', priceUsd: 380 };
+  assert.equal(matchCard(market, [reverse, holo]), holo, 'exact variant wins (suffix would be ambiguous)');
+  assert.equal(matchCard({ ...market, variant: 'reverseHolofoil' }, [reverse, holo]), reverse);
+
+  // Base Set Charizard: variant suffix narrows to the holo printings, then price picks Unlimited
+  const unl = tpl('uuid-unl', 'Charizard', '4/102', 'Base Set', 3, 400, 'Unlimited Holofoil');
+  const first = tpl('uuid-1st', 'Charizard', '4/102', 'Base Set', 4, 4000, '1st Edition Holofoil');
+  assert.equal(matchCard({ number: '4', setName: 'Base', variant: 'holofoil', priceUsd: 420 }, [first, unl]), unl);
+  assert.equal(matchCard({ number: '4', setName: 'Base', variant: 'holofoil', priceUsd: null }, [first, unl]), null, 'no price: still never guess');
 });
 
 test('a prefixed-set candidate beats a same-number reprint from another set', () => {

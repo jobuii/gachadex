@@ -26,18 +26,47 @@ export function normSet(s: string | null | undefined): string | null {
   return n || null;
 }
 
+// pokemontcg set names that differ from tcgpricelookup's beyond prefixing (normalized form).
+// Deterministic aliases beat looser containment heuristics, which would false-positive siblings
+// ('Base Set' ⊂ 'Base Set 2').
+const SET_ALIASES: Record<string, string> = {
+  base: 'baseset', // pokemontcg 'Base' = tpl 'Base Set'
+  expeditionbaseset: 'expedition', // pokemontcg 'Expedition Base Set' = tpl 'Expedition'
+};
+
 /** tcgpricelookup prefixes set codes ('SWSH07: Evolving Skies' vs pokemontcg 'Evolving Skies'), so
- *  set agreement is normalized SUFFIX containment, either direction — exact stays a special case. */
+ *  set agreement is normalized SUFFIX containment, either direction — exact stays a special case.
+ *  `b` is the MARKET's set name (alias-corrected); `a` is the provider candidate's. */
 export function setsMatch(a: string | null | undefined, b: string | null | undefined): boolean {
   const na = normSet(a);
-  const nb = normSet(b);
-  if (!na || !nb) return false;
+  const nbRaw = normSet(b);
+  if (!na || !nbRaw) return false;
+  const nb = SET_ALIASES[nbRaw] ?? nbRaw;
   return na === nb || na.endsWith(nb) || nb.endsWith(na);
+}
+
+/** Printing variants normalize across providers: pokemontcg 'reverseHolofoil' ~ tpl 'Reverse Holofoil'. */
+export function normVariant(v: string | null | undefined): string | null {
+  if (!v) return null;
+  const n = v.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return n || null;
+}
+
+/** Narrow a same-set variant pool by the market's own variant: exact match first, then suffix
+ *  ('holofoil' selects 'Unlimited Holofoil'-style supersets); no agreement leaves the pool as-is. */
+function narrowByVariant(pool: TplCard[], marketVariant: string | null | undefined): TplCard[] {
+  const v = normVariant(marketVariant);
+  if (!v) return pool;
+  const exact = pool.filter((c) => normVariant(c.variant) === v);
+  if (exact.length > 0) return exact;
+  const suffix = pool.filter((c) => normVariant(c.variant)?.endsWith(v));
+  return suffix.length > 0 ? suffix : pool;
 }
 
 export interface MarketToMatch {
   number: string | null; // collector number parsed from display_name
   setName: string | null; // markets.metadata->>'setName'
+  variant?: string | null; // markets.variant — disambiguates same-set printing rows (Holo vs Reverse)
   priceUsd?: number | null; // the market's latest oracle price — disambiguates printing variants
 }
 
@@ -65,9 +94,13 @@ export function matchCard(market: MarketToMatch, candidates: TplCard[]): TplCard
   const byNumber = candidates.filter((c) => normNumber(c.number) === num);
   const setMatched = market.setName ? byNumber.filter((c) => setsMatch(c.set?.name, market.setName)) : [];
   if (setMatched.length === 1) return setMatched[0];
-  // Same set + number more than once = printing variants — the only pool where the price rationale
-  // holds, so only here does the tie-break apply.
-  if (setMatched.length > 1) return uniqueByPrice(setMatched, market.priceUsd);
+  // Same set + number more than once = printing variants. Tie-break cascade: the market's own
+  // variant first (exact, then suffix), then price — the only pool where these rationales hold.
+  if (setMatched.length > 1) {
+    const narrowed = narrowByVariant(setMatched, market.variant);
+    if (narrowed.length === 1) return narrowed[0];
+    return uniqueByPrice(narrowed, market.priceUsd);
+  }
   // No set metadata (or no set agreement): cross-set same-number cards have no price-separation
   // guarantee, so stay strictly conservative — unique or nothing.
   return byNumber.length === 1 ? byNumber[0] : null;
@@ -87,8 +120,8 @@ export async function backfillProviderIds(
   opts: { apply: boolean; log?: (msg: string) => void },
 ): Promise<BackfillReport> {
   const log = opts.log ?? (() => {});
-  const rows = await db.query<{ id: string; display_name: string; game: string; set_name: string | null; price_e6: string | null }>(
-    `SELECT m.id, m.display_name, m.game, m.metadata->>'setName' AS set_name,
+  const rows = await db.query<{ id: string; display_name: string; game: string; set_name: string | null; variant: string | null; price_e6: string | null }>(
+    `SELECT m.id, m.display_name, m.game, m.metadata->>'setName' AS set_name, m.variant,
             (SELECT op.index_price_e6::text FROM oracle_prices op
               WHERE op.market_id = m.id AND op.is_accepted
               ORDER BY op.source_observed_at DESC LIMIT 1) AS price_e6
@@ -108,7 +141,7 @@ export async function backfillProviderIds(
       if (page.data.length === 0 || offset >= page.total || offset >= MAX_CANDIDATES) break;
     }
     const priceUsd = row.price_e6 != null ? Number(row.price_e6) / 1_000_000 : null;
-    const match = matchCard({ number, setName: row.set_name, priceUsd }, candidates);
+    const match = matchCard({ number, setName: row.set_name, variant: row.variant, priceUsd }, candidates);
     if (!match) {
       const reason = candidates.length === 0 ? 'no-results' : 'ambiguous';
       report.unmatched.push({ id: row.id, name: row.display_name, reason });
