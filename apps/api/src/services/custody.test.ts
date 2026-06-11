@@ -74,6 +74,9 @@ function fakeChain() {
     async solBalance(address: string): Promise<bigint> {
       return chain.solBalances.get(address) ?? 0n;
     },
+    async usdcBalance(address: string): Promise<bigint> {
+      return chain.balances.get(address) ?? 0n;
+    },
     async swapSolToUsdc(from: Keypair, lamports: bigint): Promise<string> {
       const addr = from.publicKey.toBase58();
       const bal = chain.solBalances.get(addr) ?? 0n;
@@ -233,14 +236,39 @@ test('SOL deposits swap in place and credit the ACTUAL proceeds — never the SO
   const expected = ((LAMPORTS_PER_SOL - FEE_RESERVE) * FAKE_RATE_E6_PER_SOL) / LAMPORTS_PER_SOL;
   assert.equal((await getUserBalances(db, u)).availableUusdc, expected);
   const usdcRow = (
-    await db.query<{ status: string }>(`SELECT status FROM deposits WHERE onchain_sig = $1 AND asset = 'USDC'`, [solRow.swap_sig])
+    await db.query<{ status: string; sweep_sig: string | null }>(
+      `SELECT status, sweep_sig FROM deposits WHERE onchain_sig = $1 AND asset = 'USDC'`,
+      [solRow.swap_sig],
+    )
   ).rows[0];
   assert.equal(usdcRow.status, 'credited');
+  // The proceeds were swept to hot in the SWAP pass, before this row existed — so it must be reconciled
+  // as swept, NOT left sweep_sig=NULL (which would double-count it in unswept against the hot balance).
+  assert.ok(usdcRow.sweep_sig, 'proceeds row reconciled as swept');
 
   // steady state: nothing further credits or swaps
   assert.equal((await scanDeposits(db, chain)).credited, 0);
   assert.equal(chain.swaps.length, 1);
   assert.equal((await reconcile(db)).ok, true);
+});
+
+test('a SOL-swap proceeds row swept before it was detected is not double-counted in unswept', async () => {
+  const u = await newUser();
+  const addr = await getOrCreateDepositAddress(db, u);
+  const chain = fakeChain();
+  chain.depositSol(addr.address, 'sig-sol-dc', LAMPORTS_PER_SOL); // 1 SOL
+
+  await scanDeposits(db, chain); // pass A: swap -> proceeds land -> swept to hot (no proceeds row yet)
+  await scanDeposits(db, chain); // pass B: detect proceeds -> credit -> address empty -> reconcile
+
+  // unsweptE6 (the exact treasury query) must be 0: the proceeds are already in hot, so counting the
+  // credited-but-unrecorded row would double-count on-chain custody (inflated treasury + phantom P/L).
+  const unswept = await db.query<{ t: string }>(
+    `SELECT COALESCE(SUM(usdc_credited_e6), 0)::text AS t FROM deposits
+       WHERE asset = 'USDC' AND status = 'credited' AND sweep_sig IS NULL`,
+  );
+  assert.equal(unswept.rows[0].t, '0');
+  assert.equal(await chain.usdcBalance(addr.address), 0n); // address really is empty (no genuine unswept)
 });
 
 test('after a SOL swap the leftover fee reserve is swept to hot, leaving the rent-exempt floor (not 0)', async () => {

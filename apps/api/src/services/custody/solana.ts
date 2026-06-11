@@ -154,6 +154,10 @@ export function solanaDepositChain(): DepositChain {
       return BigInt(await conn.getBalance(new PublicKey(address), 'finalized'));
     },
 
+    async usdcBalance(address: string): Promise<bigint> {
+      return usdcBalance(conn, usdcMint, new PublicKey(address));
+    },
+
     async swapSolToUsdc(from: Keypair, lamports: bigint): Promise<string> {
       return swapSolToUsdcViaJupiter(conn, from, lamports);
     },

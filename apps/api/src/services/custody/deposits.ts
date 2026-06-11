@@ -72,6 +72,10 @@ export interface DepositChain {
   inboundSol(address: string, knownSigs: Set<string>, until: string | null): Promise<InboundPage<InboundSol>>;
   /** Finalized native-SOL balance of `address`. */
   solBalance(address: string): Promise<bigint>;
+  /** Finalized USDC balance of `address`'s token account. Used to reconcile sweeps: a deposit whose
+   *  USDC was already swept to the hot wallet but whose row never got a sweep_sig leaves the address
+   *  at 0 yet still counts as unswept (double-counting on-chain custody). */
+  usdcBalance(address: string): Promise<bigint>;
   /** Swap `lamports` of the deposit wallet's SOL into USDC in place (Jupiter; the wallet pays its
    *  own fee from the SOL). Proceeds land on the wallet's USDC ATA. Returns the swap signature. */
   swapSolToUsdc(from: Keypair, lamports: bigint): Promise<string>;
@@ -263,6 +267,23 @@ export async function scanDeposits(
           `UPDATE deposits SET sweep_sig = $2 WHERE user_id = $1 AND asset = 'USDC' AND sweep_sig IS NULL`,
           [a.user_id, sweep.sig],
         );
+      } else {
+        // sweepAll moved nothing. A SOL->USDC deposit's proceeds are swept in the SAME pass as the swap
+        // — a pass BEFORE the proceeds row is detected & credited — so that row never receives a
+        // sweep_sig and would be double-counted in unsweptE6 against funds already in the hot wallet
+        // (same outcome if a sweep finalized on-chain but the process died before this UPDATE). If
+        // credited USDC rows are still unswept but the address is genuinely EMPTY, the funds already
+        // left: reconcile them. A >0 balance is sub-threshold dust legitimately on the address — leave it.
+        const stuck = await db.query(
+          `SELECT 1 FROM deposits WHERE user_id = $1 AND asset = 'USDC' AND status = 'credited' AND sweep_sig IS NULL LIMIT 1`,
+          [a.user_id],
+        );
+        if (stuck.rows.length > 0 && (await chain.usdcBalance(a.address)) === 0n) {
+          await db.query(
+            `UPDATE deposits SET sweep_sig = 'reconciled' WHERE user_id = $1 AND asset = 'USDC' AND status = 'credited' AND sweep_sig IS NULL`,
+            [a.user_id],
+          );
+        }
       }
     } catch (e) {
       log?.error(e, `deposit scan failed for ${a.address} (will retry next pass)`);
