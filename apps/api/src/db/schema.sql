@@ -434,3 +434,14 @@ CREATE TABLE IF NOT EXISTS settings (
   value      TEXT NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Global rate-limit/budget state for external price providers (one row per provider key). The limit is
+-- per API KEY, not per process, so the token-bucket state must live in the DB: every instance claims its
+-- next slot here (SELECT .. FOR UPDATE), which serializes requests globally at the provider's pace and
+-- counts the shared daily budget. See services/providers/limiter.ts.
+CREATE TABLE IF NOT EXISTS provider_rate (
+  key          TEXT PRIMARY KEY,            -- provider name, e.g. 'tcgpricelookup'
+  next_slot_at TIMESTAMPTZ NOT NULL DEFAULT now(), -- when the next request may be sent
+  day          DATE NOT NULL DEFAULT CURRENT_DATE, -- which day used_today counts
+  used_today   INT  NOT NULL DEFAULT 0
+);

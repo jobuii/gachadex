@@ -31,7 +31,7 @@ export function fromPokemontcg(raw: any[]): OracleCard[] {
       game: 'pokemon',
       symbol: c.id,
       cardId: c.id,
-      displayName: `${c.name}${c.number ? ' #' + c.number : ''}`,
+      displayName: `${c.name}${c.number ? ' #' + c.number : ''}`, // format is parsed back by backfill.ts parseDisplayName — keep in sync
       variant,
       imageSmall: c.images?.small ?? null,
       imageLarge: c.images?.large ?? null,

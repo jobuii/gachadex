@@ -234,6 +234,21 @@ card at 20x. Required controls (all of these, before search-and-bet ships):
   ids onto matched markets via the now-existing write-path.
 - **P1 — Client + key + global limiter:** tcgpricelookup client, `TCGPRICELOOKUP_API_KEY` (Railway env),
   DB-backed token bucket + leader guard + priority queue + retry/backoff. Confirm batch-by-IDs.
+  **STATUS: DONE (2026-06-11).** Shipped: `services/providers/limiter.ts` (DB-backed global token bucket
+  in the `provider_rate` table — N instances serialize to one provider-paced stream and share one daily
+  budget; in-process priority queue search > refresh > discovery with per-tier daily ceilings
+  100%/90%/60% so background work can't starve user search), `services/providers/tcgpricelookup.ts`
+  (typed client: search / batch-by-ids / card details; every attempt re-claims a limiter slot; retries
+  429 honoring retry-after + 5xx + Cloudflare HTML challenges with exp backoff + jitter; non-retryable
+  4xx throws immediately), and the conservative name+number+set backfill
+  (`services/providers/backfill.ts` + `scripts/backfill-provider-ids.ts`, dry-run by default,
+  idempotent, unique-violation→'conflict' report). Config: `TCGPRICELOOKUP_API_KEY/_BASE/
+  _MIN_INTERVAL_MS` (1100ms default)/`_DAILY_CAP`. **Verified live:** batch is
+  `GET /cards/search?ids=a,b` (≤20); `tcgplayer_id` serializes as a STRING; one paced request through
+  the real limiter returned raw + graded + ids. **Deliberate deferrals:** the loop leader guard lands
+  with the loop wiring (P3/P5 — the DB bucket already makes rate limits multi-instance-safe; the guard
+  only prevents duplicate WORK); the response cache lands with its consumer (the P6 search proxy).
+  **Backfill execution** (against the prod DB, ~5 min at 1 req/s) is an ops step at P5 cutover prep.
 - **P2 — Normalize:** `OracleCard` type with the price fallback chain + variant rule + provider
   `updated_at` as the observed timestamp; refactor `ingest`; pokemontcg extraction → its fetcher.
   **STATUS: DONE (2026-06-11).** `OracleCard` + `CardFetcher` in oracle.ts; `ingest` is fully

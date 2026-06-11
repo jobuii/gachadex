@@ -80,6 +80,14 @@ export const config = {
   justtcgBase: process.env.JUSTTCG_BASE ?? 'https://api.justtcg.com',
   gradedConstituents: num('GRADED_CONSTITUENTS', 100), // top-N cards for the Graded index
 
+  // tcgpricelookup (Trader plan) — the multi-game raw+graded provider (docs/data-providers.md).
+  // Hard limits verified live: 1 req/s (burst 1), 10k req/day. The DB-backed limiter enforces both
+  // GLOBALLY (across instances); override the pacing only if the plan tier changes.
+  tcgpricelookupApiKey: process.env.TCGPRICELOOKUP_API_KEY ?? '',
+  tcgpricelookupBase: process.env.TCGPRICELOOKUP_BASE ?? 'https://api.tcgpricelookup.com/v1',
+  tcgpricelookupMinIntervalMs: num('TCGPRICELOOKUP_MIN_INTERVAL_MS', 1100), // 1 req/s + 10% headroom
+  tcgpricelookupDailyCap: num('TCGPRICELOOKUP_DAILY_CAP', 10_000),
+
   // Money / safety
   realFunds: process.env.REAL_FUNDS === 'true', // hard gate; MVP must be false
   faucetDefaultUsd: num('FAUCET_DEFAULT_USD', 10_000),
