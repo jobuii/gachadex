@@ -1,4 +1,5 @@
 import { getCardPriceVariant, toE6 } from '@pokex/pricing';
+import { formatDisplayName } from './backfill.ts';
 import { config } from '../../config.ts';
 import type { OracleCard } from '../oracle.ts';
 
@@ -31,7 +32,7 @@ export function fromPokemontcg(raw: any[]): OracleCard[] {
       game: 'pokemon',
       symbol: c.id,
       cardId: c.id,
-      displayName: `${c.name}${c.number ? ' #' + c.number : ''}`, // format is parsed back by backfill.ts parseDisplayName — keep in sync
+      displayName: formatDisplayName(c.name, c.number),
       variant,
       imageSmall: c.images?.small ?? null,
       imageLarge: c.images?.large ?? null,

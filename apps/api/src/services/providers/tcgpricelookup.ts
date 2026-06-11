@@ -1,13 +1,15 @@
+import { toE6 } from '@pokex/pricing';
 import { config } from '../../config.ts';
 import type { Db } from '../../db/client.ts';
+import type { OracleCard } from '../oracle.ts';
 import { ProviderLimiter, sleep, type ProviderPriority } from './limiter.ts';
+import { formatDisplayName } from './backfill.ts';
 
 /**
- * tcgpricelookup HTTP client (Trader plan; spec in docs/data-providers.md). HTTP layer only — the
- * OracleCard fetcher that maps these responses lands in P3. Every request flows through the global
- * ProviderLimiter (1 req/s + daily budget, enforced via the DB across instances) and retries
- * transient failures (429 honoring retry-after, 5xx, Cloudflare challenges) with exponential
- * backoff + jitter. Each retry re-claims a limiter slot — retries are real requests too.
+ * tcgpricelookup provider (Trader plan; spec in docs/data-providers.md). Two layers in this module:
+ * the HTTP client (every request through the global ProviderLimiter — 1 req/s + daily budget enforced
+ * via the DB across instances; retries 429/5xx/Cloudflare with backoff, each retry re-claims a slot),
+ * and the OracleCard fetcher (P3) that re-prices the TRACKED market universe per pass.
  */
 
 export interface TplCard {
@@ -133,4 +135,86 @@ export class TcgPriceLookupClient {
     const ms = Math.max(Number.isFinite(fromHeader) ? fromHeader : 0, this.retryBaseMs * 2 ** attempt) + Math.random() * 250;
     await sleep(ms);
   }
+}
+
+// ---------------------------------------------------------------------------
+// OracleCard fetcher (P3) — re-prices the tracked market universe
+// ---------------------------------------------------------------------------
+
+/** Below this raw NM market price a card is "thin": one relisting can move the TCGplayer spot, so the
+ *  oracle uses the smoothed eBay 7-day average instead (operator decision, plan "Decisions & defaults"). */
+export const LIQUID_THRESHOLD_USD = 25;
+
+// Condition preference for the raw price (plan section E fallback chain).
+const CONDITION_ORDER = ['near_mint', 'lightly_played'];
+
+/** The raw spot in USD per the plan's fallback chain + thin-market smoothing. 0 = ineligible. */
+export function rawPriceUsd(card: TplCard): number {
+  for (const cond of CONDITION_ORDER) {
+    const c = card.prices?.raw?.[cond];
+    if (!c) continue;
+    const spot = c.tcgplayer?.market ?? 0;
+    const smooth = c.ebay?.avg_7d ?? 0;
+    if (spot >= LIQUID_THRESHOLD_USD) return spot; // liquid: the TCGplayer market price
+    if (smooth > 0) return smooth; // thin: a 7d average a single relisting can't move
+    if (spot > 0) return spot; // thin with no eBay data: take the spot
+  }
+  return 0;
+}
+
+/** PSA-10 in USD: ebay avg_7d (stable) -> avg_1d -> avg_30d -> null. */
+export function gradedPsa10Usd(card: TplCard): number | null {
+  const e = card.prices?.graded?.psa?.['10']?.ebay;
+  const v = e?.avg_7d ?? e?.avg_1d ?? e?.avg_30d;
+  return v != null && v > 0 ? v : null;
+}
+
+/** The tracked market row a provider card re-prices. Identity (game/symbol/card_id) comes from OUR
+ *  market row — never from the provider — so backfilled legacy markets are re-priced IN PLACE. */
+export interface TrackedMarket {
+  provider_card_id: string;
+  symbol: string;
+  card_id: string;
+  game: string;
+}
+
+/** Join one provider card onto its tracked market identity and emit the OracleCard. */
+export function fromTplCard(c: TplCard, t: TrackedMarket): OracleCard {
+  const graded = gradedPsa10Usd(c);
+  return {
+    game: t.game,
+    symbol: t.symbol,
+    cardId: t.card_id,
+    tcgplayerId: c.tcgplayer_id != null && c.tcgplayer_id !== '' ? Number(c.tcgplayer_id) : null,
+    providerCardId: c.id,
+    displayName: formatDisplayName(c.name, c.number),
+    variant: c.variant,
+    imageSmall: c.image_url,
+    imageLarge: c.image_url, // the provider serves one asset; both slots point at it
+    metadata: { setName: c.set?.name ?? null, rarity: c.rarity ?? null }, // uniform multi-game panel (no game-specific fields)
+    rawE6: toE6(rawPriceUsd(c)),
+    gradedE6: graded != null ? toE6(graded) : null,
+    observedAt: c.updated_at ? new Date(c.updated_at) : null, // provider freshness -> print dedup + staleness gate
+    payload: { tcgpricelookup: { prices: c.prices ?? null, updated_at: c.updated_at ?? null } },
+  };
+}
+
+let defaultClient: TcgPriceLookupClient | null = null;
+
+/** Live fetcher behind ORACLE_PRIMARY=tcgpricelookup: batch-fetch every tracked market's provider card
+ *  and emit OracleCards keyed by the markets' OWN identity. Cards the provider no longer returns are
+ *  simply absent (no print -> the staleness halt covers them). */
+export async function fetchTrackedCards(db: Db, client?: TcgPriceLookupClient): Promise<OracleCard[]> {
+  const tpl = client ?? (defaultClient ??= new TcgPriceLookupClient(db));
+  const tracked = await db.query<TrackedMarket>(
+    `SELECT provider_card_id, symbol, card_id, game FROM markets
+      WHERE kind = 'card' AND provider_card_id IS NOT NULL AND status != 'delisted'`,
+  );
+  if (tracked.rows.length === 0) return [];
+  const byId = new Map(tracked.rows.map((t) => [t.provider_card_id, t]));
+  const cards = await tpl.getCardsByIds([...byId.keys()], 'refresh');
+  return cards.flatMap((c) => {
+    const t = byId.get(c.id);
+    return t ? [fromTplCard(c, t)] : []; // unknown id in the response — ignore, never invent identity
+  });
 }

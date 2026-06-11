@@ -264,9 +264,26 @@ card at 20x. Required controls (all of these, before search-and-bet ships):
   **Sequencing constraint:** the index/graded baskets are still single-game (`ingest` sorts the whole
   pass — see the SINGLE-GAME ASSUMPTION comment in oracle.ts). The cutover flag must NOT flip a
   multi-game feed live before P4's per-game featured-constituent separation lands.
+  **STATUS: DONE (2026-06-11).** Shipped in `providers/tcgpricelookup.ts`: `rawPriceUsd` (the section-E
+  fallback chain — NM tcgplayer.market when ≥ the $25 liquidity threshold, else the smoothed eBay
+  avg_7d, else the spot, else lightly_played, else ineligible), `gradedPsa10Usd` (avg_7d → 1d → 30d),
+  `fromTplCard` (identity ALWAYS from the tracked market row — game/symbol/card_id are ours; prices/
+  images/freshness are the provider's; `updated_at` → observedAt for print dedup + staleness), and
+  `fetchTrackedCards(db)` (batch-fetch every tracked `provider_card_id` via getCardsByIds at 'refresh'
+  priority). `ingest` selects the fetcher by `ORACLE_PRIMARY` (`primaryFetcher`) — pokemontcg remains
+  the default; the flag is still inert in prod. Tests prove the cutover invariant end-to-end: a
+  backfilled legacy market re-prices IN PLACE (same row, no twin) with the provider timestamp on the
+  print, and the flag test proves routing. Leader guard intentionally lands at P5 with cutover
+  hardening (the DB token bucket already makes the rate limit multi-instance-safe; with provider
+  observedAt, duplicate ingests also dedup at the print level — duplicate work only costs budget).
 - **P4 — Discovery job** (resumable, single-flight, low priority) → featured top-250 per game; index
   constituents = featured set only.
 - **P5 — Cutover:** shadow run → flag flip → outlier-guard bypass → universe union → monitor + rollback.
+  Also at P5: (a) **frontend detail panel** — the uniform metadata ({setName, rarity}) replaces Pokémon
+  hp/retreat/attacks; OrderEntry.jsx renders the Retreat row whenever metadata is truthy, so it would show
+  "Retreat 0" on every card post-cutover — drop hp/retreat/attacks rows, render rarity. (b) **leader
+  guard** for the oracle/discovery loops (duplicate work only costs budget; rate is already safe).
+  (c) log tracked ids absent from the provider response (silent until the staleness halt otherwise).
 - **P6 — Search-and-bet:** search firewall + creatability gate + first-print validation + smoothed oracle
   + dollar min-notional + market cap/retirement + **mandatory NAV gates on**. Ships last, after the core
   feed is proven.

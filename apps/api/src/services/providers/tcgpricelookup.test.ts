@@ -8,8 +8,11 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 
 const { getDb, closeDb } = await import('../../db/client.ts');
 const { initDb } = await import('../../db/init.ts');
-const { TcgPriceLookupClient, TPL_BATCH_SIZE } = await import('./tcgpricelookup.ts');
+const { TcgPriceLookupClient, TPL_BATCH_SIZE, rawPriceUsd, gradedPsa10Usd, fromTplCard, fetchTrackedCards } =
+  await import('./tcgpricelookup.ts');
 const { ProviderLimiter } = await import('./limiter.ts');
+const { upsertCardMarket, cardSymbol } = await import('../markets.ts');
+const { ingest } = await import('../oracle.ts');
 
 await initDb();
 const db = await getDb();
@@ -80,4 +83,98 @@ test('attempts are bounded: persistent 5xx exhausts retries and throws', async (
   const { client, calls } = clientWith([json({}, 503), json({}, 503), json({}, 503), json({}, 503), json({}, 503)]);
   await assert.rejects(client.searchCards({ q: 'x' }, 'search'), /tcgpricelookup 503/);
   assert.equal(calls.length, 4); // maxAttempts default
+});
+
+// ---------------------------------------------------------------------------
+// OracleCard fetcher (P3)
+// ---------------------------------------------------------------------------
+
+const prices = (nm: { market?: number; avg_7d?: number }, lp?: { market?: number }, psa10?: { avg_7d?: number; avg_1d?: number; avg_30d?: number }) => ({
+  raw: {
+    near_mint: { tcgplayer: { market: nm.market }, ebay: { avg_7d: nm.avg_7d } },
+    ...(lp ? { lightly_played: { tcgplayer: { market: lp.market } } } : {}),
+  },
+  ...(psa10 ? { graded: { psa: { '10': { ebay: psa10 } } } } : {}),
+});
+type TplCardT = import('./tcgpricelookup.ts').TplCard;
+const tplCard = (id: string, p: TplCardT['prices'], extra: Partial<TplCardT> = {}): TplCardT => ({
+  id, tcgplayer_id: '284251', name: 'Card', number: '006/197', rarity: 'Rare', variant: 'Standard',
+  image_url: 'img/c', updated_at: '2026-06-10T12:00:00Z', set: { slug: 's', name: 'Some Set' },
+  game: { slug: 'pokemon', name: 'Pokemon' }, prices: p, ...extra,
+});
+
+test('rawPriceUsd: liquid spot wins; thin markets smooth to the eBay 7d avg; conditions fall back', () => {
+  assert.equal(rawPriceUsd(tplCard('a', prices({ market: 30, avg_7d: 28 }))), 30); // liquid: spot
+  assert.equal(rawPriceUsd(tplCard('b', prices({ market: 10, avg_7d: 12 }))), 12); // thin: smoothed
+  assert.equal(rawPriceUsd(tplCard('c', prices({ market: 10 }))), 10); // thin, no eBay: spot
+  assert.equal(rawPriceUsd(tplCard('d', prices({}, { market: 40 }))), 40); // NM empty -> lightly_played
+  assert.equal(rawPriceUsd(tplCard('e', { raw: {} })), 0); // nothing priced -> ineligible
+});
+
+test('gradedPsa10Usd: avg_7d -> avg_1d -> avg_30d -> null', () => {
+  assert.equal(gradedPsa10Usd(tplCard('a', prices({ market: 30 }, undefined, { avg_7d: 400, avg_1d: 410 }))), 400);
+  assert.equal(gradedPsa10Usd(tplCard('b', prices({ market: 30 }, undefined, { avg_1d: 410, avg_30d: 390 }))), 410);
+  assert.equal(gradedPsa10Usd(tplCard('c', prices({ market: 30 }, undefined, { avg_30d: 390 }))), 390);
+  assert.equal(gradedPsa10Usd(tplCard('d', prices({ market: 30 }))), null);
+});
+
+test('fromTplCard: identity comes from the TRACKED market row, data from the provider', () => {
+  const oc = fromTplCard(
+    tplCard('uuid-x', prices({ market: 100 }, undefined, { avg_7d: 500 })),
+    { provider_card_id: 'uuid-x', symbol: 'sv-old-1', card_id: 'sv-old-1', game: 'pokemon' },
+  );
+  assert.equal(oc.symbol, 'sv-old-1'); // the legacy market's own symbol — re-priced in place
+  assert.equal(oc.cardId, 'sv-old-1');
+  assert.equal(oc.tcgplayerId, 284251); // string from the API -> number
+  assert.equal(oc.providerCardId, 'uuid-x');
+  assert.equal(oc.rawE6, 100_000_000n);
+  assert.equal(oc.gradedE6, 500_000_000n);
+  assert.equal(oc.observedAt?.toISOString(), '2026-06-10T12:00:00.000Z');
+});
+
+test('fetchTrackedCards + ingest: legacy + provider-native markets re-price IN PLACE (no twins)', async () => {
+  // a backfilled legacy Pokémon market (bare symbol) + a provider-native One Piece market
+  const legacyId = await upsertCardMarket(db, {
+    symbol: 'sv-old-1', cardId: 'sv-old-1', displayName: 'Old Charizard #6', variant: 'holofoil',
+    imageSmall: 'img/old', metadata: { setName: 'Old Set' }, providerCardId: 'uuid-legacy', tcgplayerId: 111,
+  });
+  const nativeId = await upsertCardMarket(db, {
+    game: 'onepiece', symbol: cardSymbol('onepiece', 'uuid-native'), cardId: 'uuid-native', displayName: 'Luffy #OP01-001',
+    variant: 'Standard', imageSmall: 'img/luffy', providerCardId: 'uuid-native',
+  });
+
+  const stub = {
+    getCardsByIds: async (ids: string[]) => {
+      assert.deepEqual([...ids].sort(), ['uuid-legacy', 'uuid-native']);
+      return [
+        tplCard('uuid-legacy', prices({ market: 1500 }, undefined, { avg_7d: 5000 }), { name: 'Charizard', number: '6' }),
+        tplCard('uuid-native', prices({ market: 250 }), { name: 'Monkey D. Luffy', number: 'OP01-001', game: { slug: 'onepiece', name: 'One Piece' }, tcgplayer_id: null }),
+      ];
+    },
+  } as unknown as InstanceType<typeof TcgPriceLookupClient>;
+
+  const cards = await fetchTrackedCards(db, stub);
+  assert.equal(cards.length, 2);
+
+  const before = await db.query<{ n: string }>(`SELECT COUNT(*)::text AS n FROM markets WHERE kind = 'card'`);
+  const r = await ingest(db, () => fetchTrackedCards(db, stub));
+  assert.equal(r.cards, 2);
+  const after = await db.query<{ n: string }>(`SELECT COUNT(*)::text AS n FROM markets WHERE kind = 'card'`);
+  assert.equal(after.rows[0].n, before.rows[0].n, 'no duplicate markets created');
+
+  // the legacy market was re-priced in place: same row, fresh provider data + print at the provider timestamp
+  const legacy = await db.query<{ display_name: string; graded: string | null }>(
+    `SELECT display_name, graded_psa10_e6::text AS graded FROM markets WHERE id = $1`, [legacyId],
+  );
+  assert.equal(legacy.rows[0].display_name, 'Charizard #6');
+  assert.equal(legacy.rows[0].graded, (5000n * 1_000_000n).toString());
+  const print = await db.query<{ v: string; at: string }>(
+    `SELECT index_price_e6::text AS v, source_observed_at AS at FROM oracle_prices WHERE market_id = $1`, [legacyId],
+  );
+  assert.equal(print.rows[0].v, (1500n * 1_000_000n).toString());
+  assert.equal(new Date(print.rows[0].at).toISOString(), '2026-06-10T12:00:00.000Z');
+
+  // the provider-native market printed too
+  const native = await db.query<{ n: string }>(`SELECT COUNT(*)::text AS n FROM oracle_prices WHERE market_id = $1`, [nativeId]);
+  assert.equal(native.rows[0].n, '1');
 });

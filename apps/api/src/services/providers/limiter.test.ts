@@ -22,9 +22,11 @@ test('slots are globally paced: N acquires complete spaced by the min interval',
     [0, 1, 2].map(() => lim.acquire('refresh').then(() => stamps.push(Date.now() - t0))),
   );
   stamps.sort((a, b) => a - b);
-  // 1st slot is immediate; each later slot is >= one interval after the previous (small timer slack)
-  assert.ok(stamps[1] - stamps[0] >= 40, `2nd slot too early: ${stamps.join(',')}`);
-  assert.ok(stamps[2] - stamps[1] >= 40, `3rd slot too early: ${stamps.join(',')}`);
+  // Slots are anchored to DB time, so assert TOTAL elapsed (monotone under event-loop lag) rather than
+  // pairwise gaps, which can compress when a resolve is delayed: 2nd slot >= ~1 interval after start,
+  // 3rd >= ~2 intervals (small slack for clock skew).
+  assert.ok(stamps[1] >= 40, `2nd slot too early: ${stamps.join(',')}`);
+  assert.ok(stamps[2] >= 100, `3rd slot too early: ${stamps.join(',')}`);
 });
 
 test('priority: a queued user search jumps ahead of queued discovery work', async () => {

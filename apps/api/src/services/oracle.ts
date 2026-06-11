@@ -6,6 +6,7 @@ import type { Db, Queryer } from '../db/client.ts';
 import { upsertCardMarket, upsertIndexMarket, getMarketById } from './markets.ts';
 import { recomputeMark } from './marks.ts';
 import { pokemontcgFetcher } from './providers/pokemontcg.ts';
+import { fetchTrackedCards } from './providers/tcgpricelookup.ts';
 
 /**
  * Provider-agnostic card snapshot — the seam between price providers and the oracle (P2 of the
@@ -106,14 +107,19 @@ async function recordOracle(
   return ins.rows.length > 0 && accepted;
 }
 
+/** The flag-selected live fetcher (ORACLE_PRIMARY): cutover/rollback is an env flip + restart, no code deploy. */
+function primaryFetcher(db: Db): CardFetcher {
+  return config.oraclePrimary === 'tcgpricelookup' ? () => fetchTrackedCards(db) : pokemontcgFetcher;
+}
+
 /** Ingest a price snapshot: upsert card markets, record prints, recompute marks, rebuild indices. */
 export async function ingest(
   db: Db,
-  fetcher: CardFetcher = pokemontcgFetcher,
+  fetcher?: CardFetcher,
   gradedFetcher: GradedFetcher | null = config.justtcgApiKey ? fetchGradedPrice : null,
 ): Promise<{ cards: number; indices: number; graded: number }> {
   const passObservedAt = new Date();
-  const priced = (await fetcher()).filter((c) => c.rawE6 > 0n);
+  const priced = (await (fetcher ?? primaryFetcher(db))()).filter((c) => c.rawE6 > 0n);
 
   // Operator-pinned markets carry a manual price (ROADMAP §2) — the auto-oracle never overwrites them.
   const pinnedRows = await db.query<{ id: string }>(`SELECT id FROM markets WHERE price_pinned`);
