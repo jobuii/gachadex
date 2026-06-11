@@ -341,7 +341,10 @@ export function AdminPanel() {
   );
   // Dashboard figures derived once (only meaningful when treasury is loaded).
   const customerE6 = treasury ? BigInt(treasury.freeE6) + BigInt(treasury.lockedE6) : 0n;
-  const pnlE6 = treasury ? BigInt(treasury.onchainE6) - customerE6 : 0n;
+  // P/L = on-chain treasury minus everything owed to customers. Pending withdrawals were debited from
+  // customer collateral and are queued to pay out — still customer money in flight, NOT house profit —
+  // so subtract them too (else P/L inflates by the pending amount until the payout lands).
+  const pnlE6 = treasury ? BigInt(treasury.onchainE6) - customerE6 - BigInt(treasury.pendingE6) : 0n;
 
   // Verifying a saved key on mount — render nothing operational until we know it's valid.
   if (checking) {
@@ -409,7 +412,7 @@ export function AdminPanel() {
           <Stat label="…locked in trades" value={treasury.lockedE6} />
           <Stat label="Pending withdrawals" value={treasury.pendingE6} />
           <Stat label="Insurance fund" value={treasury.insuranceE6} />
-          <PnlStat label="P/L (treasury − customer funds)" value={pnlE6.toString()} />
+          <PnlStat label="P/L (treasury − customer funds − pending payouts)" value={pnlE6.toString()} />
         </div>
       ) : (
         <p className="ref-blurb">Live treasury balances appear in real-funds mode (this deployment is play money).</p>
