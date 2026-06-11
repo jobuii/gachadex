@@ -4,6 +4,17 @@ Replace the pokemontcg.io (raw) + JustTCG (graded) feeds with **tcgpricelookup**
 primary price source, across **Pokémon + One Piece + MTG**, and add a **search-and-bet** feature so
 users can trade any card, not just the featured top-250. Provider spec: `docs/data-providers.md`.
 
+## Current state (already built — do NOT rebuild)
+
+- **Game dimension is wired end-to-end:** `markets.game` ('pokemon'|'onepiece'|'mtg') + `idx_markets_game`
+  (`schema.sql:140,171-172`), per-game `INDEX_CATALOG` (`packages/shared-types/src/index.js:22`), and the
+  frontend **game-switcher** (`apps/web/src/components/SidebarMarkets.jsx`, `pages/Exchange.jsx`). Pokémon
+  markets/indices are live; OP/MTG indices are listed but **gated** until card data lands.
+- **Oracle today** runs on pokemontcg.io (raw, `oracle.ts:57`) + JustTCG (graded, `oracle.ts:39`),
+  Pokémon-only, with `game:'pokemon'` hard-coded at `oracle.ts:132`.
+- This plan is the **data-provider integration** (swap the feed to tcgpricelookup, light up OP/MTG card
+  data, add search-and-bet). It does **not** re-do the game dimension or the frontend switcher.
+
 ## Constraints that shape the design (verified live 2026-06-11)
 
 - **No price sort.** `search` filters by `q` / `game` / `set` only and returns results
@@ -224,3 +235,38 @@ card at 20x. Required controls (all of these, before search-and-bet ships):
 - **P6 — Search-and-bet:** search firewall + creatability gate + first-print validation + smoothed oracle
   + dollar min-notional + market cap/retirement + **mandatory NAV gates on**. Ships last, after the core
   feed is proven.
+
+---
+
+# Decisions & defaults (operator-acknowledged 2026-06-11)
+
+Locked-in choices and the concrete defaults a builder should use unless the operator overrides them.
+
+- **Leverage:** all cards trade the same — **up to 20x**, no per-market tier. (See "Risk notes".)
+- **Provider:** tcgpricelookup **Trader plan is purchased and active**; the operator supplies the key out
+  of band. It lives only in Railway env `TCGPRICELOOKUP_API_KEY` (never committed). scrydex stays the raw
+  fallback, JustTCG the graded fallback.
+- **Pool-protection gates — MANDATORY, operator acknowledged off-by-default.** The operator has
+  acknowledged that `oiCapNavBps`, `maxPnlFactorBps`, `adlPnlFactorBps` default to `0` (off), that this is
+  the same uncapitalized-pool risk as the LP discussion, and that **they must be set non-zero before
+  search-and-bet ships, and should be on for real funds regardless.** Recommended starting values
+  (calibration in `docs/liquidity-calibration.md`), set as Railway env:
+  - `MAX_PNL_FACTOR_BPS` ≈ **5500** (pause new opens at ~55% of NAV owed to winners)
+  - `ADL_PNL_FACTOR_BPS` ≈ **7500** (auto-deleverage at ~75% of NAV)
+  - `OI_CAP_NAV_BPS` ≈ **4000** (one side's OI ≤ ~0.4× NAV)
+  - P6 boot assertion: on-demand markets enabled ⇒ all three must be > 0, else refuse to start.
+- **Creatability gate (P6 default):** a searched card is tradeable only if `raw.near_mint.tcgplayer.market`
+  ≥ **$10** AND `raw.near_mint.ebay.avg_7d` is present and within **~25%** of the TCGplayer market (a
+  liquidity/agreement proxy). Reject null/sealed/one-sided cards.
+- **Oracle price basis:** price a card off `raw.near_mint.tcgplayer.market` when liquid; **use the smoothed
+  `ebay.avg_7d` below a liquidity threshold (~$25 NM market)** so a single relisting can't move a thin
+  card's oracle. (Tunable.)
+- **Variant:** **one market per canonical variant** — pick the highest-value/most-liquid variant of a
+  physical card; do not spin up a separate market for every printing. One physical card ⇒ at most one index
+  basket slot.
+- **Dead-market retirement (P6 default):** a market with **zero open interest and zero volume for 30 days**
+  is retired (removed from the refresh set). Markets with any OI are never retired.
+- **Featured set size:** **top-250 by price per game** for the featured markets + index constituents
+  (reuse `gradedConstituents`=100 sizing for the Graded basket).
+
+These defaults are sensible starting points, not hard requirements — the operator can tune any of them.
