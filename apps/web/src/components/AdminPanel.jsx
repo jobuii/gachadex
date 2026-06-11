@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { formatUsd, toE6 } from '@pokex/pricing';
+import { formatUsd, toE6, shortenPubkey } from '@pokex/pricing';
 import * as api from '../lib/api.js';
 
 /**
@@ -31,6 +31,20 @@ function Stat({ label, value }) {
   );
 }
 
+// Profit/loss stat — green when the house is up, red when down (handles negative bigints explicitly).
+function PnlStat({ label, value }) {
+  const v = BigInt(value);
+  const neg = v < 0n;
+  return (
+    <div className="ins-stat" style={{ minWidth: 130 }}>
+      <div className="muted" style={{ fontSize: '0.72rem' }}>{label}</div>
+      <div style={{ fontWeight: 700, color: neg ? '#e74c3c' : '#3fb950' }}>
+        {neg ? '-' : ''}{formatUsd(neg ? -v : v)}
+      </div>
+    </div>
+  );
+}
+
 export function AdminPanel() {
   const [adminKey, setAdminKey] = useState(() => localStorage.getItem(KEY_STORE) || '');
   // Access gate: nothing in the panel renders or fetches until the key is verified by the server.
@@ -50,6 +64,10 @@ export function AdminPanel() {
   const [treasDraft, setTreasDraft] = useState('');
   const [custodyLimits, setCustodyLimits] = useState(null); // { current, defaults } | null (real-funds only)
   const [limitDrafts, setLimitDrafts] = useState({}); // limit key -> string
+  const [fee, setFeeState] = useState(null); // { bps, default } | null — trading fee (works in both modes)
+  const [feeDraft, setFeeDraft] = useState(''); // operator enters a PERCENT (0.01 = 0.01%)
+  const [withdrawals, setWithdrawals] = useState([]); // requested withdrawal queue (real-funds)
+  const [wbusy, setWbusy] = useState(null); // withdrawal id being approved/reversed
 
   // Validate the key against a key-gated endpoint (GET /admin/insurance — registered whenever an admin
   // key is set, in either mode; adminGet throws on any non-2xx). A 200 is the only thing that unlocks.
@@ -92,28 +110,56 @@ export function AdminPanel() {
   const loadOps = useCallback(async () => {
     if (!authed) return;
     const key = adminKey.trim();
-    try {
-      const t = await api.adminGetTreasury(key);
-      setTreasury(t);
-      setInsuranceE6(t.insuranceE6);
-    } catch {
-      setTreasury(null);
-      try {
-        setInsuranceE6((await api.adminGetInsurance(key)).insuranceUusdc);
-      } catch {
-        /* endpoint unavailable in this mode */
-      }
-    }
-    // Custody limits are real-funds-only (same gate as treasury); null in play-money.
-    try {
-      setCustodyLimits(await api.adminGetCustodyLimits(key));
-    } catch {
-      setCustodyLimits(null);
-    }
+    // The four groups are independent — fetch them concurrently. Each self-guards, so one failing
+    // endpoint (e.g. the real-funds-only ones in play money) never aborts the others.
+    await Promise.all([
+      // Treasury (real-funds, chain-backed) with a bare-insurance fallback for play money.
+      (async () => {
+        try {
+          const t = await api.adminGetTreasury(key);
+          setTreasury(t);
+          setInsuranceE6(t.insuranceE6);
+        } catch {
+          setTreasury(null);
+          try {
+            setInsuranceE6((await api.adminGetInsurance(key)).insuranceUusdc);
+          } catch {
+            /* endpoint unavailable in this mode */
+          }
+        }
+      })(),
+      (async () => {
+        try {
+          setCustodyLimits(await api.adminGetCustodyLimits(key)); // real-funds-only; null in play-money
+        } catch {
+          setCustodyLimits(null);
+        }
+      })(),
+      (async () => {
+        try {
+          setFeeState(await api.adminGetFee(key)); // works in either mode
+        } catch {
+          setFeeState(null);
+        }
+      })(),
+      (async () => {
+        try {
+          setWithdrawals((await api.adminGetWithdrawals('requested', key)).withdrawals || []); // real-funds-only
+        } catch {
+          setWithdrawals([]);
+        }
+      })(),
+    ]);
   }, [authed, adminKey]);
+  // Poll the operator data (treasury, fee, withdrawals queue) while the panel is open, so balances
+  // and new withdrawals appear live — not just after an action triggers a reload.
   useEffect(() => {
+    if (!authed) return;
     loadOps();
-  }, [loadOps]);
+    // 30s (not 15s) — adminGetTreasury reads hot/cold balances from the chain RPC each pass.
+    const t = setInterval(loadOps, 30_000);
+    return () => clearInterval(t);
+  }, [authed, loadOps]);
 
   // Unlock: verify the entered key against the server; persist + reveal the panel only on success.
   const unlock = async () => {
@@ -141,6 +187,8 @@ export function AdminPanel() {
     setTreasury(null);
     setInsuranceE6(null);
     setCustodyLimits(null);
+    setFeeState(null);
+    setWithdrawals([]);
     setMsg(null);
     setErr(null);
   };
@@ -193,6 +241,60 @@ export function AdminPanel() {
     }
   };
 
+  // Trading fee: the operator enters a PERCENT; we store bps (pct * 100, so 0.01% = 1 bps).
+  const saveFee = async () => {
+    setErr(null);
+    setMsg(null);
+    const pct = Number(feeDraft);
+    if (!Number.isFinite(pct) || pct < 0) {
+      setErr('Enter a fee percentage (e.g. 0.01 for 0.01%).');
+      return;
+    }
+    setBusy('fee');
+    try {
+      const r = await api.adminSetFee(Math.round(pct * 100), adminKey.trim());
+      setFeeState(r);
+      setFeeDraft('');
+      setMsg(`Trading fee set to ${(r.bps / 100).toFixed(2)}% (charged on open + close).`);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Approve = sign + broadcast the payout; reverse = re-credit a row that provably never paid.
+  const approveWithdrawal = async (w) => {
+    setErr(null);
+    setMsg(null);
+    setWbusy(w.id);
+    try {
+      const r = await api.adminApproveWithdrawal(w.id, adminKey.trim());
+      setMsg(`Withdrawal ${w.id.slice(0, 8)} → ${r.status}.`);
+      loadOps();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setWbusy(null);
+    }
+  };
+  const reverseWithdrawal = async (w) => {
+    const reason = window.prompt('Reason for reversing this withdrawal (it re-credits the user):');
+    if (!reason || !reason.trim()) return;
+    setErr(null);
+    setMsg(null);
+    setWbusy(w.id);
+    try {
+      await api.adminReverseWithdrawal(w.id, reason.trim(), adminKey.trim());
+      setMsg(`Withdrawal ${w.id.slice(0, 8)} reversed — user re-credited.`);
+      loadOps();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setWbusy(null);
+    }
+  };
+
   const setPrice = async (m, force = false) => {
     setErr(null);
     setMsg(null);
@@ -239,6 +341,9 @@ export function AdminPanel() {
   const rows = markets.filter(
     (m) => !q || m.symbol.toLowerCase().includes(q) || (m.displayName || '').toLowerCase().includes(q),
   );
+  // Dashboard figures derived once (only meaningful when treasury is loaded).
+  const customerE6 = treasury ? BigInt(treasury.freeE6) + BigInt(treasury.lockedE6) : 0n;
+  const pnlE6 = treasury ? BigInt(treasury.onchainE6) - customerE6 : 0n;
 
   // Verifying a saved key on mount — render nothing operational until we know it's valid.
   if (checking) {
@@ -294,76 +399,126 @@ export function AdminPanel() {
       {msg && <div className="ref-msg up">{msg}</div>}
       {err && <div className="order-error">{err}</div>}
 
-      <h3 style={{ marginTop: '1.25rem' }}>Treasury &amp; insurance</h3>
-      <p className="ref-blurb">
-        The insurance fund absorbs liquidation bad-debt before it reaches LPs. Top it up from house
-        money — accumulated platform fees, or surplus you've sent to the treasury wallet. (It also
-        auto-fills from the 1% liquidation fee.)
-      </p>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', margin: '0.5rem 0' }}>
-        <Stat label="Insurance fund" value={insuranceE6} />
-        {treasury && (
-          <>
-            <Stat label="Treasury surplus (allocatable)" value={treasury.surplusE6} />
-            <Stat label="On-chain reserves" value={treasury.onchainE6} />
-            <Stat label="Liabilities" value={treasury.liabilityE6} />
-            <Stat label="Hot wallet" value={treasury.hotE6} />
-            <Stat label="Cold treasury" value={treasury.coldE6} />
-          </>
-        )}
-      </div>
-      {!treasury && (
-        <div className="muted" style={{ fontSize: '0.85rem', marginBottom: '0.4rem' }}>
-          Enter your admin key to load balances. Treasury balances + the “from treasury” allocation appear in
-          real-funds mode; fee allocation works in either mode.
+      {/* ---- Overview dashboard ---- */}
+      <h3 style={{ marginTop: '1rem' }}>Overview</h3>
+      {treasury ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', margin: '0.5rem 0' }}>
+          <Stat label="Total treasury (hot + cold)" value={treasury.onchainE6} />
+          <Stat label="Hot balance" value={treasury.hotE6} />
+          <Stat label="Cold treasury" value={treasury.coldE6} />
+          <Stat label="Total customer balance" value={customerE6.toString()} />
+          <Stat label="…free" value={treasury.freeE6} />
+          <Stat label="…locked in trades" value={treasury.lockedE6} />
+          <Stat label="Pending withdrawals" value={treasury.pendingE6} />
+          <Stat label="Insurance fund" value={treasury.insuranceE6} />
+          <PnlStat label="P/L (treasury − customer funds)" value={pnlE6.toString()} />
         </div>
+      ) : (
+        <p className="ref-blurb">Live treasury balances appear in real-funds mode (this deployment is play money).</p>
       )}
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.35rem 0', flexWrap: 'wrap' }}>
+
+      {/* ---- Withdrawals queue ---- */}
+      <h3 style={{ marginTop: '1.25rem' }}>Withdrawals queue</h3>
+      <p className="ref-blurb">
+        Pending withdrawals awaiting approval.{' '}
+        <span style={{ color: '#3fb950' }}>Green</span> rows go to the user's own sign-in wallet (lower risk).
+        Approve signs + broadcasts the payout; reverse re-credits a row that never paid out.
+      </p>
+      {treasury ? (
+        <table className="hist-table">
+          <thead>
+            <tr><th>Owner wallet</th><th>Destination</th><th>Amount</th><th>Requested</th><th /></tr>
+          </thead>
+          <tbody>
+            {withdrawals.length === 0 && (
+              <tr><td colSpan={5} className="hist-empty">No withdrawals in the queue.</td></tr>
+            )}
+            {withdrawals.map((w) => {
+              const self = w.dest_address && w.dest_address === w.pubkey;
+              return (
+                <tr key={w.id} style={self ? { background: 'rgba(63,185,80,0.14)' } : undefined}>
+                  <td className="muted" title={w.pubkey}>{shortenPubkey(w.pubkey)}</td>
+                  <td title={w.dest_address}>
+                    {shortenPubkey(w.dest_address)}
+                    {self && <span style={{ color: '#3fb950', marginLeft: 6, fontSize: '0.72rem' }}>● self</span>}
+                  </td>
+                  <td>{formatUsd(BigInt(w.amount_e6))}</td>
+                  <td className="muted">{w.requested_at ? new Date(w.requested_at).toLocaleString() : '—'}</td>
+                  <td>
+                    <button className="btn-primary sm" disabled={wbusy === w.id} onClick={() => approveWithdrawal(w)}>
+                      {wbusy === w.id ? '…' : 'Approve'}
+                    </button>
+                    <button className="btn-ghost sm" disabled={wbusy === w.id} onClick={() => reverseWithdrawal(w)}>
+                      Reverse
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : (
+        <p className="ref-blurb">The withdrawal queue appears in real-funds mode.</p>
+      )}
+
+      {/* ---- Insurance fund ---- */}
+      <h3 style={{ marginTop: '1.25rem' }}>Insurance fund</h3>
+      <p className="ref-blurb">
+        A buffer that absorbs bad debt from liquidations <strong>before it reaches LP funds</strong>. It auto-fills from
+        the liquidation penalty; you can also top it up from house money below. Current balance:{' '}
+        <strong>{insuranceE6 != null ? formatUsd(BigInt(insuranceE6)) : '—'}</strong>.
+      </p>
+      <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+        Move collected trading fees ↔ insurance
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.3rem 0 0.6rem', flexWrap: 'wrap' }}>
+          <input
+            className="wallet-input" type="number" min="0" step="0.01" placeholder="Amount (USD)"
+            value={feesDraft} onChange={(e) => setFeesDraft(e.target.value)} style={{ width: 150 }}
+          />
+          <button className="btn-primary sm" disabled={busy === 'ins'}
+            onClick={() => allocate(api.adminInsuranceFromFees, feesDraft, setFeesDraft, 'Fees → insurance')}>
+            {busy === 'ins' ? '…' : 'Fees → insurance'}
+          </button>
+          <button className="btn-ghost sm" disabled={busy === 'ins'}
+            onClick={() => allocate(api.adminInsuranceToFees, feesDraft, setFeesDraft, 'Insurance → fees')}>
+            Insurance → fees
+          </button>
+        </div>
+      </label>
+      {treasury && (
+        <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+          Move treasury surplus → insurance  (surplus = on-chain USDC above what you owe; send the extra USDC to the treasury wallet first)
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.3rem 0', flexWrap: 'wrap' }}>
+            <input
+              className="wallet-input" type="number" min="0" step="0.01" placeholder="Amount (USD)"
+              value={treasDraft} onChange={(e) => setTreasDraft(e.target.value)} style={{ width: 150 }}
+            />
+            <button className="btn-primary sm" disabled={busy === 'ins'}
+              onClick={() => allocate(api.adminInsuranceFromTreasury, treasDraft, setTreasDraft, 'Treasury surplus → insurance')}>
+              {busy === 'ins' ? '…' : 'Treasury surplus → insurance'}
+            </button>
+            <span className="muted" style={{ fontSize: '0.78rem' }}>allocatable now: {formatUsd(BigInt(treasury.surplusE6))}</span>
+          </div>
+        </label>
+      )}
+
+      {/* ---- Trading fee ---- */}
+      <h3 style={{ marginTop: '1.25rem' }}>Trading fee</h3>
+      <p className="ref-blurb">
+        Commission on every trade — charged on <strong>both open and close</strong> — as a % of position size.
+        Enter a percentage: <code>0.01</code> means 0.01%. Currently{' '}
+        <strong>{fee ? `${(fee.bps / 100).toFixed(2)}%` : '—'}</strong>
+        {fee ? ` (env default ${(fee.default / 100).toFixed(2)}%)` : ''}.
+      </p>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.35rem 0' }}>
         <input
-          className="wallet-input"
-          type="number"
-          min="0"
-          step="0.01"
-          placeholder="USD"
-          value={feesDraft}
-          onChange={(e) => setFeesDraft(e.target.value)}
-          style={{ width: 120 }}
+          className="wallet-input" type="number" min="0" step="0.01" placeholder="0.01"
+          value={feeDraft} onChange={(e) => setFeeDraft(e.target.value)} style={{ width: 120 }}
         />
-        <button
-          className="btn-primary sm"
-          disabled={busy === 'ins' || !adminKey}
-          onClick={() => allocate(api.adminInsuranceFromFees, feesDraft, setFeesDraft, 'From fees → insurance')}
-        >
-          {busy === 'ins' ? '…' : 'Allocate from fees'}
+        <span className="muted" style={{ fontSize: '0.85rem' }}>%</span>
+        <button className="btn-primary sm" disabled={busy === 'fee'} onClick={saveFee}>
+          {busy === 'fee' ? '…' : 'Save fee'}
         </button>
-        <button
-          className="btn-ghost sm"
-          disabled={busy === 'ins' || !adminKey}
-          onClick={() => allocate(api.adminInsuranceToFees, feesDraft, setFeesDraft, 'Insurance → fees')}
-        >
-          Return to fees
-        </button>
-      </div>
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.35rem 0', flexWrap: 'wrap' }}>
-        <input
-          className="wallet-input"
-          type="number"
-          min="0"
-          step="0.01"
-          placeholder="USD"
-          value={treasDraft}
-          onChange={(e) => setTreasDraft(e.target.value)}
-          style={{ width: 120 }}
-          disabled={!treasury}
-        />
-        <button
-          className="btn-primary sm"
-          disabled={busy === 'ins' || !adminKey || !treasury}
-          onClick={() => allocate(api.adminInsuranceFromTreasury, treasDraft, setTreasDraft, 'From treasury → insurance')}
-        >
-          {busy === 'ins' ? '…' : 'Allocate from treasury surplus'}
-        </button>
-        <span className="muted" style={{ fontSize: '0.8rem' }}>send USDC to the treasury wallet first</span>
       </div>
 
       {custodyLimits && (

@@ -132,6 +132,10 @@ export const CustodyLimitsRequest = z
   })
   .strict();
 
+// Live-tunable trading fee. bps of notional (1 bps = 0.01%), charged on both open + close; 0-1000 (<=10%).
+// The admin panel takes a percentage from the operator and converts (pct * 100 = bps).
+export const FeeRequest = z.object({ bps: z.coerce.number().int().min(0).max(1000) }).strict();
+
 // --- real-funds wallet (custody P2) -------------------------------------------
 // Withdrawals need a step-up: the wallet signs a server-rendered message over the EXACT
 // (amount, dest, nonce) — get the message from /wallet/withdraw/nonce, sign it, submit both.

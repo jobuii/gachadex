@@ -188,5 +188,12 @@ export const adminInsuranceFromTreasury = (amountUusdc, adminKey) => adminReq('/
 // Live-tunable custody limits. GET -> { current, defaults }; POST a partial -> { current }.
 export const adminGetCustodyLimits = (adminKey) => adminGet('/admin/custody-limits', adminKey);
 export const adminSetCustodyLimits = (limits, adminKey) => adminReq('/admin/custody-limits', adminKey, limits);
+// Live trading fee (bps; 1 bps = 0.01%). GET -> { bps, default }; POST { bps } -> the new effective fee.
+export const adminGetFee = (adminKey) => adminGet('/admin/fee', adminKey);
+export const adminSetFee = (bps, adminKey) => adminReq('/admin/fee', adminKey, { bps });
+// Withdrawal queue (real-funds). GET by status; approve = sign+broadcast; reverse = re-credit an unpaid row.
+export const adminGetWithdrawals = (status, adminKey) => adminGet(`/admin/withdrawals?status=${encodeURIComponent(status)}`, adminKey);
+export const adminApproveWithdrawal = (id, adminKey) => adminReq(`/admin/withdrawals/${id}/approve`, adminKey);
+export const adminReverseWithdrawal = (id, reason, adminKey) => adminReq(`/admin/withdrawals/${id}/reverse`, adminKey, { reason });
 
 export const apiConfig = { API_URL };

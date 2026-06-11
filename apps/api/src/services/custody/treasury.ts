@@ -117,6 +117,25 @@ export async function treasuryState(db: Db, chain: TreasuryChain): Promise<Treas
   };
 }
 
+/** Total customer USDC in the system: free collateral + margin locked in open positions. Aggregated
+ *  across all users for the operator dashboard (separate from `liabilityE6`, which also includes the
+ *  LP pool, insurance, fees and PnL clearing — i.e. house claims, not just what customers hold). */
+export async function customerFunds(db: Db): Promise<{ freeE6: bigint; lockedE6: bigint }> {
+  const r = await db.query<{ type: string; total: string }>(
+    `SELECT a.type, COALESCE(SUM(b.amount_uusdc), 0)::text AS total
+       FROM accounts a LEFT JOIN balances b ON b.account_id = a.id
+      WHERE a.type IN ('USER_COLLATERAL', 'USER_POSITION_MARGIN')
+      GROUP BY a.type`,
+  );
+  let freeE6 = 0n;
+  let lockedE6 = 0n;
+  for (const row of r.rows) {
+    if (row.type === 'USER_COLLATERAL') freeE6 = BigInt(row.total);
+    else if (row.type === 'USER_POSITION_MARGIN') lockedE6 = BigInt(row.total);
+  }
+  return { freeE6, lockedE6 };
+}
+
 /** One treasury pass: proof-of-reserves (auto-freeze on breach), then hot-float management. */
 export async function treasuryPass(db: Db, chain: TreasuryChain, log?: CustodyLog): Promise<TreasuryReport> {
   const s = await treasuryState(db, chain);

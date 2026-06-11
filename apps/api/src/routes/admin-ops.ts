@@ -1,11 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import { SetPriceRequest, InsuranceFundRequest } from '@pokex/shared-types';
+import { SetPriceRequest, InsuranceFundRequest, FeeRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { rl } from './_ratelimit.ts';
 import { requireAdminKey } from './admin.ts';
 import { setManualPrice, setPricePin } from '../services/admin-pricing.ts';
 import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from '../services/insurance.ts';
+import { feeView, setFee } from '../services/fees.ts';
 
 /**
  * Non-custody operator endpoints (ROADMAP §2). Unlike the custody admin routes, these register
@@ -50,5 +51,14 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   app.post('/admin/insurance/to-fees', rl(config.routeRateLimits.admin), async (req) => {
     const { amountUusdc } = InsuranceFundRequest.parse(req.body);
     return deallocateInsuranceToFees(await getDb(), BigInt(amountUusdc));
+  });
+
+  // Live-tunable trading fee (bps of notional, charged on both open + close). GET -> { bps, default };
+  // POST a bps value -> the new effective fee. The panel converts to/from a percentage for the operator.
+  app.get('/admin/fee', rl(config.routeRateLimits.admin), async () => feeView());
+  app.post('/admin/fee', rl(config.routeRateLimits.admin), async (req) => {
+    const { bps } = FeeRequest.parse(req.body);
+    await setFee(await getDb(), bps);
+    return feeView();
   });
 }

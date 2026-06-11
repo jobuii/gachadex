@@ -6,6 +6,7 @@ import { advisoryXactLock, type Db, type Queryer } from '../db/client.ts';
 import { getMarketById, type MarketRow } from './markets.ts';
 import { recomputeMark } from './marks.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, getBalance, postTxn } from './ledger.ts';
+import { getFeeBps } from './fees.ts';
 import { refreshReserved } from './lp.ts';
 import { getCumulativeFundingE6, settlePositionFunding } from './funding.ts';
 import { openNotionalBySide } from './oi.ts';
@@ -325,7 +326,7 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
       const notion = notional(input.qtyE6, markE6);
       const margin = initialMargin(notion, leverageE2);
       if (margin <= 0n) throw new HttpError(400, 'order too small');
-      const openFee = fee(notion, config.openFeeBps);
+      const openFee = fee(notion, getFeeBps());
 
       // ---- pool-protection checks (all per side) -----------------------------------------------
       const sideCap = input.side === 'long' ? BigInt(market.max_oi_long_uusdc) : BigInt(market.max_oi_short_uusdc);
@@ -445,7 +446,7 @@ export async function closePosition(db: Db, userId: string, input: CloseInput): 
       const entry = BigInt(pos.avg_entry_e6);
       const pnl = unrealizedPnl(pos.side, closeQty, entry, markE6);
       const marginRel = (BigInt(pos.margin_uusdc) * closeQty) / qty;
-      const closeFeeAmt = fee(notional(closeQty, markE6), config.closeFeeBps);
+      const closeFeeAmt = fee(notional(closeQty, markE6), getFeeBps());
 
       const collAcct = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
       const marginAcct = await getOrCreateUserAccount(q, userId, 'USER_POSITION_MARGIN');

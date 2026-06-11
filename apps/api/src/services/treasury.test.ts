@@ -11,7 +11,7 @@ const { Keypair } = await import('@solana/web3.js');
 const { initDb } = await import('../db/init.ts');
 const { getDb, closeDb } = await import('../db/client.ts');
 const { getOrCreateSystemAccount, getBalance } = await import('./ledger.ts');
-const { treasuryPass, withdrawalsFrozen, unfreezeWithdrawals } = await import('./custody/treasury.ts');
+const { treasuryPass, withdrawalsFrozen, unfreezeWithdrawals, customerFunds } = await import('./custody/treasury.ts');
 const { requestWithdrawal, processWithdrawal, processAllRequested } = await import('./custody/withdrawals.ts');
 const { reconcile } = await import('./reconcile.ts');
 const { usdc } = await import('../money.ts');
@@ -136,6 +136,15 @@ test('hot wallet runs as a band: at the cap it drains to the floor; below the ca
   // just shy of the cap -> still nothing (no premature dribble of sweeps)
   const nearly = fakeTreasury({ hot: usdc(25_000) - usdc(1), cold: SAFE_COLD });
   assert.equal((await treasuryPass(db, nearly)).sweptE6, 0n);
+});
+
+test('customerFunds aggregates customer free collateral (delta-checked, isolated from other rows)', async () => {
+  const before = await customerFunds(db);
+  const u = await newUser();
+  await fund(u, usdc(100)); // adds USER_COLLATERAL (free) for one user
+  const after = await customerFunds(db);
+  assert.equal(after.freeE6 - before.freeE6, usdc(100)); // exactly the new free collateral, nothing else moved
+  assert.ok(after.lockedE6 >= 0n); // locked margin aggregates by the same query path (filled by the engine)
 });
 
 test('pending payouts are reserved in the float target, and a shortfall is reported', async () => {

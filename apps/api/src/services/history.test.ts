@@ -6,8 +6,7 @@ process.env.PGLITE_DIR = 'memory://';
 process.env.DATABASE_URL = '';
 process.env.NODE_ENV = 'production';
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
-process.env.OPEN_FEE_BPS = '10'; // charge a commission so the Commission tx type is exercised
-process.env.CLOSE_FEE_BPS = '10';
+process.env.FEE_BPS = '10'; // charge a commission so the Commission tx type is exercised (open + close)
 
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');

@@ -13,6 +13,7 @@ import {
 } from '../services/custody/withdrawals.ts';
 import {
   treasuryState,
+  customerFunds,
   freezeWithdrawals,
   unfreezeWithdrawals,
   withdrawalsFrozen,
@@ -90,9 +91,11 @@ export function adminRoutes(chains: AdminChains) {
       return { frozen: null };
     });
 
-    // Read-only treasury / proof-of-reserves state (no sweep, no freeze — GET is safe).
+    // Read-only treasury / proof-of-reserves state (no sweep, no freeze — GET is safe). Also carries
+    // the customer-funds aggregate (free + locked) for the operator dashboard P/L.
     app.get('/admin/treasury', rl(config.routeRateLimits.admin), async () => {
-      const s = await treasuryState(await getDb(), chains.treasuryChain);
+      const db = await getDb();
+      const [s, cust] = await Promise.all([treasuryState(db, chains.treasuryChain), customerFunds(db)]);
       return {
         liabilityE6: s.liabilityE6.toString(),
         hotE6: s.hotE6.toString(),
@@ -103,6 +106,8 @@ export function adminRoutes(chains: AdminChains) {
         shortfallE6: s.shortfallE6.toString(),
         insuranceE6: s.insuranceE6.toString(),
         surplusE6: s.surplusE6.toString(), // allocatable to insurance (onchain − liabilities)
+        freeE6: cust.freeE6.toString(), // total customer free collateral
+        lockedE6: cust.lockedE6.toString(), // total customer margin locked in open positions
         breached: s.breached,
         frozen: s.frozen,
       };
