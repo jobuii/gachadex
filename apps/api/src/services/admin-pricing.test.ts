@@ -9,6 +9,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
 const { ingest } = await import('./oracle.ts');
+const { fromPokemontcg } = await import('./providers/pokemontcg.ts');
 const { listMarketsWithData } = await import('./markets.ts');
 const { setManualPrice, setPricePin } = await import('./admin-pricing.ts');
 const { reconcile } = await import('./reconcile.ts');
@@ -26,7 +27,7 @@ const usd = (markE6: string | null) => Number(markE6) / 1_000_000;
 const mkt = async (sym: string) => (await listMarketsWithData(db)).find((m) => m.symbol === sym)!;
 
 test('manual price sets the mark and pins the market', async () => {
-  await ingest(db, async () => cards);
+  await ingest(db, async () => fromPokemontcg(cards));
   const a0 = await mkt('a');
   assert.equal(usd(a0.markE6), 1000); // seeded from the feed
   assert.equal(a0.pricePinned, false);
@@ -43,7 +44,7 @@ test('manual price sets the mark and pins the market', async () => {
 test('the auto-oracle skips a pinned market but still updates unpinned ones', async () => {
   // feed now says a=9999, b=600 — a is pinned (manual 777), b is not
   const next = [card('a', 'Alpha', 9999), card('b', 'Bravo', 600)];
-  await ingest(db, async () => next);
+  await ingest(db, async () => fromPokemontcg(next));
 
   assert.equal(usd((await mkt('a')).markE6), 777, 'pinned market keeps its manual price');
   assert.equal(usd((await mkt('b')).markE6), 600, 'unpinned market follows the feed');
@@ -52,7 +53,7 @@ test('the auto-oracle skips a pinned market but still updates unpinned ones', as
 test('unpinning lets the auto-oracle resume overwriting the price', async () => {
   const a = await mkt('a');
   await setPricePin(db, a.id, false);
-  await ingest(db, async () => [card('a', 'Alpha', 1234), card('b', 'Bravo', 600)]);
+  await ingest(db, async () => fromPokemontcg([card('a', 'Alpha', 1234), card('b', 'Bravo', 600)]));
   const a2 = await mkt('a');
   assert.equal(usd(a2.markE6), 1234);
   assert.equal(a2.pricePinned, false);

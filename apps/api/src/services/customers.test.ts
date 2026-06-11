@@ -11,6 +11,7 @@ process.env.FEE_BPS = '100'; // 1% so an open trade produces a measurable fee
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
 const { ingest } = await import('./oracle.ts');
+const { fromPokemontcg } = await import('./providers/pokemontcg.ts');
 const { listMarketsWithData } = await import('./markets.ts');
 const { creditFaucet } = await import('./faucet.ts');
 const { openPosition } = await import('./engine.ts');
@@ -20,9 +21,9 @@ await initDb();
 const db = await getDb();
 after(() => closeDb());
 
-await ingest(db, async () => [
+await ingest(db, async () => fromPokemontcg([
   { id: 'card-c', name: 'Test', number: '1', images: { small: 'x' }, tcgplayer: { prices: { holofoil: { market: 1000 } } } },
-]);
+]));
 const market = (await listMarketsWithData(db)).find((m) => m.symbol === 'card-c')!;
 
 async function newUser(pubkey: string, depositAddr: string, index: number): Promise<string> {

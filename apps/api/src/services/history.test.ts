@@ -11,6 +11,7 @@ process.env.FEE_BPS = '10'; // charge a commission so the Commission tx type is 
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
 const { ingest } = await import('./oracle.ts');
+const { fromPokemontcg } = await import('./providers/pokemontcg.ts');
 const { listMarketsWithData } = await import('./markets.ts');
 const { creditFaucet } = await import('./faucet.ts');
 const { openPosition, closePosition, getUserPositions } = await import('./engine.ts');
@@ -18,9 +19,9 @@ const { getOrderHistory, getTradeHistory, getTransactionHistory, getPositionHist
 
 await initDb();
 const db = await getDb();
-await ingest(db, async () => [
+await ingest(db, async () => fromPokemontcg([
   { id: 'card-x', name: 'Test', number: '1', images: { small: 'x' }, tcgplayer: { prices: { holofoil: { market: 1000 } } } },
-]);
+]));
 const market = (await listMarketsWithData(db)).find((m) => m.symbol === 'card-x')!;
 
 async function newUser(): Promise<string> {

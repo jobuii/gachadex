@@ -1,45 +1,49 @@
 import { randomUUID } from 'node:crypto';
-import { getCardPrice, toE6, SCALE } from '@pokex/pricing';
+import { toE6, SCALE } from '@pokex/pricing';
 import { INDEX_CATALOG } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import type { Db, Queryer } from '../db/client.ts';
 import { upsertCardMarket, upsertIndexMarket, getMarketById } from './markets.ts';
 import { recomputeMark } from './marks.ts';
+import { pokemontcgFetcher } from './providers/pokemontcg.ts';
 
-/** Returns an array of pokemontcg.io card objects. Injectable for tests. */
-export type CardFetcher = () => Promise<any[]>;
+/**
+ * Provider-agnostic card snapshot — the seam between price providers and the oracle (P2 of the
+ * tcgpricelookup plan). Each provider module (providers/pokemontcg.ts; tcgpricelookup in P3) owns its
+ * own response shape and emits these; `ingest` knows no provider specifics.
+ */
+export interface OracleCard {
+  game: string; // 'pokemon' | 'onepiece' | 'mtg'
+  symbol: string; // market symbol: legacy bare id (pokemontcg) or cardSymbol(game, id) (providers)
+  cardId: string; // provider display id — keys index constituents + the graded write
+  tcgplayerId?: number | null; // stable cross-provider ids (markets.tcgplayer_id / provider_card_id)
+  providerCardId?: string | null;
+  displayName: string;
+  variant: string | null;
+  imageSmall: string | null;
+  imageLarge?: string | null;
+  setLogo?: string | null;
+  metadata?: unknown; // provider-extracted detail-panel JSON (markets.metadata column)
+  rawE6: bigint; // raw spot in micro-USD; 0n = unpriced (skipped by ingest)
+  gradedE6?: bigint | null; // PSA-10 in micro-USD when the provider supplies it inline (P3); else the gradedFetcher fallback runs
+  observedAt?: Date | null; // provider freshness timestamp; null/absent -> the ingest pass wall-clock (legacy behavior)
+  payload?: unknown; // audit payload stored on the oracle print
+}
+
+/** Returns the cards to ingest. Injectable for tests. */
+export type CardFetcher = () => Promise<OracleCard[]>;
 
 const OUTLIER_THRESHOLD = 0.6; // reject prints > 60% from last accepted (manipulation/staleness guard)
 const BASE_VALUE_E6 = 1_000_000_000n; // indices start at 1000.000000 points
 const REANCHOR_JUMP_FACTOR = 4n; // a 1-tick jump beyond this can only be a wrong-scale divisor, not a real basket move
 
-function pickVariant(c: any): string | null {
-  const p = c?.tcgplayer?.prices;
-  if (!p) return null;
-  if (p.holofoil?.market) return 'holofoil';
-  if (p.normal?.market) return 'normal';
-  if (p['1stEditionHolofoil']?.market) return '1stEditionHolofoil';
-  if (p.reverseHolofoil?.market) return 'reverseHolofoil';
-  return null;
-}
-
-/** Card metadata for the detail panel, extracted from the pokemontcg card we already fetch. */
-function extractMetadata(c: any): { hp: string | null; retreat: number; attacks: { name: string; damage: string }[]; setName: string | null } {
-  return {
-    hp: c?.hp ?? null,
-    retreat: Array.isArray(c?.retreatCost) ? c.retreatCost.length : (c?.convertedRetreatCost ?? 0),
-    attacks: Array.isArray(c?.attacks) ? c.attacks.map((a: any) => ({ name: a?.name ?? '', damage: a?.damage ?? '' })) : [],
-    setName: c?.set?.name ?? null,
-  };
-}
-
 /** Returns the PSA-10 graded price (USD) for a card, or null. Injectable for tests. */
-export type GradedFetcher = (card: any) => Promise<number | null>;
+export type GradedFetcher = (card: OracleCard) => Promise<number | null>;
 
-async function fetchGradedPrice(card: any): Promise<number | null> {
+/** JustTCG graded fallback — used when the raw provider doesn't supply gradedE6 inline. */
+async function fetchGradedPrice(card: OracleCard): Promise<number | null> {
   if (!config.justtcgApiKey) return null;
-  const pid = card?.tcgplayer?.productId;
-  const query = pid ? `tcgplayerId=${pid}` : `cardId=${encodeURIComponent(card?.id ?? '')}`;
+  const query = card.tcgplayerId ? `tcgplayerId=${card.tcgplayerId}` : `cardId=${encodeURIComponent(card.cardId)}`;
   try {
     const res = await fetch(`${config.justtcgBase}/v1/cards?${query}`, { headers: { 'x-api-key': config.justtcgApiKey } });
     if (!res.ok) return null;
@@ -51,17 +55,6 @@ async function fetchGradedPrice(card: any): Promise<number | null> {
   } catch {
     return null;
   }
-}
-
-/** Live fetcher: top Pokémon cards by TCGplayer market price (server-side, keyless-ok). */
-export async function fetchTopCards(): Promise<any[]> {
-  const url = `${config.pokemontcgBase}/cards?q=supertype:Pok%C3%A9mon&orderBy=-tcgplayer.prices.holofoil.market&pageSize=${config.oraclePageSize}`;
-  const headers: Record<string, string> = {};
-  if (config.pokemontcgApiKey) headers['X-Api-Key'] = config.pokemontcgApiKey;
-  const res = await fetch(url, { headers });
-  if (!res.ok) throw new Error(`pokemontcg.io responded ${res.status}`);
-  const json = (await res.json()) as any;
-  return json?.data ?? [];
 }
 
 /** Insert an oracle print, guarding against outliers. Returns whether it was accepted. */
@@ -100,6 +93,9 @@ async function recordOracle(
     }
   }
   // RETURNING lets us detect a duplicate (no-op) insert so callers don't recompute a stray mark.
+  // NOTE for P3: a provider-supplied observedAt makes this ON CONFLICT dedup re-polls of the SAME
+  // provider snapshot (intended — one print per provider update). Wall-clock observedAt (the
+  // pokemontcg path) never conflicts, so the live feed keeps printing every pass.
   const ins = await q.query<{ id: string }>(
     `INSERT INTO oracle_prices(market_id, index_price_e6, raw_payload, source_observed_at, is_accepted, reject_reason)
      VALUES($1, $2, $3, $4, $5, $6)
@@ -113,53 +109,60 @@ async function recordOracle(
 /** Ingest a price snapshot: upsert card markets, record prints, recompute marks, rebuild indices. */
 export async function ingest(
   db: Db,
-  fetcher: CardFetcher = fetchTopCards,
+  fetcher: CardFetcher = pokemontcgFetcher,
   gradedFetcher: GradedFetcher | null = config.justtcgApiKey ? fetchGradedPrice : null,
 ): Promise<{ cards: number; indices: number; graded: number }> {
-  const raw = await fetcher();
-  const observedAt = new Date();
-  const priced = raw
-    .map((c) => ({ c, priceE6: toE6(getCardPrice(c)) }))
-    .filter((x) => x.priceE6 > 0n);
+  const passObservedAt = new Date();
+  const priced = (await fetcher()).filter((c) => c.rawE6 > 0n);
 
   // Operator-pinned markets carry a manual price (ROADMAP §2) — the auto-oracle never overwrites them.
   const pinnedRows = await db.query<{ id: string }>(`SELECT id FROM markets WHERE price_pinned`);
   const pinned = new Set(pinnedRows.rows.map((r) => r.id));
 
-  for (const { c, priceE6 } of priced) {
+  for (const c of priced) {
     const marketId = await db.tx((q) =>
       upsertCardMarket(q, {
-        game: 'pokemon', // raw cards come from pokemontcg.io (Pokémon-only); scrydex adds OP/MTG later
-        symbol: c.id,
-        cardId: c.id,
-        displayName: `${c.name}${c.number ? ' #' + c.number : ''}`,
-        variant: pickVariant(c),
-        imageSmall: c.images?.small ?? null,
-        imageLarge: c.images?.large ?? null,
-        setLogo: c.set?.images?.logo ?? null,
-        metadata: extractMetadata(c),
+        game: c.game,
+        symbol: c.symbol,
+        cardId: c.cardId,
+        displayName: c.displayName,
+        variant: c.variant,
+        imageSmall: c.imageSmall,
+        imageLarge: c.imageLarge,
+        setLogo: c.setLogo,
+        metadata: c.metadata,
+        tcgplayerId: c.tcgplayerId,
+        providerCardId: c.providerCardId,
       }),
     );
     if (pinned.has(marketId)) continue; // manual override in effect — skip the auto print + mark
-    const accepted = await db.tx((q) => recordOracle(q, marketId, priceE6, observedAt, { tcgplayer: c.tcgplayer ?? null }));
+    const accepted = await db.tx((q) =>
+      recordOracle(q, marketId, c.rawE6, c.observedAt ?? passObservedAt, c.payload ?? null),
+    );
     if (accepted) {
       const market = await getMarketById(db, marketId);
-      if (market) await db.tx((q) => recomputeMark(q, market, priceE6, 0n, 0n));
+      if (market) await db.tx((q) => recomputeMark(q, market, c.rawE6, 0n, 0n));
     }
   }
 
-  const sorted = [...priced].sort((a, b) => (b.priceE6 > a.priceE6 ? 1 : b.priceE6 < a.priceE6 ? -1 : 0));
+  // SINGLE-GAME ASSUMPTION (fixed in P4): `sorted` spans the whole pass, so the index + graded baskets
+  // below would mix games if a multi-game fetcher ran today. P4 separates per-game featured constituents;
+  // until then the cutover flag must not flip a multi-game feed live.
+  const sorted = [...priced].sort((a, b) => (b.rawE6 > a.rawE6 ? 1 : b.rawE6 < a.rawE6 ? -1 : 0));
 
-  // Graded (PSA-10) prices for the top-N — powers the Graded index + per-card graded panel.
+  // Graded (PSA-10) prices for the top-N — powers the Graded index + per-card graded panel. Providers
+  // that carry graded inline (tcgpricelookup, P3) need no extra fetch; the gradedFetcher (JustTCG) is
+  // the fallback for cards without it.
   const gradedMembers: { cardId: string; priceE6: bigint }[] = [];
-  if (gradedFetcher) {
-    for (const { c } of sorted.slice(0, config.gradedConstituents)) {
+  for (const c of sorted.slice(0, config.gradedConstituents)) {
+    let gE6 = c.gradedE6 ?? null;
+    if (gE6 == null && gradedFetcher) {
       const g = await gradedFetcher(c);
-      if (g != null && g > 0) {
-        const gE6 = toE6(g);
-        await db.query(`UPDATE markets SET graded_psa10_e6=$1 WHERE card_id=$2 AND kind='card'`, [gE6.toString(), c.id]);
-        gradedMembers.push({ cardId: c.id as string, priceE6: gE6 });
-      }
+      if (g != null) gE6 = toE6(g); // non-positive values are dropped by the guard below
+    }
+    if (gE6 != null && gE6 > 0n) {
+      await db.query(`UPDATE markets SET graded_psa10_e6=$1 WHERE card_id=$2 AND kind='card'`, [gE6.toString(), c.cardId]);
+      gradedMembers.push({ cardId: c.cardId, priceE6: gE6 });
     }
   }
 
@@ -168,7 +171,7 @@ export async function ingest(
     if (idx.slug === 'graded') {
       // tradeable only when we actually have PSA-10 data; priced off the graded basket
       if (gradedMembers.length > 0) {
-        await buildIndex(db, idx, gradedMembers, observedAt, pinned);
+        await buildIndex(db, idx, gradedMembers, passObservedAt, pinned);
         indices++;
       } else {
         await db.tx((q) => upsertIndexMarket(q, { game: idx.game, slug: idx.slug, name: idx.name, tradeable: false }));
@@ -180,8 +183,8 @@ export async function ingest(
       continue;
     }
     const n = idx.topN ?? sorted.length;
-    const members = sorted.slice(0, n).map((x) => ({ cardId: x.c.id as string, priceE6: x.priceE6 }));
-    await buildIndex(db, idx, members, observedAt, pinned);
+    const members = sorted.slice(0, n).map((x) => ({ cardId: x.cardId, priceE6: x.rawE6 }));
+    await buildIndex(db, idx, members, passObservedAt, pinned);
     indices++;
   }
   return { cards: priced.length, indices, graded: gradedMembers.length };

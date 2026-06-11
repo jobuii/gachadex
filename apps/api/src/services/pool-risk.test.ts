@@ -13,6 +13,7 @@ process.env.MAX_PNL_FACTOR_BPS = '100'; // 1%
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
 const { ingest } = await import('./oracle.ts');
+const { fromPokemontcg } = await import('./providers/pokemontcg.ts');
 const { listMarketsWithData } = await import('./markets.ts');
 const { creditFaucet } = await import('./faucet.ts');
 const { openPosition, closePosition, getUserPositions } = await import('./engine.ts');
@@ -24,9 +25,9 @@ await initDb();
 const db = await getDb();
 
 // one card market priced at $1000
-await ingest(db, async () => [
+await ingest(db, async () => fromPokemontcg([
   { id: 'card-x', name: 'Test', number: '1', images: { small: 'x' }, tcgplayer: { prices: { holofoil: { market: 1000 } } } },
-]);
+]));
 const market = (await listMarketsWithData(db)).find((m) => m.symbol === 'card-x')!;
 
 async function newUser(faucetUsd = 10_000): Promise<string> {

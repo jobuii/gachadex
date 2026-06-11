@@ -15,6 +15,7 @@ process.env.DEPTH_ALPHA_E6 = '1000000';
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
 const { ingest } = await import('./oracle.ts');
+const { fromPokemontcg } = await import('./providers/pokemontcg.ts');
 const { listMarketsWithData } = await import('./markets.ts');
 const { creditFaucet, getUserBalances } = await import('./faucet.ts');
 const { openPosition, closePosition, getUserPositions, autoDeleverage } = await import('./engine.ts');
@@ -29,7 +30,7 @@ const db = await getDb();
 const card = (price: number) => [
   { id: 'card-x', name: 'Test', number: '1', images: { small: 'x' }, tcgplayer: { prices: { holofoil: { market: price } } } },
 ];
-await ingest(db, async () => card(1000));
+await ingest(db, async () => fromPokemontcg(card(1000)));
 const market = (await listMarketsWithData(db)).find((m) => m.symbol === 'card-x')!;
 
 async function newUser(faucetUsd = 10_000): Promise<string> {
@@ -40,7 +41,7 @@ async function newUser(faucetUsd = 10_000): Promise<string> {
 }
 const openLong = (userId: string, qtyE6: bigint) =>
   openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6, leverage: 10, idempotencyKey: randomUUID() });
-const bumpPrice = (price: number) => ingest(db, async () => card(price));
+const bumpPrice = (price: number) => ingest(db, async () => fromPokemontcg(card(price)));
 async function closeAll(userId: string): Promise<void> {
   for (const p of await getUserPositions(db, userId)) {
     await closePosition(db, userId, { positionId: p.id, fractionBps: 10_000, idempotencyKey: randomUUID() });

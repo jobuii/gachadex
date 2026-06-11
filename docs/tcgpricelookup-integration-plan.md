@@ -236,7 +236,19 @@ card at 20x. Required controls (all of these, before search-and-bet ships):
   DB-backed token bucket + leader guard + priority queue + retry/backoff. Confirm batch-by-IDs.
 - **P2 — Normalize:** `OracleCard` type with the price fallback chain + variant rule + provider
   `updated_at` as the observed timestamp; refactor `ingest`; pokemontcg extraction → its fetcher.
+  **STATUS: DONE (2026-06-11).** `OracleCard` + `CardFetcher` in oracle.ts; `ingest` is fully
+  provider-agnostic (game, symbol, ids, metadata, payload all come from the card); pokemontcg extraction
+  lives in `services/providers/pokemontcg.ts` (`fromPokemontcg` mapper + `pokemontcgFetcher`); the
+  JustTCG `GradedFetcher` takes an `OracleCard` and runs only when a card has no inline `gradedE6`.
+  Per-card `observedAt` flows into `source_observed_at`. **Deliberate nuance:** the pokemontcg mapper
+  leaves `observedAt` unset (ingest wall-clock), preserving the live feed's print cadence exactly —
+  the tcgpricelookup fetcher (P3) is the one that sets provider `updated_at`. The price fallback chain
+  + variant rule are tcgpricelookup-mapper concerns and land in P3 with it. End-to-end test proves a
+  provider-built card flows: ids → markets, inline graded without a fetcher, provider timestamp → print.
 - **P3 — tcgpricelookup fetcher** (raw + graded inline) per game, behind the flag, fallbacks kept.
+  **Sequencing constraint:** the index/graded baskets are still single-game (`ingest` sorts the whole
+  pass — see the SINGLE-GAME ASSUMPTION comment in oracle.ts). The cutover flag must NOT flip a
+  multi-game feed live before P4's per-game featured-constituent separation lands.
 - **P4 — Discovery job** (resumable, single-flight, low priority) → featured top-250 per game; index
   constituents = featured set only.
 - **P5 — Cutover:** shadow run → flag flip → outlier-guard bypass → universe union → monitor + rollback.

@@ -22,6 +22,26 @@ export const SCALE = 1_000_000n; // 1e6 fixed-point scale for prices, qty, money
 // Card price extraction (dedups the getPrice copy-pasted across the SPA)
 // ---------------------------------------------------------------------------
 
+// The single source of truth for TCGplayer variant preference (price fallback order).
+const VARIANT_ORDER = ['holofoil', 'normal', '1stEditionHolofoil', 'reverseHolofoil', 'unlimitedHolofoil'];
+
+/**
+ * Extract a card's market price AND the variant it came from, from a pokemontcg.io card object.
+ * One ordered walk so the picked variant and the price can never drift apart.
+ * @param {any} card
+ * @returns {{ variant: string | null, price: number }}
+ */
+export function getCardPriceVariant(card) {
+  const p = card?.tcgplayer?.prices;
+  if (p) {
+    for (const variant of VARIANT_ORDER) {
+      const price = p[variant]?.market;
+      if (price) return { variant, price };
+    }
+  }
+  return { variant: null, price: 0 };
+}
+
 /**
  * Extract a single card's market price (float USD) from a pokemontcg.io card object.
  * Falls back across the common TCGplayer variants. Returns 0 when unavailable.
@@ -29,17 +49,7 @@ export const SCALE = 1_000_000n; // 1e6 fixed-point scale for prices, qty, money
  * @returns {number}
  */
 export function getCardPrice(card) {
-  if (!card) return 0;
-  const p = card.tcgplayer?.prices;
-  if (!p) return 0;
-  return (
-    p.holofoil?.market ||
-    p.normal?.market ||
-    p['1stEditionHolofoil']?.market ||
-    p.reverseHolofoil?.market ||
-    p.unlimitedHolofoil?.market ||
-    0
-  );
+  return getCardPriceVariant(card).price;
 }
 
 // ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ process.env.FEE_BPS = '10'; // exercise the commission path (default is now 0); 
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
 const { ingest } = await import('./oracle.ts');
+const { fromPokemontcg } = await import('./providers/pokemontcg.ts');
 const { listMarketsWithData } = await import('./markets.ts');
 const { creditFaucet, getUserBalances } = await import('./faucet.ts');
 const { openPosition, closePosition, getUserPositions } = await import('./engine.ts');
@@ -22,9 +23,9 @@ await initDb();
 const db = await getDb();
 
 // one card market priced at $1000
-await ingest(db, async () => [
+await ingest(db, async () => fromPokemontcg([
   { id: 'card-x', name: 'Test', number: '1', images: { small: 'x' }, tcgplayer: { prices: { holofoil: { market: 1000 } } } },
-]);
+]));
 const markets = await listMarketsWithData(db);
 const market = markets.find((m) => m.symbol === 'card-x')!;
 

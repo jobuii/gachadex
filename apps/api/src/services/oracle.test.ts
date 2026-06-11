@@ -9,7 +9,8 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
 const { ingest } = await import('./oracle.ts');
-const { listMarketsWithData, getCandles, getMarketDetails } = await import('./markets.ts');
+const { fromPokemontcg } = await import('./providers/pokemontcg.ts');
+const { listMarketsWithData, getCandles, getMarketDetails, cardSymbol } = await import('./markets.ts');
 const { reconcile } = await import('./reconcile.ts');
 
 await initDb();
@@ -32,7 +33,7 @@ const cards = [
 ];
 
 test('ingest seeds card markets, indices, oracle prints and marks', async () => {
-  const r = await ingest(db, async () => cards);
+  const r = await ingest(db, async () => fromPokemontcg(cards));
   assert.equal(r.cards, 4); // the $0 card is excluded
   assert.equal(r.indices, 2); // top-100 + top-250 (graded/sealed are gated)
 
@@ -76,7 +77,7 @@ test('candles endpoint returns REAL marks (no fabrication), newest = current mar
 
 test('outlier guard rejects an implausible price jump', async () => {
   const spiked = cards.map((c) => (c.id === 'sv-1' ? card('sv-1', 'Charizard ex', '223', 99_999) : c));
-  await ingest(db, async () => spiked);
+  await ingest(db, async () => fromPokemontcg(spiked));
   const markets = await listMarketsWithData(db);
   const chari = markets.find((m) => m.symbol === 'sv-1')!;
   // jump was rejected -> mark unchanged
@@ -98,8 +99,8 @@ test('card metadata is stored; JustTCG graded data activates the Graded index', 
       tcgplayer: { productId: 222, prices: { holofoil: { market: 500 } } },
     },
   ];
-  const mockGraded = async (card: any) => (card.id === 'g-1' ? 5000 : 2000); // PSA-10 prices
-  const r = await ingest(db, async () => richCards, mockGraded);
+  const mockGraded = async (card: any) => (card.cardId === 'g-1' ? 5000 : 2000); // PSA-10 prices
+  const r = await ingest(db, async () => fromPokemontcg(richCards), mockGraded);
   assert.equal(r.graded, 2);
 
   const markets = await listMarketsWithData(db);
@@ -116,6 +117,46 @@ test('card metadata is stored; JustTCG graded data activates the Graded index', 
   const graded = markets.find((m) => m.indexSlug === 'graded')!;
   assert.equal(graded.tradeable, true);
   assert.ok(graded.markE6 && Number(graded.markE6) > 0, 'Graded index now has a mark');
+});
+
+test('a provider-built OracleCard flows end-to-end: ids, inline graded (no fetcher), provider timestamp', async () => {
+  // What the tcgpricelookup fetcher (P3) will emit — no pokemontcg mapping involved.
+  const observedAt = new Date('2026-06-10T12:00:00Z');
+  const r = await ingest(db, async () => [
+    {
+      game: 'onepiece',
+      symbol: cardSymbol('onepiece', 'uuid-luffy'),
+      cardId: 'uuid-luffy',
+      tcgplayerId: 990001,
+      providerCardId: 'uuid-luffy',
+      displayName: 'Monkey D. Luffy #OP01-001',
+      variant: 'Standard',
+      imageSmall: 'img/luffy',
+      rawE6: 250_000_000n, // $250
+      gradedE6: 1_500_000_000n, // $1500 PSA-10, inline — no gradedFetcher needed
+      observedAt,
+    },
+  ]); // note: no gradedFetcher passed (JUSTTCG_API_KEY unset) — graded must come from the card itself
+  assert.equal(r.cards, 1);
+  assert.equal(r.graded, 1, 'inline gradedE6 counted without any graded fetcher');
+
+  const row = (
+    await db.query<{ game: string; tcg: string | null; prov: string | null; graded: string | null }>(
+      `SELECT game, tcgplayer_id::text AS tcg, provider_card_id AS prov, graded_psa10_e6::text AS graded
+       FROM markets WHERE symbol = 'onepiece:uuid-luffy'`,
+    )
+  ).rows[0];
+  assert.deepEqual(row, { game: 'onepiece', tcg: '990001', prov: 'uuid-luffy', graded: '1500000000' });
+
+  // the print carries the PROVIDER's freshness timestamp, not the ingest wall-clock
+  const print = (
+    await db.query<{ at: string; v: string }>(
+      `SELECT source_observed_at AS at, index_price_e6::text AS v FROM oracle_prices op
+       JOIN markets m ON m.id = op.market_id WHERE m.symbol = 'onepiece:uuid-luffy'`,
+    )
+  ).rows[0];
+  assert.equal(new Date(print.at).toISOString(), observedAt.toISOString());
+  assert.equal(print.v, '250000000');
 });
 
 test('ledger still reconciles (oracle never touches money)', async () => {
