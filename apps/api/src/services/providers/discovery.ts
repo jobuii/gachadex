@@ -49,13 +49,15 @@ async function loadState(db: Db, game: string): Promise<CrawlState> {
   }
 }
 
-async function saveState(db: Db, game: string, state: CrawlState): Promise<void> {
+async function putSetting(db: Db, key: string, value: string): Promise<void> {
   await db.query(
     `INSERT INTO settings(key, value) VALUES($1, $2)
      ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-    [stateKey(game), JSON.stringify(state)],
+    [key, value],
   );
 }
+
+const saveState = (db: Db, game: string, state: CrawlState) => putSetting(db, stateKey(game), JSON.stringify(state));
 
 const clearState = (db: Db, game: string) => db.query(`DELETE FROM settings WHERE key = $1`, [stateKey(game)]);
 
@@ -70,6 +72,20 @@ export function topCandidates(kept: Candidate[], topN: number): Candidate[] {
     )
     .slice(0, topN);
 }
+
+// Global weekly-rebalance bookkeeping (read by the index.ts discovery loop): the interval is enforced
+// via a settings timestamp so N instances and restarts share ONE cadence (the lease only guards
+// concurrent runs; this guards re-running too often).
+const LAST_REBALANCE_KEY = 'discovery_last_rebalance';
+
+export async function dueForRebalance(db: Db, intervalMs: number): Promise<boolean> {
+  const r = await db.query<{ value: string }>(`SELECT value FROM settings WHERE key = $1`, [LAST_REBALANCE_KEY]);
+  if (!r.rows[0]) return true;
+  const last = Date.parse(r.rows[0].value);
+  return !Number.isFinite(last) || Date.now() - last >= intervalMs;
+}
+
+export const markRebalanced = (db: Db): Promise<void> => putSetting(db, LAST_REBALANCE_KEY, new Date().toISOString());
 
 export interface DiscoveryReport {
   game: string;

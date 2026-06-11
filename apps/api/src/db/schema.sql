@@ -450,3 +450,12 @@ CREATE TABLE IF NOT EXISTS provider_rate (
   day          DATE NOT NULL DEFAULT CURRENT_DATE, -- which day used_today counts
   used_today   INT  NOT NULL DEFAULT 0
 );
+
+-- Single-leader leases for background loops (oracle ingest, discovery rebalance): with N API
+-- instances only the lease holder runs a pass, so work isn't duplicated N× (the rate LIMIT is already
+-- safe via provider_rate; this guards the budget + duplicate writes). Expired leases are taken over.
+CREATE TABLE IF NOT EXISTS worker_leases (
+  key        TEXT PRIMARY KEY, -- loop name, e.g. 'oracle-ingest'
+  holder     TEXT NOT NULL,    -- per-process random id
+  expires_at TIMESTAMPTZ NOT NULL
+);

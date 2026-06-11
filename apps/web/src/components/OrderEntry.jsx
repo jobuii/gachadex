@@ -144,18 +144,9 @@ export function OrderEntry({ market, onTraded }) {
               {details.metadata?.setName && (
                 <div className="detail-row"><span>Set</span><strong>{details.metadata.setName}</strong></div>
               )}
-              {details.metadata?.hp && (
-                <div className="detail-row"><span>HP</span><strong>{details.metadata.hp}</strong></div>
+              {details.metadata?.rarity && (
+                <div className="detail-row"><span>Rarity</span><strong>{details.metadata.rarity}</strong></div>
               )}
-              {details.metadata && (
-                <div className="detail-row"><span>Retreat</span><strong>{details.metadata.retreat ?? 0}</strong></div>
-              )}
-              {(details.metadata?.attacks ?? []).map((a, i) => (
-                <div key={i} className="detail-attack">
-                  {a.name}
-                  {a.damage ? ` · ${a.damage}` : ''}
-                </div>
-              ))}
             </div>
           )}
         </div>

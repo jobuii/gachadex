@@ -294,11 +294,19 @@ card at 20x. Required controls (all of these, before search-and-bet ships):
   only at cutover (pre-cutover the live pokemontcg feed re-stamps its own featured set and they'd
   fight); OP/MTG any time.
 - **P5 — Cutover:** shadow run → flag flip → outlier-guard bypass → universe union → monitor + rollback.
-  Also at P5: (a) **frontend detail panel** — the uniform metadata ({setName, rarity}) replaces Pokémon
-  hp/retreat/attacks; OrderEntry.jsx renders the Retreat row whenever metadata is truthy, so it would show
-  "Retreat 0" on every card post-cutover — drop hp/retreat/attacks rows, render rarity. (b) **leader
-  guard** for the oracle/discovery loops (duplicate work only costs budget; rate is already safe).
-  (c) log tracked ids absent from the provider response (silent until the staleness halt otherwise).
+  **CODE PART DONE (2026-06-11):** (a) the frontend detail panel is uniform — Set + Rarity; the
+  HP/Retreat/attacks rows are gone (kills the "Retreat 0" artifact; applies pre-cutover too per the
+  locked uniform-panel decision). (b) single-leader leases (`services/lease.ts` + `worker_leases`):
+  the oracle loop acquires 'oracle-ingest' per pass (TTL = one refresh interval — the leader renews,
+  failover within one interval), and the new **weekly discovery loop** (`startDiscoveryLoop`: hourly
+  ticks, weekly cadence enforced by a settings timestamp, a 2h crawl-scoped lease, inert until
+  ORACLE_PRIMARY=tcgpricelookup) rebalances featured for all games and resumes interrupted crawls.
+  (c) `fetchTrackedCards` warns about tracked ids absent from the provider response.
+  **REMAINING — the ops runbook:** merge + push (operator-gated) → Railway env (TCGPRICELOOKUP_API_KEY
+  + MAX_PNL_FACTOR_BPS/ADL_PNL_FACTOR_BPS/OI_CAP_NAV_BPS) → `backfill-provider-ids --apply` against
+  prod (~5 min) → OP/MTG `discover-featured --apply` (~20 min) → shadow check → flip ORACLE_PRIMARY →
+  pokemon `discover-featured --apply --force` → monitor (absent-card warnings, outlier rejects, index
+  continuity, candle series).
 - **P6 — Search-and-bet:** search firewall + creatability gate + first-print validation + smoothed oracle
   + dollar min-notional + market cap/retirement + **mandatory NAV gates on**. Ships last, after the core
   feed is proven.

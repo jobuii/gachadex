@@ -208,11 +208,17 @@ export function fromTplCard(c: TplCard, t: TrackedMarket): OracleCard {
 
 let defaultClient: TcgPriceLookupClient | null = null;
 
+/** The process-wide client (one ProviderLimiter, so search/refresh/discovery priority preemption
+ *  actually works across loops — separate instances would only share the DB pacing, not the queue). */
+export function getDefaultClient(db: Db): TcgPriceLookupClient {
+  return (defaultClient ??= new TcgPriceLookupClient(db));
+}
+
 /** Live fetcher behind ORACLE_PRIMARY=tcgpricelookup: batch-fetch every tracked market's provider card
  *  and emit OracleCards keyed by the markets' OWN identity. Cards the provider no longer returns are
  *  simply absent (no print -> the staleness halt covers them). */
 export async function fetchTrackedCards(db: Db, client?: TcgPriceLookupClient): Promise<OracleCard[]> {
-  const tpl = client ?? (defaultClient ??= new TcgPriceLookupClient(db));
+  const tpl = client ?? getDefaultClient(db);
   const tracked = await db.query<TrackedMarket>(
     `SELECT provider_card_id, symbol, card_id, game, featured FROM markets
       WHERE kind = 'card' AND provider_card_id IS NOT NULL AND status != 'delisted'`,
@@ -220,6 +226,16 @@ export async function fetchTrackedCards(db: Db, client?: TcgPriceLookupClient): 
   if (tracked.rows.length === 0) return [];
   const byId = new Map(tracked.rows.map((t) => [t.provider_card_id, t]));
   const cards = await tpl.getCardsByIds([...byId.keys()], 'refresh');
+  // Surface tracked cards the provider stopped returning — they get no print and will hit the
+  // staleness halt; without this they vanish silently until that fires (P5 monitoring).
+  if (cards.length < byId.size) {
+    const returned = new Set(cards.map((c) => c.id));
+    const absent = [...byId.keys()].filter((id) => !returned.has(id));
+    console.warn(
+      `tcgpricelookup: ${absent.length}/${byId.size} tracked cards absent from the response ` +
+        `(no print; staleness halt covers them): ${absent.slice(0, 5).join(', ')}${absent.length > 5 ? '…' : ''}`,
+    );
+  }
   return cards.flatMap((c) => {
     const t = byId.get(c.id);
     return t ? [fromTplCard(c, t)] : []; // unknown id in the response — ignore, never invent identity

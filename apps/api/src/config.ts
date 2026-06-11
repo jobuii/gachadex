@@ -87,6 +87,7 @@ export const config = {
   tcgpricelookupBase: process.env.TCGPRICELOOKUP_BASE ?? 'https://api.tcgpricelookup.com/v1',
   tcgpricelookupMinIntervalMs: num('TCGPRICELOOKUP_MIN_INTERVAL_MS', 1100), // 1 req/s + 10% headroom
   tcgpricelookupDailyCap: num('TCGPRICELOOKUP_DAILY_CAP', 10_000),
+  discoveryIntervalMs: num('DISCOVERY_INTERVAL_MS', 7 * 24 * 60 * 60 * 1000), // weekly featured rebalance (post-cutover loop)
 
   // Money / safety
   realFunds: process.env.REAL_FUNDS === 'true', // hard gate; MVP must be false

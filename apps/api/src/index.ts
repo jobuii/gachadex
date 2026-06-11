@@ -8,6 +8,11 @@ import { recoverInFlight, processAllRequested } from './services/custody/withdra
 import { treasuryPass } from './services/custody/treasury.ts';
 import { loadLimits } from './services/custody/limits.ts';
 import { loadFee, loadLiqFee } from './services/fees.ts';
+import { tryAcquireLease, releaseLease } from './services/lease.ts';
+import { getDefaultClient } from './services/providers/tcgpricelookup.ts';
+import { discoverGame, dueForRebalance, markRebalanced } from './services/providers/discovery.ts';
+import { GAMES } from '@pokex/shared-types';
+import { randomUUID } from 'node:crypto';
 import { solanaDepositChain, solanaWithdrawChain, solanaTreasuryChain } from './services/custody/solana.ts';
 import type { Db } from './db/client.ts';
 import type { FastifyBaseLogger } from 'fastify';
@@ -16,14 +21,59 @@ import { config } from './config.ts';
 // The oracle/funding loops below stay on plain setInterval: their bodies are fast local-DB work,
 // so overlap is a non-issue. The liquidation sweep and the custody workers use chainLoop — passes
 // that can run long or must never stack (ADL iterates; custody does slow RPC) self-chain instead.
+// Per-process identity for worker leases: with N instances only the lease holder runs a loop pass.
+const INSTANCE_ID = randomUUID();
+
 function startOracleLoop(db: Db, log: FastifyBaseLogger) {
-  const run = () =>
-    ingest(db)
-      .then((r) => log.info(r, 'oracle ingest complete'))
-      .catch((e) => log.error(e, 'oracle ingest failed (will retry)'));
+  const run = async () => {
+    // Concurrency guard (P5): the lease is PASS-scoped (TTL ~ one pass, released after), so no two
+    // instances ever ingest at once, and a deploy/crash never blocks the next ingest for long. With
+    // N staggered instances each may still run its own scheduled pass — harmless: tcgpricelookup
+    // prints dedup on the provider timestamp, and the budget cost is bounded by the limiter.
+    if (!(await tryAcquireLease(db, 'oracle-ingest', INSTANCE_ID, 15 * 60_000))) {
+      log.info('oracle ingest: another instance is mid-pass — skipped');
+      return;
+    }
+    try {
+      const r = await ingest(db);
+      log.info(r, 'oracle ingest complete');
+    } catch (e) {
+      log.error(e, 'oracle ingest failed (will retry)');
+    } finally {
+      await releaseLease(db, 'oracle-ingest', INSTANCE_ID).catch(() => {});
+    }
+  };
   // initial run shortly after boot, then on the configured interval
-  setTimeout(run, 1500);
-  setInterval(run, config.oracleRefreshMs);
+  setTimeout(() => void run(), 1500);
+  setInterval(() => void run(), config.oracleRefreshMs);
+}
+
+/** Weekly featured rebalance (P4 discovery, P5 wiring). Inert until the tcgpricelookup cutover: the
+ *  crawl prices via tcgpricelookup, and pre-cutover the pokemontcg feed owns pokemon's featured set. */
+function startDiscoveryLoop(db: Db, log: FastifyBaseLogger) {
+  if (config.oraclePrimary !== 'tcgpricelookup') return;
+  const client = getDefaultClient(db); // the SAME instance as the refresh path — in-process priority preemption works across loops
+  const run = async () => {
+    try {
+      if (!(await dueForRebalance(db, config.discoveryIntervalMs))) return;
+      // TTL covers one full multi-game crawl (~30 min), NOT the weekly interval — a dead holder is
+      // replaced within hours, and the settings timestamp (not the lease) enforces the cadence.
+      if (!(await tryAcquireLease(db, 'discovery-rebalance', INSTANCE_ID, 2 * 60 * 60 * 1000))) return;
+      try {
+        for (const game of GAMES) {
+          const r = await discoverGame(db, client, game, { apply: true, log: (m) => log.info(m) });
+          log.info({ game, kept: r.kept, featured: r.top.length }, 'discovery rebalance complete');
+        }
+        await markRebalanced(db); // only after ALL games — a partial run resumes next tick
+      } finally {
+        await releaseLease(db, 'discovery-rebalance', INSTANCE_ID);
+      }
+    } catch (e) {
+      log.error(e, 'discovery rebalance failed (crawl state is checkpointed; will resume)');
+    }
+  };
+  // hourly ticks; dueForRebalance gates the weekly cadence and lets an interrupted crawl resume fast
+  chainLoop(run, 5 * 60_000, 60 * 60_000);
 }
 
 function startFundingLoop(db: Db, log: FastifyBaseLogger) {
@@ -133,6 +183,7 @@ async function main() {
     await app.listen({ port: config.port, host: config.host });
     app.log.info(`GachaDex api listening on :${config.port} (REAL_FUNDS=${config.realFunds})`);
     startOracleLoop(db, app.log);
+    startDiscoveryLoop(db, app.log); // no-op until ORACLE_PRIMARY=tcgpricelookup
     startFundingLoop(db, app.log);
     startLiquidationLoop(db, app.log);
     // Live trading-fee override (works in both modes — trading happens in play money too). Loaded on
