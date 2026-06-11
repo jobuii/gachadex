@@ -1,100 +1,143 @@
 # Data providers (card price feeds)
 
-What powers the card markets and indices today, and the providers picked for the **multi-game
-expansion** (adding One Piece + MTG alongside Pokémon). Decision made 2026-06-03; recorded here
-2026-06-11 after reviewing the planning sessions. Nothing in the "Planned" section is wired yet —
-all of it is blocked on valid paid API keys (details per provider).
+What powers the card markets and indices today, and the provider chosen for the **multi-game
+expansion** (adding One Piece + MTG alongside Pokémon).
 
-> Secrets note: this doc references **env var names only**, never key values.
+- Original plan (2026-06-03): scrydex for raw + tcgpricelookup for graded.
+- **Updated 2026-06-11** (verified live against the tcgpricelookup docs + pricing): **tcgpricelookup
+  alone covers raw AND graded for all three games**, in one USD API — so it becomes the **primary**
+  provider. **scrydex is kept as a raw fallback** for redundancy (see "Fallbacks" below). Nothing is
+  wired yet.
 
-## TL;DR — the two primaries we picked
+> Secrets note: env var names only, never key values.
 
-| Need | Provider | Status |
-|---|---|---|
-| **Raw** card prices (Pokémon + One Piece + MTG) | **scrydex** | Planned — key-blocked (401), not wired |
-| **Graded** prices (One Piece + MTG) | **tcgpricelookup** | Planned — tier/Cloudflare-blocked, not wired |
+## TL;DR — the chosen provider
 
-Plus a graded split + fallback: **Pokémon graded** comes from scrydex inline; **JustTCG** is the
-graded fallback — and the only graded source actually in the code today (Pokémon PSA-10).
-
----
-
-## Live today
-
-### pokemontcg.io v2 — raw, Pokémon only ✅
-The single live feed. `GET https://api.pokemontcg.io/v2/cards?q=supertype:Pokémon&orderBy=-tcgplayer.prices.holofoil.market&pageSize=250`.
-Surfaces **TCGplayer** market prices. One response powers both the individual card markets and the
-Top 100 / Top 250 in-house basket indices (`apps/api/src/services/oracle.ts`). Updates ~once a day;
-`pageSize` caps at 250, so the tracked universe is the ~250 highest-priced Pokémon cards. No OP/MTG.
-
-### JustTCG — graded, Pokémon PSA-10 🔒
-The only graded source currently wired. `${JUSTTCG_BASE}/v1/cards` with an `x-api-key` header
-(`oracle.ts` `fetchGradedPrice`, `config.justtcgApiKey` / `justtcgBase` / `gradedConstituents`).
-Gated: the Graded (PSA-10) index becomes tradeable only when **`JUSTTCG_API_KEY`** is set. In the
-multi-game plan this is **demoted to the graded fallback** (see below), not the primary.
+**tcgpricelookup**, **Trader** plan ($14.99/mo). One API, USD, covers Pokémon + One Piece + MTG:
+- **Raw** prices: TCGplayer (`market/low/mid/high`) + eBay rolling averages, per condition.
+- **Graded** prices: PSA / BGS / CGC, eBay rolling averages, per grade.
+- **Price history** (daily series) — Trader-gated.
+- **Commercial use** requires Trader (Free is non-commercial — so Trader is mandatory for us
+  regardless of the data).
+- **All USD** → no FX needed on the primary path (FX only matters if the scrydex fallback is used).
+- **Sealed is NOT covered** (cards only) — still a gap.
+- **Fallbacks:** **scrydex** kept as a backup **raw** source (all 3 games) for redundancy; **JustTCG**
+  stays as a graded fallback (already wired). See "Fallbacks" below.
 
 ---
 
-## Planned — multi-game expansion (+ One Piece + MTG)
+## Live today (to be replaced by tcgpricelookup)
 
-### Raw → scrydex (all three games)
-Replaces pokemontcg.io as the raw-price source across Pokémon + One Piece + MTG — one code path
-instead of a Pokémon-only feed. Rationale: scrydex covers all three games, and pokemontcg.io was
-acquired by scrydex so it will likely be phased out.
-
-- **Endpoint:** `https://api.scrydex.com/{pokemon|magic|onepiece}/v1/cards?include=prices`
-- **Auth:** headers `X-Api-Key` + `X-Team-ID` (planned env: `SCRYDEX_API_KEY`, `SCRYDEX_TEAM_ID`)
-- **Cost:** credit-based paid plan (Starter ~$29/mo)
-- **Prices:** USD or JPY (JPY needs FX → see below)
-- **Status / blocker:** the supplied keys returned `401 INVALID_CREDENTIALS` — needs a valid key +
-  `X-Team-ID` from an active subscription. **Not wired** — exists only as TODO comments in
-  `apps/api/src/services/oracle.ts:132` and `oracle.test.ts:57`. OP/MTG markets are listed but gated
-  until scrydex data lands.
-
-### Graded → tcgpricelookup (OP/MTG), with a split
-scrydex's graded coverage is Pokémon + Lorcana only (MTG/OP "Coming Soon"), so graded splits by game:
-
-- **Pokémon graded** → **scrydex inline** (free with `?include=prices` on the raw call above).
-- **One Piece + MTG graded** → **tcgpricelookup** (primary).
-- **Fallback** → **JustTCG** (currently the only wired graded source).
-
-tcgpricelookup specifics:
-- **Endpoint:** `https://api.tcgpricelookup.com/v1/search?q=<name>&game={pokemon|mtg|onepiece}`
-- **Auth:** `X-API-Key` header (planned env: `TCGPRICELOOKUP_API_KEY`)
-- **Response:** a `graded` object (`psa_10`, `psa_9`, `bgs_9_5`, `cgc_9_5`), sourced from TCGplayer +
-  eBay, in **USD** (no JPY conversion needed)
-- **Cost:** graded is gated behind the **Trader (~$14.99/mo)** plan; the free tier returns `raw` only
-- **Status / blocker:** the supplied key was free-tier (no `graded`), and the API is Cloudflare-
-  throttled from the build sandbox. A fill-rate spike (`apps/api/scripts/graded-spike.mjs`, ~20 MTG +
-  20 OP cards) was **built but never run** — blocked on a Trader-tier key. **Not wired.**
-- Note: `tcgfast.com` appears to be the same product.
+- **pokemontcg.io v2** `/cards` — the single live feed; raw Pokémon prices (surfaces TCGplayer
+  market). Powers card markets + Top 100/250 indices (`apps/api/src/services/oracle.ts`). Pokémon
+  only, ~daily.
+- **JustTCG** — the only graded source wired (Pokémon PSA-10), gated on `JUSTTCG_API_KEY`
+  (`oracle.ts` `fetchGradedPrice`). Superseded by tcgpricelookup graded in the multi-game build.
 
 ---
 
-## Deferred / rejected
+## tcgpricelookup — verified spec (2026-06-11)
 
-- **Sealed → deferred.** No source chosen. Candidate feeds named but not adopted: **TCGplayer Sealed**,
-  **PriceCharting**. (scrydex has Sealed Products for Pokémon + OP that could unlock it later.) The
-  Sealed index stays gated ("Soon").
-- **TCGFish → rejected** as a data source: Cloudflare bot-challenged pages, and its badges are rendered
-  images, not an API — can't be ingested server-side. A licensed feed or data partnership would be a
-  separate decision.
-- **PriceCharting** — used once as a research/volatility reference (calibration), not adopted as a
-  price provider.
+Base URL `https://api.tcgpricelookup.com/v1`. Auth: **`X-API-Key`** header (env: `TCGPRICELOOKUP_API_KEY`).
+**Games:** pokemon, pokemon-japan, **mtg**, yugioh, **onepiece**, lorcana, star-wars, flesh-and-blood
+(all on every tier). List endpoints return `{ data: [...], total, limit, offset }` (paginate with
+`limit`/`offset`).
 
-## FX (for scrydex JPY prices)
+### Plan tiers
 
-- **Frankfurter** (`api.frankfurter.dev`, ECB rates, free) — picked for JPY → USD conversion. Only
-  needed once scrydex raw lands (its prices can be JPY). **Not wired yet** (part of the parked plan).
+| | Free | **Trader $14.99/mo** | Business $89.99/mo |
+|---|---|---|---|
+| Requests/day | 200 | **10,000** | 100,000 |
+| Rate limit | 1 req / 3s | **1 req / s** | 3 req / s |
+| TCGplayer raw prices | ✓ | ✓ | ✓ |
+| **eBay prices** | ✗ | **✓** | ✓ |
+| **Graded (PSA/BGS/CGC)** | ✗ | **✓** | ✓ |
+| **Price history** | ✗ | **✓** | ✓ |
+| **Commercial use** | ✗ | **✓** | ✓ |
+
+### Endpoints
+
+- `GET /v1/cards/search?q=&game=&limit=&offset=` — search/list cards (paginated envelope).
+- `GET /v1/cards/:id` — full card details (schema below).
+- `GET /v1/cards/:id/history?period={7d|30d|90d|1y}` — **Trader** — daily series
+  `{ date, prices: [{ price_market, price_low, price_mid, price_high }] }`.
+- `GET /v1/sets` — browse sets. `GET /v1/games` — list games.
+
+### Response schema (card details)
+
+```jsonc
+{
+  "id": "<uuid>", "tcgplayer_id": 510327,
+  "name": "Charizard ex", "number": "006/197", "rarity": "Double Rare", "variant": "Standard",
+  "image_url": "https://cdn.tcgpricelookup.com/...", "updated_at": "2026-02-16T12:00:00Z",
+  "set":  { "slug": "obsidian-flames", "name": "Obsidian Flames" },
+  "game": { "slug": "pokemon", "name": "Pokemon" },          // slug ∈ pokemon | mtg | onepiece | ...
+  "prices": {
+    "raw": {
+      "near_mint":      { "tcgplayer": { "market": 48.97, "low": 42.50, "mid": 49.99, "high": 64.99 },
+                          "ebay": { "avg_1d": 52.30, "avg_7d": 50.75, "avg_30d": 49.20 } },
+      "lightly_played": { "tcgplayer": { ... }, "ebay": { ... } }
+    },
+    "graded": {
+      "psa": { "10": { "ebay": { "avg_1d": 425, "avg_7d": 418.5, "avg_30d": 410 } }, "9": { ... } },
+      "bgs": { "10": { "ebay": { ... } } },
+      "cgc": { ... }
+    }
+  }
+}
+```
+
+### What we ingest (mapped to the oracle)
+
+| Our need | Field |
+|---|---|
+| **Raw market price** (raw card markets + Top 100/250 indices) | `prices.raw.near_mint.tcgplayer.market` — direct successor to today's `tcgplayer.prices.holofoil.market` |
+| **Graded price** (PSA-10 Graded index + graded markets) | `prices.graded.psa.10.ebay.avg_7d` (also `psa.9`, `bgs.10`, `cgc.*` for more graded markets) |
+| **Market display metadata** | `name`, `number`, `rarity`, `set.name`, `image_url`, `game.slug` |
+| **Smoothing / cross-check** | `prices.raw.near_mint.ebay.avg_7d` — less jumpy than the TCGplayer spot if daily ticks are noisy |
+| **Chart backfill (optional)** | `/cards/:id/history?period=` — we already build candles from our own ticks; this can seed history on day one |
+| **Freshness gate** | `updated_at` |
+
+### Integration notes
+
+- **Cadence ~daily** (eBay fields are 1/7/30-day rolling averages; TCGplayer is a market price) —
+  matches the existing daily oracle, no architecture change.
+- **Rate limit is a non-issue:** `search` returns paginated lists, so a full refresh of the
+  ~250-card universe per game is a handful of requests, not one-per-card. 3 games × a few pages/day
+  is far under 10,000/day at 1 req/s.
+- **Graded is eBay-only** (no TCGplayer graded) — use `avg_7d` for a stable graded oracle, `avg_1d`
+  if fresher is wanted.
+- **All USD** — no JPY, so **no FX/Frankfurter**.
 
 ---
 
-## Open question / next step
+## Fallbacks (kept for redundancy)
 
-The graded provider isn't reconciled in code yet:
-- **Plan:** tcgpricelookup (OP/MTG) + scrydex inline (Pokémon), JustTCG as fallback.
-- **Reality:** JustTCG is the only graded source wired (Pokémon-only), gated on `JUSTTCG_API_KEY`.
+Not used on the primary path; available if tcgpricelookup is unavailable or for cross-checking.
 
-To unblock: get a valid scrydex key (+ `X-Team-ID`) and a tcgpricelookup **Trader** key, then run
-`graded-spike.mjs` to confirm OP/MTG graded fill rates before wiring. The OP/MTG-graded primary was
-explicitly "decide after the spike" — and the spike hasn't run.
+- **scrydex — raw fallback** (all 3 games). A backup raw-price source if tcgpricelookup is down.
+  - Endpoint: `https://api.scrydex.com/{pokemon|magic|onepiece}/v1/cards?include=prices`
+  - Auth: headers `X-Api-Key` + `X-Team-ID` (env: `SCRYDEX_API_KEY`, `SCRYDEX_TEAM_ID`); paid (Starter ~$29/mo)
+  - **Caveats to activate:** the supplied keys returned `401 INVALID_CREDENTIALS` (needs a valid key +
+    `X-Team-ID`); prices can be **JPY**, so this path also needs the FX step below; graded is
+    Pokémon+Lorcana only, so it's a **raw-only** fallback. TODO comments at `oracle.ts:132`,
+    `oracle.test.ts:57`.
+- **JustTCG — graded fallback** (Pokémon PSA-10). Already wired (`oracle.ts` `fetchGradedPrice`,
+  gated on `JUSTTCG_API_KEY`); kept as the graded fallback for Pokémon.
+- **Frankfurter — FX (JPY→USD)** (`api.frankfurter.dev`, ECB, free). Only needed **if the scrydex raw
+  fallback is activated** (its JPY prices). Not needed on the tcgpricelookup primary path.
+
+## Still deferred / rejected
+
+- **Sealed → deferred.** tcgpricelookup is cards only. Candidate sealed feeds (not adopted):
+  **TCGplayer Sealed**, **PriceCharting**. Sealed index stays gated ("Soon").
+- **TCGFish → rejected** as a data source (Cloudflare bot-challenged, image badges, not an API).
+
+---
+
+## Next step
+
+Wire a tcgpricelookup adapter as the **primary** raw + graded source, keyed by `game.slug`, for all
+three games — once the **Trader** key is active. This retires the pokemontcg.io ingest and demotes
+JustTCG to the graded fallback (scrydex stays the raw fallback, unwired until its key works). Optional
+fill-rate sanity check first via `apps/api/scripts/graded-spike.mjs` (point it at the Trader key).
