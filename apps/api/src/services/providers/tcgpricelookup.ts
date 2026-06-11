@@ -162,6 +162,11 @@ export function rawPriceUsd(card: TplCard): number {
   return 0;
 }
 
+/** The provider serializes tcgplayer_id as a STRING (verified live) — normalize in ONE place. */
+export function tplTcgplayerId(c: TplCard): number | null {
+  return c.tcgplayer_id != null && c.tcgplayer_id !== '' ? Number(c.tcgplayer_id) : null;
+}
+
 /** PSA-10 in USD: ebay avg_7d (stable) -> avg_1d -> avg_30d -> null. */
 export function gradedPsa10Usd(card: TplCard): number | null {
   const e = card.prices?.graded?.psa?.['10']?.ebay;
@@ -176,6 +181,7 @@ export interface TrackedMarket {
   symbol: string;
   card_id: string;
   game: string;
+  featured: boolean; // index-constituent eligibility — owned by the discovery job, read-only here
 }
 
 /** Join one provider card onto its tracked market identity and emit the OracleCard. */
@@ -185,7 +191,7 @@ export function fromTplCard(c: TplCard, t: TrackedMarket): OracleCard {
     game: t.game,
     symbol: t.symbol,
     cardId: t.card_id,
-    tcgplayerId: c.tcgplayer_id != null && c.tcgplayer_id !== '' ? Number(c.tcgplayer_id) : null,
+    tcgplayerId: tplTcgplayerId(c),
     providerCardId: c.id,
     displayName: formatDisplayName(c.name, c.number),
     variant: c.variant,
@@ -196,6 +202,7 @@ export function fromTplCard(c: TplCard, t: TrackedMarket): OracleCard {
     gradedE6: graded != null ? toE6(graded) : null,
     observedAt: c.updated_at ? new Date(c.updated_at) : null, // provider freshness -> print dedup + staleness gate
     payload: { tcgpricelookup: { prices: c.prices ?? null, updated_at: c.updated_at ?? null } },
+    featured: t.featured,
   };
 }
 
@@ -207,7 +214,7 @@ let defaultClient: TcgPriceLookupClient | null = null;
 export async function fetchTrackedCards(db: Db, client?: TcgPriceLookupClient): Promise<OracleCard[]> {
   const tpl = client ?? (defaultClient ??= new TcgPriceLookupClient(db));
   const tracked = await db.query<TrackedMarket>(
-    `SELECT provider_card_id, symbol, card_id, game FROM markets
+    `SELECT provider_card_id, symbol, card_id, game, featured FROM markets
       WHERE kind = 'card' AND provider_card_id IS NOT NULL AND status != 'delisted'`,
   );
   if (tracked.rows.length === 0) return [];

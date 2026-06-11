@@ -3,7 +3,7 @@ import { toE6, SCALE } from '@pokex/pricing';
 import { INDEX_CATALOG } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import type { Db, Queryer } from '../db/client.ts';
-import { upsertCardMarket, upsertIndexMarket, getMarketById } from './markets.ts';
+import { upsertCardMarket, upsertIndexMarket, getMarketById, type CardUpsert } from './markets.ts';
 import { recomputeMark } from './marks.ts';
 import { pokemontcgFetcher } from './providers/pokemontcg.ts';
 import { fetchTrackedCards } from './providers/tcgpricelookup.ts';
@@ -29,6 +29,26 @@ export interface OracleCard {
   gradedE6?: bigint | null; // PSA-10 in micro-USD when the provider supplies it inline (P3); else the gradedFetcher fallback runs
   observedAt?: Date | null; // provider freshness timestamp; null/absent -> the ingest pass wall-clock (legacy behavior)
   payload?: unknown; // audit payload stored on the oracle print
+  featured?: boolean; // index-constituent eligible (P4): only featured cards enter the per-game baskets
+}
+
+/** OracleCard -> the market upsert payload. ONE mapping (ingest + discovery both use it), so the
+ *  two write paths can never drift on which fields a provider refresh updates. */
+export function toCardUpsert(c: OracleCard): CardUpsert {
+  return {
+    game: c.game,
+    symbol: c.symbol,
+    cardId: c.cardId,
+    displayName: c.displayName,
+    variant: c.variant,
+    imageSmall: c.imageSmall,
+    imageLarge: c.imageLarge,
+    setLogo: c.setLogo,
+    metadata: c.metadata,
+    tcgplayerId: c.tcgplayerId,
+    providerCardId: c.providerCardId,
+    featured: c.featured, // undefined keeps the stored flag (rebalanced by the discovery job)
+  };
 }
 
 /** Returns the cards to ingest. Injectable for tests. */
@@ -126,21 +146,7 @@ export async function ingest(
   const pinned = new Set(pinnedRows.rows.map((r) => r.id));
 
   for (const c of priced) {
-    const marketId = await db.tx((q) =>
-      upsertCardMarket(q, {
-        game: c.game,
-        symbol: c.symbol,
-        cardId: c.cardId,
-        displayName: c.displayName,
-        variant: c.variant,
-        imageSmall: c.imageSmall,
-        imageLarge: c.imageLarge,
-        setLogo: c.setLogo,
-        metadata: c.metadata,
-        tcgplayerId: c.tcgplayerId,
-        providerCardId: c.providerCardId,
-      }),
-    );
+    const marketId = await db.tx((q) => upsertCardMarket(q, toCardUpsert(c)));
     if (pinned.has(marketId)) continue; // manual override in effect — skip the auto print + mark
     const accepted = await db.tx((q) =>
       recordOracle(q, marketId, c.rawE6, c.observedAt ?? passObservedAt, c.payload ?? null),
@@ -151,49 +157,63 @@ export async function ingest(
     }
   }
 
-  // SINGLE-GAME ASSUMPTION (fixed in P4): `sorted` spans the whole pass, so the index + graded baskets
-  // below would mix games if a multi-game fetcher ran today. P4 separates per-game featured constituents;
-  // until then the cutover flag must not flip a multi-game feed live.
+  // Index baskets are PER-GAME and FEATURED-ONLY (P4): the tracked universe (everything priced above)
+  // and the index constituents are deliberately distinct sets, so long-tail on-demand markets can never
+  // mutate the Top-100/250 baskets. featured comes from the card (pokemontcg = its curated top-250;
+  // tcgpricelookup = the market row's flag, rebalanced only by the discovery job).
   const sorted = [...priced].sort((a, b) => (b.rawE6 > a.rawE6 ? 1 : b.rawE6 < a.rawE6 ? -1 : 0));
+  const featuredByGame = new Map<string, OracleCard[]>();
+  for (const c of sorted) {
+    if (!c.featured) continue;
+    const list = featuredByGame.get(c.game) ?? [];
+    list.push(c); // sorted order is preserved — each game's list stays price-descending
+    featuredByGame.set(c.game, list);
+  }
 
-  // Graded (PSA-10) prices for the top-N — powers the Graded index + per-card graded panel. Providers
-  // that carry graded inline (tcgpricelookup, P3) need no extra fetch; the gradedFetcher (JustTCG) is
-  // the fallback for cards without it.
-  const gradedMembers: { cardId: string; priceE6: bigint }[] = [];
-  for (const c of sorted.slice(0, config.gradedConstituents)) {
-    let gE6 = c.gradedE6 ?? null;
-    if (gE6 == null && gradedFetcher) {
-      const g = await gradedFetcher(c);
-      if (g != null) gE6 = toE6(g); // non-positive values are dropped by the guard below
+  // Graded (PSA-10) prices for the top-N per game — powers the Graded index + per-card graded panel.
+  // Providers that carry graded inline (tcgpricelookup, P3) need no extra fetch; the gradedFetcher
+  // (JustTCG) is the fallback for cards without it.
+  const gradedByGame = new Map<string, { cardId: string; priceE6: bigint }[]>();
+  let gradedTotal = 0;
+  for (const [game, cards] of featuredByGame) {
+    const members: { cardId: string; priceE6: bigint }[] = [];
+    for (const c of cards.slice(0, config.gradedConstituents)) {
+      let gE6 = c.gradedE6 ?? null;
+      if (gE6 == null && gradedFetcher) {
+        const g = await gradedFetcher(c);
+        if (g != null) gE6 = toE6(g); // non-positive values are dropped by the guard below
+      }
+      if (gE6 != null && gE6 > 0n) {
+        await db.query(`UPDATE markets SET graded_psa10_e6=$1 WHERE card_id=$2 AND kind='card'`, [gE6.toString(), c.cardId]);
+        members.push({ cardId: c.cardId, priceE6: gE6 });
+      }
     }
-    if (gE6 != null && gE6 > 0n) {
-      await db.query(`UPDATE markets SET graded_psa10_e6=$1 WHERE card_id=$2 AND kind='card'`, [gE6.toString(), c.cardId]);
-      gradedMembers.push({ cardId: c.cardId, priceE6: gE6 });
-    }
+    gradedByGame.set(game, members);
+    gradedTotal += members.length;
   }
 
   let indices = 0;
   for (const idx of INDEX_CATALOG) {
-    if (idx.slug === 'graded') {
-      // tradeable only when we actually have PSA-10 data; priced off the graded basket
-      if (gradedMembers.length > 0) {
-        await buildIndex(db, idx, gradedMembers, passObservedAt, pinned);
-        indices++;
-      } else {
-        await db.tx((q) => upsertIndexMarket(q, { game: idx.game, slug: idx.slug, name: idx.name, tradeable: false }));
-      }
-      continue;
-    }
-    if (!idx.tradeable) {
+    const inGame = featuredByGame.get(idx.game) ?? [];
+    // Members by basket kind: top-N raw baskets slice the featured list; graded uses the PSA-10 set;
+    // anything else (sealed) has NO data source yet and must stay gated regardless of raw members.
+    const members =
+      idx.slug === 'graded'
+        ? (gradedByGame.get(idx.game) ?? [])
+        : idx.topN != null
+          ? inGame.slice(0, idx.topN).map((x) => ({ cardId: x.cardId, priceE6: x.rawE6 }))
+          : [];
+    if (members.length > 0) {
+      // data exists -> the index is (or becomes) live; this is how OP/MTG indices light up post-discovery
+      await buildIndex(db, idx, members, passObservedAt, pinned);
+      indices++;
+    } else if (!idx.tradeable) {
+      // catalog-gated and still no data: keep it listed but gated
       await db.tx((q) => upsertIndexMarket(q, { game: idx.game, slug: idx.slug, name: idx.name, tradeable: false }));
-      continue;
     }
-    const n = idx.topN ?? sorted.length;
-    const members = sorted.slice(0, n).map((x) => ({ cardId: x.cardId, priceE6: x.rawE6 }));
-    await buildIndex(db, idx, members, passObservedAt, pinned);
-    indices++;
+    // catalog-tradeable with a transiently empty pass: leave the live market untouched (staleness covers it)
   }
-  return { cards: priced.length, indices, graded: gradedMembers.length };
+  return { cards: priced.length, indices, graded: gradedTotal };
 }
 
 async function buildIndex(

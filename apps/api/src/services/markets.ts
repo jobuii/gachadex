@@ -59,6 +59,8 @@ export interface CardUpsert {
   // them; tcgpricelookup supplies both. Never erased on re-upsert (COALESCE keeps the stored value).
   tcgplayerId?: number | null;
   providerCardId?: string | null;
+  // Index-constituent eligibility (the discovery top-250). Omit to keep the stored value.
+  featured?: boolean | null;
 }
 
 /** Symbol for a provider-created card market: game-namespaced so provider ids can never collide across
@@ -73,16 +75,18 @@ export async function upsertCardMarket(q: Queryer, opts: CardUpsert): Promise<st
   const meta = opts.metadata != null ? JSON.stringify(opts.metadata) : null;
   await q.query(
     `INSERT INTO markets(id, kind, game, symbol, display_name, card_id, variant, image_small, image_large, set_logo, metadata, tradeable,
-       max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id)
-     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13)
+       max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id, featured)
+     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13, COALESCE($14, false))
      ON CONFLICT(symbol) DO UPDATE
        SET display_name = EXCLUDED.display_name, image_small = EXCLUDED.image_small, image_large = EXCLUDED.image_large,
            set_logo = EXCLUDED.set_logo, metadata = EXCLUDED.metadata, variant = EXCLUDED.variant,
            tcgplayer_id = COALESCE(EXCLUDED.tcgplayer_id, markets.tcgplayer_id),
-           provider_card_id = COALESCE(EXCLUDED.provider_card_id, markets.provider_card_id)`,
+           provider_card_id = COALESCE(EXCLUDED.provider_card_id, markets.provider_card_id),
+           featured = COALESCE($14, markets.featured)`,
     [
       id, opts.symbol, opts.displayName, opts.cardId, opts.variant, opts.imageSmall, opts.imageLarge ?? null,
       opts.setLogo ?? null, meta, CARD_OI_CAP, opts.game ?? 'pokemon', opts.tcgplayerId ?? null, opts.providerCardId ?? null,
+      opts.featured ?? null,
     ],
   );
   const r = await q.query<{ id: string }>(`SELECT id FROM markets WHERE symbol = $1`, [opts.symbol]);

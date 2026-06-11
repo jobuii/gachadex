@@ -278,6 +278,21 @@ card at 20x. Required controls (all of these, before search-and-bet ships):
   observedAt, duplicate ingests also dedup at the print level — duplicate work only costs budget).
 - **P4 — Discovery job** (resumable, single-flight, low priority) → featured top-250 per game; index
   constituents = featured set only.
+  **STATUS: DONE (2026-06-11).** Shipped: `markets.featured` column (write-path keeps the stored flag
+  unless a provider supplies it; pokemontcg marks its curated top-250 featured; tcgpricelookup reads the
+  row's flag). **Index baskets are now PER-GAME and FEATURED-ONLY** — the single-game assumption is
+  gone: a long-tail card can never enter a basket (proven by test: a pricier non-featured card stays
+  out), OP/MTG indices auto-light when their featured cards get priced, Sealed stays gated (no data
+  source), and a catalog-tradeable index with a transiently empty pass is left untouched (no downgrade).
+  `providers/discovery.ts` + `scripts/discover-featured.ts`: resumable catalog crawl (checkpoints
+  {offset, kept} into settings every 20 pages AND on failure — a budget refusal resumes where it
+  stopped), deterministic top-N (price desc → tcgplayer id → provider id), 'discovery' priority
+  (always preempted, first to yield budget), dry-run default with the completed crawl reused by a
+  follow-up --apply, existing markets keep their identity (no twins), drop-outs lose `featured` but
+  stay tracked+priced (append-only universe). **Single-flight** = ops discipline for now (operator-run
+  script); the weekly recurring loop + leader guard land at P5. **Sequencing:** pokemon discovery-apply
+  only at cutover (pre-cutover the live pokemontcg feed re-stamps its own featured set and they'd
+  fight); OP/MTG any time.
 - **P5 — Cutover:** shadow run → flag flip → outlier-guard bypass → universe union → monitor + rollback.
   Also at P5: (a) **frontend detail panel** — the uniform metadata ({setName, rarity}) replaces Pokémon
   hp/retreat/attacks; OrderEntry.jsx renders the Retreat row whenever metadata is truthy, so it would show

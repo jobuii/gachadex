@@ -169,6 +169,10 @@ CREATE TABLE IF NOT EXISTS markets (
   -- across providers); provider_card_id = the tcgpricelookup card UUID once matched/created.
   tcgplayer_id       BIGINT,
   provider_card_id   TEXT,
+  -- Featured = index-constituent eligible (the discovery top-250 per game). The TRACKED universe
+  -- (everything priced) and the INDEX basket (featured only) are deliberately distinct sets, so
+  -- on-demand long-tail markets (P6 search-and-bet) can never mutate the Top-100/250 baskets.
+  featured           BOOLEAN NOT NULL DEFAULT false,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_markets_kind ON markets(kind, status);
@@ -187,6 +191,7 @@ ALTER TABLE markets ADD COLUMN IF NOT EXISTS provider_card_id TEXT;
 -- This is the duplicate-market guard: a second create for the same physical card must conflict, not insert.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_provider_card ON markets(provider_card_id) WHERE provider_card_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_tcgplayer ON markets(tcgplayer_id) WHERE tcgplayer_id IS NOT NULL;
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS featured BOOLEAN NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS index_constituents (
   id        TEXT PRIMARY KEY,

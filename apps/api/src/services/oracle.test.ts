@@ -135,6 +135,7 @@ test('a provider-built OracleCard flows end-to-end: ids, inline graded (no fetch
       rawE6: 250_000_000n, // $250
       gradedE6: 1_500_000_000n, // $1500 PSA-10, inline — no gradedFetcher needed
       observedAt,
+      featured: true, // index-eligible (the graded basket is featured-only)
     },
   ]); // note: no gradedFetcher passed (JUSTTCG_API_KEY unset) — graded must come from the card itself
   assert.equal(r.cards, 1);
@@ -157,6 +158,38 @@ test('a provider-built OracleCard flows end-to-end: ids, inline graded (no fetch
   ).rows[0];
   assert.equal(new Date(print.at).toISOString(), observedAt.toISOString());
   assert.equal(print.v, '250000000');
+});
+
+test('index baskets are per-game and FEATURED-only; long-tail cards are priced but excluded', async () => {
+  const oc = (game: string, id: string, usd: number, featured: boolean) => ({
+    game, symbol: `${game}:${id}`, cardId: id, displayName: id, variant: null, imageSmall: null,
+    rawE6: BigInt(usd) * 1_000_000n, featured,
+  });
+  const pass = [
+    oc('pokemon', 'feat-a', 1000, true),
+    oc('pokemon', 'feat-b', 500, true),
+    oc('pokemon', 'longtail-c', 2000, false), // HIGHER price than the featured cards — must stay out
+    oc('onepiece', 'feat-luffy2', 300, true),
+  ];
+  const r = await ingest(db, async () => pass);
+  assert.equal(r.cards, 4); // every card is priced/tracked…
+
+  const markets = await listMarketsWithData(db);
+  const top100 = markets.find((m) => m.indexSlug === 'top-100' && m.game === 'pokemon')!;
+  const constituents = await db.query<{ card_id: string }>(
+    `SELECT card_id FROM index_constituents WHERE market_id = $1 ORDER BY card_id`, [top100.id],
+  );
+  // …but the basket holds ONLY the featured pokemon cards — the pricier long-tail card is excluded
+  assert.deepEqual(constituents.rows.map((c) => c.card_id), ['feat-a', 'feat-b']);
+
+  // a One Piece featured card lights up the previously-gated One Piece indices
+  const opTop100 = markets.find((m) => m.indexSlug === 'top-100' && m.game === 'onepiece')!;
+  assert.equal(opTop100.tradeable, true);
+  assert.ok(opTop100.markE6 != null);
+
+  // the long-tail card still became a real, priced market
+  const longtail = markets.find((m) => m.symbol === 'pokemon:longtail-c')!;
+  assert.equal(Number(longtail.markE6) / 1_000_000, 2000);
 });
 
 test('ledger still reconciles (oracle never touches money)', async () => {

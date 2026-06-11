@@ -40,6 +40,7 @@ export function fromPokemontcg(raw: any[]): OracleCard[] {
       metadata: extractMetadata(c),
       rawE6: toE6(price),
       payload: { tcgplayer: c.tcgplayer ?? null },
+      featured: true, // this feed IS the curated top-250 by price — all of it is index-eligible
     };
   });
 }

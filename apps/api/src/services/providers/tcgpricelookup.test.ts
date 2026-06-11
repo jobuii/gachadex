@@ -121,7 +121,7 @@ test('gradedPsa10Usd: avg_7d -> avg_1d -> avg_30d -> null', () => {
 test('fromTplCard: identity comes from the TRACKED market row, data from the provider', () => {
   const oc = fromTplCard(
     tplCard('uuid-x', prices({ market: 100 }, undefined, { avg_7d: 500 })),
-    { provider_card_id: 'uuid-x', symbol: 'sv-old-1', card_id: 'sv-old-1', game: 'pokemon' },
+    { provider_card_id: 'uuid-x', symbol: 'sv-old-1', card_id: 'sv-old-1', game: 'pokemon', featured: true },
   );
   assert.equal(oc.symbol, 'sv-old-1'); // the legacy market's own symbol — re-priced in place
   assert.equal(oc.cardId, 'sv-old-1');
@@ -130,6 +130,7 @@ test('fromTplCard: identity comes from the TRACKED market row, data from the pro
   assert.equal(oc.rawE6, 100_000_000n);
   assert.equal(oc.gradedE6, 500_000_000n);
   assert.equal(oc.observedAt?.toISOString(), '2026-06-10T12:00:00.000Z');
+  assert.equal(oc.featured, true); // basket eligibility flows from the market row, not the provider
 });
 
 test('fetchTrackedCards + ingest: legacy + provider-native markets re-price IN PLACE (no twins)', async () => {
@@ -137,6 +138,7 @@ test('fetchTrackedCards + ingest: legacy + provider-native markets re-price IN P
   const legacyId = await upsertCardMarket(db, {
     symbol: 'sv-old-1', cardId: 'sv-old-1', displayName: 'Old Charizard #6', variant: 'holofoil',
     imageSmall: 'img/old', metadata: { setName: 'Old Set' }, providerCardId: 'uuid-legacy', tcgplayerId: 111,
+    featured: true, // backfilled featured market — keeps its graded write + basket slot
   });
   const nativeId = await upsertCardMarket(db, {
     game: 'onepiece', symbol: cardSymbol('onepiece', 'uuid-native'), cardId: 'uuid-native', displayName: 'Luffy #OP01-001',
