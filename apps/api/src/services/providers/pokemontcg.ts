@@ -1,5 +1,5 @@
 import { getCardPriceVariant, toE6 } from '@pokex/pricing';
-import { formatDisplayName } from './backfill.ts';
+import { formatDisplayName } from './display.ts';
 import { config } from '../../config.ts';
 import type { OracleCard } from '../oracle.ts';
 

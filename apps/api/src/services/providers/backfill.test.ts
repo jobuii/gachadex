@@ -9,15 +9,17 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 const { getDb, closeDb } = await import('../../db/client.ts');
 const { initDb } = await import('../../db/init.ts');
 const { upsertCardMarket } = await import('../markets.ts');
-const { parseDisplayName, normNumber, normSet, matchCard, backfillProviderIds } = await import('./backfill.ts');
+const { normNumber, normSet, matchCard, backfillProviderIds } = await import('./backfill.ts');
+const { parseDisplayName } = await import('./display.ts');
 
 await initDb();
 const db = await getDb();
 after(() => closeDb());
 
-const tpl = (id: string, name: string, number: string, setName: string, tcgplayerId: number | null = null) => ({
+const tpl = (id: string, name: string, number: string, setName: string, tcgplayerId: number | null = null, priceUsd?: number) => ({
   id, tcgplayer_id: tcgplayerId, name, number, rarity: null, variant: 'Standard', image_url: null,
-  updated_at: null, set: { slug: normSet(setName) ?? '', name: setName }, game: { slug: 'pokemon', name: 'Pokemon' }, prices: null,
+  updated_at: null, set: { slug: normSet(setName) ?? '', name: setName }, game: { slug: 'pokemon', name: 'Pokemon' },
+  prices: priceUsd != null ? { raw: { near_mint: { tcgplayer: { market: priceUsd } } } } : null,
 });
 
 test('parseDisplayName splits the ingest displayName format', () => {
@@ -45,6 +47,27 @@ test('matchCard: unambiguous number+set match wins; ambiguity and misses return 
   // no stored set name: a UNIQUE number match is still acceptable
   assert.equal(matchCard({ ...market, setName: null }, [exact, otherNum]), exact);
   assert.equal(matchCard({ ...market, setName: null }, [exact, otherSet]), null, 'number alone ambiguous');
+});
+
+test('printing-variant ambiguity is resolved by price proximity — and never guessed without it', () => {
+  // Base Set Charizard #4: Unlimited ($400) vs 1st Edition ($4000) — same set, same number
+  const unlimited = tpl('uuid-unl', 'Charizard', '4/102', 'Base Set', 1, 400);
+  const firstEd = tpl('uuid-1st', 'Charizard', '4/102', 'Base Set', 2, 4000);
+  const market = { number: '4', setName: 'Base Set', priceUsd: 420 };
+
+  assert.equal(matchCard(market, [unlimited, firstEd]), unlimited, 'the market price pins the variant');
+  assert.equal(matchCard({ ...market, priceUsd: 3800 }, [unlimited, firstEd]), firstEd);
+  assert.equal(matchCard({ ...market, priceUsd: null }, [unlimited, firstEd]), null, 'no price = stays ambiguous');
+  assert.equal(matchCard({ ...market, priceUsd: 1500 }, [unlimited, firstEd]), null, 'price near neither = ambiguous');
+  // two candidates inside the band: never guess
+  const shadowless = tpl('uuid-shdw', 'Charizard', '4/102', 'Base Set', 3, 450);
+  assert.equal(matchCard(market, [unlimited, shadowless, firstEd]), null);
+  // unpriced candidates can never price-match
+  const unpriced = tpl('uuid-x', 'Charizard', '4/102', 'Base Set', 4);
+  assert.equal(matchCard(market, [unpriced, firstEd]), null);
+  // the tie-break NEVER fires across sets: same number in different sets stays strictly ambiguous
+  const otherSetSameNum = tpl('uuid-os', 'Charizard', '4/130', 'Base Set 2', 5, 4000);
+  assert.equal(matchCard({ number: '4', setName: null, priceUsd: 420 }, [unlimited, otherSetSameNum]), null);
 });
 
 test('backfill end-to-end: stamps unambiguous matches, reports the rest, idempotent + conflict-safe', async () => {

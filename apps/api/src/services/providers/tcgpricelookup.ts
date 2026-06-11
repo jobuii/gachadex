@@ -3,7 +3,7 @@ import { config } from '../../config.ts';
 import type { Db } from '../../db/client.ts';
 import type { OracleCard } from '../oracle.ts';
 import { ProviderLimiter, sleep, type ProviderPriority } from './limiter.ts';
-import { formatDisplayName } from './backfill.ts';
+import { formatDisplayName } from './display.ts';
 
 /**
  * tcgpricelookup provider (Trader plan; spec in docs/data-providers.md). Two layers in this module:
