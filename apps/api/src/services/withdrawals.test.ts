@@ -151,6 +151,25 @@ test('below the minimum withdrawal is rejected', async () => {
   assert.equal(await balanceOf(accessToken), usdc(100));
 });
 
+test('cumulative withdrawals cannot exceed the balance — each debits, so the next sees the remainder', async () => {
+  const kp = Keypair.generate();
+  const { accessToken, user } = await login(kp);
+  await fund(user.id, usdc(100));
+
+  // first $60 is accepted and debited on the spot -> $40 left
+  const first = await withdraw(accessToken, kp, usdc(60));
+  assert.equal(first.statusCode, 200, first.body);
+  assert.equal(await balanceOf(accessToken), usdc(40));
+
+  // a second $60 now exceeds the remaining $40 -> rejected, nothing further debited
+  const second = await withdraw(accessToken, kp, usdc(60));
+  assert.equal(second.statusCode, 400, second.body);
+  assert.match(second.json().error, /insufficient/);
+  assert.equal(await balanceOf(accessToken), usdc(40));
+
+  assert.equal((await reconcile(db)).ok, true);
+});
+
 test('the daily velocity cap rejects the request that crosses it', async () => {
   const kp = Keypair.generate();
   const { accessToken, user } = await login(kp);
