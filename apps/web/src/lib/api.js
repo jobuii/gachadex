@@ -28,7 +28,10 @@ export function getAccessToken() {
 }
 
 async function raw(path, { method = 'GET', body, auth = false } = {}) {
-  const headers = { 'content-type': 'application/json' };
+  // Only declare a JSON content-type when we actually send a body — Fastify rejects an EMPTY body when
+  // content-type is application/json, which broke bodyless POSTs (e.g. withdrawal approve, market unpin).
+  const headers = {};
+  if (body !== undefined) headers['content-type'] = 'application/json';
   if (auth && accessToken) headers.authorization = `Bearer ${accessToken}`;
   const res = await fetch(`${API_URL}${path}`, {
     method,
@@ -157,9 +160,13 @@ export const lpWithdraw = (shares) => req('/lp/withdraw', { method: 'POST', auth
 
 // --- admin (operator; authenticates with the ADMIN_API_KEY header, not the user Bearer) ---
 async function adminReq(path, adminKey, body) {
+  // No body => no JSON content-type (see raw()): approve/unpin send an empty body and Fastify would
+  // otherwise reject it with "Body cannot be empty when content-type is set to 'application/json'".
+  const headers = { 'x-admin-key': adminKey };
+  if (body !== undefined) headers['content-type'] = 'application/json';
   const res = await fetch(`${API_URL}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-admin-key': adminKey },
+    headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
