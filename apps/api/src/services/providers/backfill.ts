@@ -19,11 +19,20 @@ export function normNumber(n: string | null | undefined): string | null {
   return stripped || head; // '000' stays '000' rather than ''
 }
 
-/** Set names: case/punctuation-insensitive ('Base Set' ~ 'base-set'). */
+/** Set names: case/punctuation-insensitive, '&' ~ 'and' ('Base Set' ~ 'base-set'). */
 export function normSet(s: string | null | undefined): string | null {
   if (!s) return null;
-  const n = s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const n = s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]/g, '');
   return n || null;
+}
+
+/** tcgpricelookup prefixes set codes ('SWSH07: Evolving Skies' vs pokemontcg 'Evolving Skies'), so
+ *  set agreement is normalized SUFFIX containment, either direction — exact stays a special case. */
+export function setsMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  const na = normSet(a);
+  const nb = normSet(b);
+  if (!na || !nb) return false;
+  return na === nb || na.endsWith(nb) || nb.endsWith(na);
 }
 
 export interface MarketToMatch {
@@ -36,6 +45,7 @@ export interface MarketToMatch {
 // Shadowless…), prices differ 3-10×, so "the unique candidate within ±40% of the market's own price"
 // is a safe fingerprint. Two candidates inside the band stays ambiguous (never guess).
 const PRICE_MATCH_TOLERANCE = 0.4;
+const MAX_CANDIDATES = 600; // search-pagination cap per market (biggest observed name: Charizard, 560)
 
 function uniqueByPrice(pool: TplCard[], priceUsd: number | null | undefined): TplCard | null {
   if (priceUsd == null || priceUsd <= 0) return null;
@@ -50,11 +60,10 @@ function uniqueByPrice(pool: TplCard[], priceUsd: number | null | undefined): Tp
  *  resolved by price proximity (unique candidate near the market's own price); else null. */
 export function matchCard(market: MarketToMatch, candidates: TplCard[]): TplCard | null {
   const num = normNumber(market.number);
-  const set = normSet(market.setName);
   if (!num) return null; // without a collector number a name-only match is too risky to stamp
 
   const byNumber = candidates.filter((c) => normNumber(c.number) === num);
-  const setMatched = set ? byNumber.filter((c) => normSet(c.set?.name) === set) : [];
+  const setMatched = market.setName ? byNumber.filter((c) => setsMatch(c.set?.name, market.setName)) : [];
   if (setMatched.length === 1) return setMatched[0];
   // Same set + number more than once = printing variants — the only pool where the price rationale
   // holds, so only here does the tie-break apply.
@@ -89,11 +98,19 @@ export async function backfillProviderIds(
   const report: BackfillReport = { total: rows.rows.length, matched: 0, applied: 0, unmatched: [] };
   for (const row of rows.rows) {
     const { name, number } = parseDisplayName(row.display_name);
-    const page = await client.searchCards({ q: name, game: row.game, limit: 50 }, 'discovery');
+    // Popular names return hundreds of results (Charizard: 560) — page until exhausted (capped) so the
+    // right candidate is actually in the pool.
+    const candidates: TplCard[] = [];
+    for (let offset = 0; ; ) {
+      const page = await client.searchCards({ q: name, game: row.game, limit: 100, offset }, 'discovery');
+      candidates.push(...page.data);
+      offset += page.data.length;
+      if (page.data.length === 0 || offset >= page.total || offset >= MAX_CANDIDATES) break;
+    }
     const priceUsd = row.price_e6 != null ? Number(row.price_e6) / 1_000_000 : null;
-    const match = matchCard({ number, setName: row.set_name, priceUsd }, page.data);
+    const match = matchCard({ number, setName: row.set_name, priceUsd }, candidates);
     if (!match) {
-      const reason = page.data.length === 0 ? 'no-results' : 'ambiguous';
+      const reason = candidates.length === 0 ? 'no-results' : 'ambiguous';
       report.unmatched.push({ id: row.id, name: row.display_name, reason });
       log(`✗ ${row.display_name} — ${reason}`);
       continue;

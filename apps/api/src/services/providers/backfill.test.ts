@@ -9,7 +9,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 const { getDb, closeDb } = await import('../../db/client.ts');
 const { initDb } = await import('../../db/init.ts');
 const { upsertCardMarket } = await import('../markets.ts');
-const { normNumber, normSet, matchCard, backfillProviderIds } = await import('./backfill.ts');
+const { normNumber, normSet, setsMatch, matchCard, backfillProviderIds } = await import('./backfill.ts');
 const { parseDisplayName } = await import('./display.ts');
 
 await initDb();
@@ -32,6 +32,24 @@ test('collector numbers + set names normalize across provider formats', () => {
   assert.equal(normNumber('223'), '223');
   assert.equal(normNumber('TG12/TG30'), 'tg12');
   assert.equal(normSet('Base Set'), normSet('base-set'));
+  assert.equal(normSet('FireRed & LeafGreen'), normSet('FireRed and LeafGreen')); // '&' ~ 'and'
+});
+
+test('setsMatch: provider set-code prefixes agree by suffix; sibling sets do NOT', () => {
+  assert.equal(setsMatch('SWSH07: Evolving Skies', 'Evolving Skies'), true); // tpl prefix vs pokemontcg
+  assert.equal(setsMatch('SM - Lost Thunder', 'Lost Thunder'), true);
+  assert.equal(setsMatch('Evolving Skies', 'Evolving Skies'), true);
+  assert.equal(setsMatch('Base Set 2', 'Base Set'), false); // sibling set is NOT a suffix match
+  assert.equal(setsMatch('Prize Pack Series Cards', 'Evolving Skies'), false); // reprint set excluded
+  assert.equal(setsMatch(null, 'Evolving Skies'), false);
+});
+
+test('a prefixed-set candidate beats a same-number reprint from another set', () => {
+  // tpl reality: Umbreon VMAX 095/203 exists in BOTH 'SWSH07: Evolving Skies' and 'Prize Pack Series
+  // Cards' — the market's set name must pick the real one despite tpl's set-code prefix.
+  const real = tpl('uuid-es', 'Umbreon VMAX', '095/203', 'SWSH07: Evolving Skies', 1, 90);
+  const reprint = tpl('uuid-pp', 'Umbreon VMAX', '095/203', 'Prize Pack Series Cards', 2, 30);
+  assert.equal(matchCard({ number: '95', setName: 'Evolving Skies', priceUsd: null }, [reprint, real]), real);
 });
 
 test('matchCard: unambiguous number+set match wins; ambiguity and misses return null', () => {
