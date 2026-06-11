@@ -412,6 +412,7 @@ export function AdminPanel() {
           <Stat label="…locked in trades" value={treasury.lockedE6} />
           <Stat label="Pending withdrawals" value={treasury.pendingE6} />
           <Stat label="Insurance fund" value={treasury.insuranceE6} />
+          <Stat label="Fees earned (house cut)" value={treasury.feeRevenueE6} />
           <PnlStat label="P/L (treasury − customer funds − pending payouts)" value={pnlE6.toString()} />
         </div>
       ) : (

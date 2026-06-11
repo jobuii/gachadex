@@ -10,8 +10,8 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 const { Keypair } = await import('@solana/web3.js');
 const { initDb } = await import('../db/init.ts');
 const { getDb, closeDb } = await import('../db/client.ts');
-const { getOrCreateSystemAccount, getBalance } = await import('./ledger.ts');
-const { treasuryPass, withdrawalsFrozen, unfreezeWithdrawals, customerFunds } = await import('./custody/treasury.ts');
+const { getOrCreateSystemAccount, getBalance, postTxn } = await import('./ledger.ts');
+const { treasuryPass, treasuryState, withdrawalsFrozen, unfreezeWithdrawals, customerFunds } = await import('./custody/treasury.ts');
 const { requestWithdrawal, processWithdrawal, processAllRequested } = await import('./custody/withdrawals.ts');
 const { reconcile } = await import('./reconcile.ts');
 const { usdc } = await import('../money.ts');
@@ -145,6 +145,25 @@ test('customerFunds aggregates customer free collateral (delta-checked, isolated
   const after = await customerFunds(db);
   assert.equal(after.freeE6 - before.freeE6, usdc(100)); // exactly the new free collateral, nothing else moved
   assert.ok(after.lockedE6 >= 0n); // locked margin aggregates by the same query path (filled by the engine)
+});
+
+test('treasuryState surfaces accumulated platform fee revenue (FEE_REVENUE), delta-checked', async () => {
+  const chain = fakeTreasury({ hot: usdc(1_000_000_000) }); // chain balances are irrelevant to fee revenue
+  const before = await treasuryState(db, chain);
+  // the house's share of a trading fee lands in FEE_REVENUE (the LP share goes to LP_POOL elsewhere)
+  await db.tx(async (q) => {
+    const rev = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
+    const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
+    await postTxn(q, {
+      reason: 'OPEN_FEE',
+      entries: [
+        { accountId: treasury, amount: -usdc(3) },
+        { accountId: rev, amount: usdc(3) },
+      ],
+    });
+  });
+  const after = await treasuryState(db, chain);
+  assert.equal(after.feeRevenueE6 - before.feeRevenueE6, usdc(3)); // exactly the fee that hit FEE_REVENUE
 });
 
 test('pending payouts are reserved in the float target, and a shortfall is reported', async () => {
