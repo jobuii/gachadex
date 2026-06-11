@@ -51,6 +51,9 @@ export const MarketSchema = z.object({
   tradeable: z.boolean(),
   maxLeverage: z.number().int().positive().max(MAX_LEVERAGE),
   maintMarginBps: z.number().int().positive(),
+  // effective trading fee (bps of notional, charged on open + close) — so clients preview the
+  // real fee + required balance instead of guessing (the live value, operator-overridable).
+  feeBps: z.number().int().nonnegative().optional(),
   // latest market data (micro-unit strings)
   markE6: MicroStr.optional(),
   indexE6: MicroStr.optional(),
@@ -88,6 +91,11 @@ export const OrderRequest = z.object({
   qtyE6: MicroStr,
   leverage: z.number().int().positive().max(MAX_LEVERAGE),
   kind: z.enum(ORDER_KINDS).default('market'),
+  // slippage guard (optional): the worst acceptable fill price, micro-USD (non-negative — a negative
+  // bound would silently disable the guard). A long fills only if the mark is <= this; a short fills
+  // only if the mark is >= this. Bounds the gap between an agent's preview mark and the actual fill
+  // (the engine rejects with code 'slippage_exceeded').
+  limitPriceE6: z.string().regex(/^\d+$/, 'expected a non-negative micro-unit string').optional(),
   idempotencyKey: z.string().min(8),
 });
 
@@ -178,6 +186,22 @@ export const VerifyRequest = z.object({
   pubkey: z.string().min(32),
   message: z.string(),
   signature: z.string(), // base58
+});
+
+// --- delegated trading keys (docs/cli-spec.md Part 1) -------------------------
+// The master wallet (already authenticated) authorizes a fresh delegate pubkey to trade. Get the
+// challenge from /auth/delegate/nonce, sign it with the MASTER key, submit to /auth/delegate.
+// label: printable ASCII only (no newlines — they could forge message lines). expiresAt: ISO-8601
+// UTC, future, server-capped at DELEGATE_MAX_TTL.
+const DelegateLabel = z.string().regex(/^[\x20-\x7E]{0,64}$/, 'label: printable ASCII, max 64, no newlines');
+export const DelegateNonceRequest = z.object({
+  delegatePubkey: z.string().min(32).max(64),
+  label: DelegateLabel.optional(),
+  expiresAt: z.string().datetime().optional(),
+});
+export const DelegateCreateRequest = DelegateNonceRequest.extend({
+  message: z.string(), // the signed delegation message (carries the nonce; server re-renders + verifies)
+  signature: z.string(), // base58 MASTER-wallet signature over `message`
 });
 
 // --- websocket protocol ------------------------------------------------------

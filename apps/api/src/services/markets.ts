@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Db, Queryer } from '../db/client.ts';
 import { usdc } from '../money.ts';
+import { getFeeBps } from './fees.ts';
 
 // Per-side open-interest caps (risk parameters). Indices are diversified -> deeper books.
 const CARD_OI_CAP = usdc(50_000).toString();
@@ -129,6 +130,7 @@ export interface MarketView {
   tradeable: boolean;
   maxLeverage: number;
   maintMarginBps: number;
+  feeBps: number;
   qtyStepE6: string;
   minQtyE6: string;
   markE6: string | null;
@@ -196,6 +198,7 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
       tradeable: m.tradeable,
       maxLeverage: Math.round(m.max_leverage_e2 / 100),
       maintMarginBps: m.maint_margin_bps,
+      feeBps: getFeeBps(), // live trading fee (same global knob for every market); lets clients preview the real fee
       qtyStepE6: m.qty_step_e6,
       minQtyE6: m.min_qty_e6,
       markE6: l?.mark_e6 ?? null,

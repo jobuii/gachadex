@@ -5,4 +5,7 @@
  *   app.post('/auth/nonce', rl(config.routeRateLimits.authNonce), handler)            // public
  *   app.post('/faucet', rl(config.routeRateLimits.faucet, { preHandler: authenticate }), handler)
  */
-export const rl = (max: number, rest: object = {}) => ({ ...rest, config: { rateLimit: { max } } });
+export const rl = (max: number, rest: object = {}) => ({
+  ...rest,
+  config: { ...(rest as { config?: object }).config, rateLimit: { max } },
+});

@@ -51,6 +51,8 @@ export const config = {
     referralCode: num('RL_REFERRAL_CODE', 15), // the "taken?" pre-check is an enumeration oracle
     withdraw: num('RL_WITHDRAW', 10),
     withdrawNonce: num('RL_WITHDRAW_NONCE', 20),
+    delegateNonce: num('RL_DELEGATE_NONCE', 30), // trading-key delegation challenge (mirrors authNonce)
+    delegateVerify: num('RL_DELEGATE_VERIFY', 30), // delegation authorization submit
     admin: num('RL_ADMIN', 30), // operator endpoints (also brute-force defense on the admin key)
   },
 
@@ -64,6 +66,10 @@ export const config = {
   accessTtlSec: num('ACCESS_TTL_SEC', 15 * 60),
   refreshTtlSec: num('REFRESH_TTL_SEC', 7 * 24 * 60 * 60),
   authDomain: process.env.AUTH_DOMAIN ?? 'localhost',
+  // Delegated trading keys (docs/cli-spec.md Part 1). Cap active keys per account and bound their
+  // validity (dYdX/Hyperliquid bound agent-key lifetime rather than allowing "never").
+  maxDelegatedKeys: num('MAX_DELEGATED_KEYS', 4),
+  delegateMaxTtlMs: num('DELEGATE_MAX_TTL_DAYS', 180) * 24 * 60 * 60 * 1000,
 
   // Price source (server-side only)
   pokemontcgApiKey: process.env.POKEMONTCG_API_KEY ?? '', // optional; keyless works
