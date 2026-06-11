@@ -8,6 +8,7 @@ import * as api from '../lib/api.js';
  * eBay sold listings), and pins it so the automated feed won't overwrite it until unpinned.
  */
 const KEY_STORE = 'gachadex_admin_key';
+const MIN_KEY_LEN = 32; // ADMIN_API_KEY floor — mirrors the server's length requirement (config.ts)
 
 // Live-tunable custody limits surfaced in the panel: [key, label, unit].
 const LIMIT_FIELDS = [
@@ -32,6 +33,10 @@ function Stat({ label, value }) {
 
 export function AdminPanel() {
   const [adminKey, setAdminKey] = useState(() => localStorage.getItem(KEY_STORE) || '');
+  // Access gate: nothing in the panel renders or fetches until the key is verified by the server.
+  const [authed, setAuthed] = useState(false);
+  const [checking, setChecking] = useState(() => (localStorage.getItem(KEY_STORE) || '').trim().length >= MIN_KEY_LEN);
+  const [verifying, setVerifying] = useState(false);
   const [markets, setMarkets] = useState([]);
   const [drafts, setDrafts] = useState({}); // marketId -> price string (USD)
   const [filter, setFilter] = useState('');
@@ -46,6 +51,26 @@ export function AdminPanel() {
   const [custodyLimits, setCustodyLimits] = useState(null); // { current, defaults } | null (real-funds only)
   const [limitDrafts, setLimitDrafts] = useState({}); // limit key -> string
 
+  // Validate the key against a key-gated endpoint (GET /admin/insurance — registered whenever an admin
+  // key is set, in either mode; adminGet throws on any non-2xx). A 200 is the only thing that unlocks.
+  const verifyKey = useCallback(async (key) => {
+    const k = (key ?? '').trim();
+    if (k.length < MIN_KEY_LEN) return false;
+    try {
+      await api.adminGetInsurance(k);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  // On mount, silently re-check a key already saved on this device (no flash of the unlock form).
+  useEffect(() => {
+    verifyKey(localStorage.getItem(KEY_STORE) || '')
+      .then((ok) => setAuthed(ok))
+      .finally(() => setChecking(false));
+  }, [verifyKey]);
+
   const load = useCallback(async () => {
     try {
       const { markets: m } = await api.getMarkets();
@@ -54,45 +79,70 @@ export function AdminPanel() {
       setErr(e.message);
     }
   }, []);
+  // Nothing fetches until unlocked — markets + operator data load only once authed.
   useEffect(() => {
+    if (!authed) return;
     load();
     const t = setInterval(load, 15_000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [authed, load]);
 
-  // Operator endpoints (treasury + insurance). Only fire once the key looks complete (>=32 chars),
-  // so we don't 401 on every keystroke. /admin/treasury is real-funds-only — fall back to the bare
-  // insurance balance in play-money mode.
+  // Operator endpoints (treasury + insurance). /admin/treasury is real-funds-only — fall back to the
+  // bare insurance balance in play-money mode.
   const loadOps = useCallback(async () => {
-    if (adminKey.trim().length < 32) return;
+    if (!authed) return;
+    const key = adminKey.trim();
     try {
-      const t = await api.adminGetTreasury(adminKey.trim());
+      const t = await api.adminGetTreasury(key);
       setTreasury(t);
       setInsuranceE6(t.insuranceE6);
     } catch {
       setTreasury(null);
       try {
-        setInsuranceE6((await api.adminGetInsurance(adminKey.trim())).insuranceUusdc);
+        setInsuranceE6((await api.adminGetInsurance(key)).insuranceUusdc);
       } catch {
-        /* key not valid yet */
+        /* endpoint unavailable in this mode */
       }
     }
     // Custody limits are real-funds-only (same gate as treasury); null in play-money.
     try {
-      setCustodyLimits(await api.adminGetCustodyLimits(adminKey.trim()));
+      setCustodyLimits(await api.adminGetCustodyLimits(key));
     } catch {
       setCustodyLimits(null);
     }
-  }, [adminKey]);
+  }, [authed, adminKey]);
   useEffect(() => {
     loadOps();
   }, [loadOps]);
 
-  const saveKey = () => {
-    localStorage.setItem(KEY_STORE, adminKey.trim());
-    setMsg('Admin key saved on this device.');
+  // Unlock: verify the entered key against the server; persist + reveal the panel only on success.
+  const unlock = async () => {
     setErr(null);
-    loadOps();
+    setMsg(null);
+    setVerifying(true);
+    try {
+      if (await verifyKey(adminKey)) {
+        localStorage.setItem(KEY_STORE, adminKey.trim());
+        setAuthed(true);
+      } else {
+        setErr('Invalid admin key — access denied.');
+      }
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  // Lock: forget the key on this device and re-gate everything.
+  const lock = () => {
+    localStorage.removeItem(KEY_STORE);
+    setAdminKey('');
+    setAuthed(false);
+    setMarkets([]);
+    setTreasury(null);
+    setInsuranceE6(null);
+    setCustodyLimits(null);
+    setMsg(null);
+    setErr(null);
   };
 
   // Save any edited custody limits (blank fields are left unchanged).
@@ -190,6 +240,45 @@ export function AdminPanel() {
     (m) => !q || m.symbol.toLowerCase().includes(q) || (m.displayName || '').toLowerCase().includes(q),
   );
 
+  // Verifying a saved key on mount — render nothing operational until we know it's valid.
+  if (checking) {
+    return (
+      <div className="page admin-panel">
+        <h2>Operator</h2>
+        <p className="ref-blurb">Verifying access…</p>
+      </div>
+    );
+  }
+
+  // Locked: the ONLY thing rendered until a valid key is entered. No data is fetched behind this.
+  if (!authed) {
+    return (
+      <div className="page admin-panel">
+        <h2>Operator</h2>
+        <p className="ref-blurb">
+          Restricted area. Enter your <code>ADMIN_API_KEY</code> to continue — nothing on this page loads until
+          the key is verified by the server. It's stored only on this device.
+        </p>
+        <div style={{ display: 'flex', gap: '0.5rem', margin: '0.75rem 0', maxWidth: 520 }}>
+          <input
+            className="wallet-input"
+            type="password"
+            placeholder="ADMIN_API_KEY"
+            value={adminKey}
+            onChange={(e) => setAdminKey(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && !verifying && unlock()}
+            autoFocus
+            style={{ flex: 1 }}
+          />
+          <button className="btn-primary" disabled={verifying} onClick={unlock}>
+            {verifying ? 'Verifying…' : 'Unlock'}
+          </button>
+        </div>
+        {err && <div className="order-error">{err}</div>}
+      </div>
+    );
+  }
+
   return (
     <div className="page admin-panel">
       <h2>Operator</h2>
@@ -197,16 +286,9 @@ export function AdminPanel() {
         Operator-only tools. Authenticated with your <code>ADMIN_API_KEY</code>; it never leaves this device.
       </p>
 
-      <div style={{ display: 'flex', gap: '0.5rem', margin: '0.5rem 0', maxWidth: 520 }}>
-        <input
-          className="wallet-input"
-          type="password"
-          placeholder="ADMIN_API_KEY"
-          value={adminKey}
-          onChange={(e) => setAdminKey(e.target.value)}
-          style={{ flex: 1 }}
-        />
-        <button className="btn-secondary" onClick={saveKey}>Save key</button>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.5rem 0' }}>
+        <span className="muted" style={{ fontSize: '0.85rem' }}>🔓 Unlocked on this device.</span>
+        <button className="btn-ghost sm" onClick={lock}>Lock</button>
       </div>
 
       {msg && <div className="ref-msg up">{msg}</div>}
