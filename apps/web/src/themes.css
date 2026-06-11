@@ -65,8 +65,9 @@
 :root:not([data-theme="arcade"]) body { image-rendering: auto; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 :root:not([data-theme="arcade"]) img { image-rendering: auto; }
 /* Press Start 2P fills the em; modern fonts render smaller at the same rem, so scale the root
-   up so text stays readable. Per-skin via --root-fs (Press Start needs ~1.5x). Retro stays 16px. */
-:root:not([data-theme="arcade"]) { font-size: var(--root-fs, 19px); }
+   up so text stays readable. Per-skin via --root-fs (Press Start needs ~1.5x). Retro stays 16px.
+   --fs-scale is a context multiplier (mobile.css sets it < 1 on small screens). */
+:root:not([data-theme="arcade"]) { font-size: calc(var(--root-fs, 19px) * var(--fs-scale, 1)); }
 /* the brand's hard pixel text-shadow only reads on the pixel font */
 :root:not([data-theme="arcade"]) .nav-brand { text-shadow: none; letter-spacing: 0.5px; }
 

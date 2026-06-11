@@ -1,0 +1,173 @@
+/* ===========================================================================
+ * GachaDex mobile — every user-facing surface at ≤768px (the admin panel is
+ * deliberately out of scope). Loaded LAST (after index.css + themes.css) so
+ * these rules win over the base layout and the per-skin overrides without
+ * specificity wars. The breakpoint must match MOBILE_QUERY in useMediaQuery.js.
+ *
+ * Layout model on mobile: the app is a single scrolling column — compact top
+ * bar, content, fixed bottom tab bar. The trade screen recomposes (market bar →
+ * chart → order form → history panel) in Exchange.jsx; everything here is the
+ * styling for that flow plus the responsive passes over the other views.
+ * ======================================================================== */
+
+/* the tab bar only exists on mobile */
+.mobile-tabbar { display: none; }
+
+@media (max-width: 768px) {
+  :root {
+    /* non-retro skins read large on small screens (root 20–23px); themes.css multiplies by this */
+    --fs-scale: 0.85;
+    /* one height for every fixed bar (top bar, overlay headers, bottom tab bar) — the
+       content-clearance paddings below derive from it */
+    --m-bar-h: 56px;
+  }
+
+  /* ---- top bar: logo + chat + theme + wallet (links live in the tab bar) ---- */
+  .navbar { padding: 0 0.6rem; height: var(--m-bar-h); gap: 0.4rem; }
+  .nav-links, .nav-social-link { display: none; }
+  .nav-left { gap: 0.55rem; }
+  .nav-brand { gap: 0.4rem; }
+  .nav-brand img { width: 34px; height: 34px; }
+  .nav-brand img.nav-wordmark { display: none; }
+  .chat-toggle { font-size: 0.45rem; padding: 0.45rem 0.5rem; }
+  .nav-actions { gap: 0.4rem; }
+  .theme-trigger { font-size: 0.42rem; padding: 0.4rem 0.45rem; }
+  .navbar .wallet-adapter-button {
+    font-size: 0.45rem !important;
+    padding: 0 0.55rem !important;
+    height: 36px !important;
+    line-height: 36px !important;
+  }
+  .auth-addr { font-size: 0.45rem; padding: 0.3rem 0.4rem; }
+  .auth-pill .btn-ghost { font-size: 0.42rem; padding: 0.4rem 0.45rem; }
+
+  /* ---- bottom tab bar ---- */
+  .mobile-tabbar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 130;
+    display: flex;
+    height: calc(var(--m-bar-h) + env(safe-area-inset-bottom));
+    background: var(--bg-2);
+    border-top: 3px solid var(--accent);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mobile-tab {
+    flex: 1;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    background: none; border: none;
+    color: var(--text-muted);
+    font-family: var(--font-base); font-size: 0.4rem; letter-spacing: 0.5px;
+    padding: 0;
+    cursor: pointer;
+  }
+  .mobile-tab .mt-ico { font-size: 0.85rem; line-height: 1; }
+  .mobile-tab.active { color: var(--gold); }
+  /* modern fonts read smaller than the pixel face at the same rem — floor the labels
+     (same convention as the readability floors in themes.css) */
+  :root:not([data-theme='arcade']) .mobile-tab { font-size: 0.5rem; }
+
+  /* content never hides behind the fixed tab bar */
+  .app-container { padding-bottom: calc(var(--m-bar-h) + env(safe-area-inset-bottom)); }
+
+  /* ---- chat: full-screen overlay instead of a content-pushing rail ---- */
+  .app-container.chat-open { padding-left: 0; }
+  .lp-chat-open { padding-left: 0; }
+  .chat-sidebar { width: 100%; z-index: 160; border-right: none; }
+  .chat-header { height: var(--m-bar-h); } /* also the markets drawer head (same chrome) */
+  .chat-collapse { font-size: 0.8rem; padding: 0.5rem; }
+
+  /* ---- trade screen (single column, composed in Exchange.jsx) ---- */
+  .mkt-bar {
+    display: flex; align-items: center; gap: 0.6rem;
+    width: 100%;
+    background: var(--bg-2);
+    border: none; border-bottom: 2px solid var(--accent);
+    padding: 0.55rem 0.8rem;
+    font-family: var(--font-base);
+    color: var(--text);
+    cursor: pointer;
+    text-align: left;
+  }
+  .mkt-bar-thumb { width: 26px; height: 36px; object-fit: contain; flex-shrink: 0; }
+  .mkt-bar-name {
+    flex: 1; min-width: 0;
+    font-size: 0.55rem; color: var(--gold);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .mkt-bar-price { font-size: 0.55rem; flex-shrink: 0; }
+  .mkt-bar-caret { color: var(--text-muted); font-size: 0.6rem; flex-shrink: 0; }
+
+  .trade-mobile .trading-center { height: auto; border-right: none; }
+  .trade-mobile .chart-wrap { flex: none; height: 38vh; }
+  .trade-mobile .card-header-bar { padding: 0.6rem 0.8rem; }
+  .trade-mobile .card-header-stats { gap: 0.9rem; width: 100%; justify-content: space-between; }
+
+  .trade-mobile .order-panel { height: auto; overflow: visible; border-top: 2px solid var(--border); }
+  /* compact horizontal card preview (the full-height art is a desktop luxury) */
+  .trade-mobile .card-preview { flex-direction: row; justify-content: flex-start; padding: 0.7rem 0.9rem; gap: 0.8rem; }
+  .trade-mobile .preview-img { max-height: 84px; }
+  .trade-mobile .preview-index { padding: 0.6rem; }
+  .trade-mobile .preview-label { text-align: left; }
+
+  /* history panel flows with the page; its tables scroll inside */
+  .trade-mobile .bottom-panel { height: auto; }
+  .trade-mobile .bottom-content { max-height: 55vh; min-height: 140px; overflow: auto; }
+  .bottom-tabs { overflow-x: auto; }
+  .bottom-tab-btn { white-space: nowrap; flex-shrink: 0; }
+
+  /* ---- full-screen markets drawer (slides from the left) ---- */
+  .mobile-markets-drawer {
+    position: fixed; inset: 0; z-index: 150;
+    display: flex; flex-direction: column;
+    background: var(--bg-2);
+    transform: translateX(-100%);
+    /* visibility flips only after the slide-out finishes, so the close animates too */
+    transition: transform 0.25s ease, visibility 0s linear 0.25s;
+    visibility: hidden;
+  }
+  .mobile-markets-drawer.open { transform: translateX(0); visibility: visible; }
+  .mobile-markets-drawer .sidebar { flex: 1; min-height: 0; height: auto; border-right: none; }
+  .mobile-markets-drawer .sidebar-header { display: none; } /* the drawer's chat-header replaces it */
+  .mobile-markets-drawer .market-item { padding: 0.75rem; } /* comfortable touch targets */
+
+  /* ---- full-page views ---- */
+  .page { padding: 1rem 0.8rem; }
+
+  /* wide tables scroll sideways instead of blowing out the page */
+  .page .positions-table,
+  .page .hist-table,
+  .wallet-panel .positions-table {
+    display: block; overflow-x: auto;
+  }
+  .page .positions-table td, .page .positions-table th { white-space: nowrap; }
+
+  /* leaderboard: rank + trader + PnL (equity/volume are desktop detail) */
+  .lb-row { grid-template-columns: 2.4rem minmax(5rem, 1fr) auto; padding: 0.6rem 0.7rem; }
+  .lb-equity, .lb-volume { display: none; }
+
+  /* referral / wallet panels stack their fields */
+  .ref-code-box { flex-direction: column; }
+  .ref-field { min-width: 0; }
+
+  /* ---- marketplace binder: 2-up, no spine, overlay always visible (no hover on touch) ---- */
+  .marketplace-view { justify-content: flex-start; overflow: visible; }
+  .binder-chrome { padding: 0.9rem; gap: 0.9rem; }
+  .binder-controls { flex-wrap: wrap; gap: 0.6rem; }
+  .binder-controls input { width: 100%; order: -1; }
+  .binder-nav-btn { flex: 1; }
+  .binder-book::before { display: none; }
+  .binder-page { grid-template-columns: repeat(2, 1fr); padding: 0.9rem; gap: 0.7rem; }
+  .binder-slot-overlay {
+    opacity: 1;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.88) 0%, transparent 45%);
+  }
+
+  /* ---- overlays ---- */
+  .modal-content { max-width: 94vw; padding: 1rem; }
+  .toasts { left: 0.75rem; right: 0.75rem; bottom: calc(var(--m-bar-h) + 8px + env(safe-area-inset-bottom)); }
+  .toast { font-size: 0.5rem; }
+
+  /* Hard floor: iOS Safari auto-zooms focused inputs under 16px. !important because the
+     per-skin input rules in themes.css carry higher specificity than any flat selector here,
+     and the floor must hold across every skin. */
+  input[type='text'], input[type='number'] { font-size: 16px !important; }
+}

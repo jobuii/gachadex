@@ -1,6 +1,20 @@
 import { create } from 'zustand';
 import { ensureConnected, subscribe, onMessage } from '../lib/ws.js';
+import { MOBILE_QUERY } from '../lib/useMediaQuery.js';
 import * as api from '../lib/api.js';
+
+// Open-state for the chat rail (Landing + Exchange): a remembered preference on desktop;
+// on mobile the rail is a full-screen overlay that always starts closed, and toggling it
+// there must not clobber the desktop preference — so the key is only read AND written
+// off-mobile.
+export const initialChatOpen = () =>
+  localStorage.getItem('gachadex_chat_open') !== '0' && !window.matchMedia(MOBILE_QUERY).matches;
+
+export const persistChatOpen = (open) => {
+  if (!window.matchMedia(MOBILE_QUERY).matches) {
+    localStorage.setItem('gachadex_chat_open', open ? '1' : '0');
+  }
+};
 
 /**
  * Global chat store, shared by the chat rail (renders messages) and the navbar toggle (shows the

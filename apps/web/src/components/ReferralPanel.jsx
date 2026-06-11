@@ -75,6 +75,7 @@ export function ReferralPanel({ onRedeemed }) {
             <div className="ref-field">
               <span className="ref-label">YOUR CODE</span>
               <input
+                type="text"
                 className="ref-code-input"
                 value={newCode}
                 maxLength={20}

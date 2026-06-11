@@ -256,8 +256,18 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 }
 
 .sidebar.collapsed .sidebar-header {
-  justify-content: center !important;
+  justify-content: center;
 }
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  flex-shrink: 0;
+}
+.sidebar-header span { font-size: 0.6rem; color: var(--text); }
+.collapse-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; }
 
 .sidebar.collapsed .market-index {
   display: none;

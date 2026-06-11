@@ -3,6 +3,7 @@ import { createChart, ColorType, AreaSeries } from 'lightweight-charts';
 import { formatUsd, formatPct } from '@pokex/pricing';
 import { useRealtime } from '../store/realtime';
 import { BottomPanel } from './BottomPanel';
+import { MarketThumb } from './MarketThumb';
 import * as api from '../lib/api.js';
 
 const TIMEFRAMES = ['1D', '1W', '1M', '3M', '1Y'];
@@ -22,13 +23,16 @@ const CHART_MIN = 150; // never starve the chart below this
 const CHART_CHROME = 190; // fixed height above the panel: navbar + card header + timeframe bar + resizer
 const clampPanel = (h) => Math.min(Math.max(h, PANEL_MIN), Math.max(PANEL_MIN + 100, window.innerHeight - CHART_CHROME - CHART_MIN));
 
-export function TradingView({ market }) {
+// `mobile` renders chart-only: the page owns the BottomPanel (placed after the order form in the
+// single-column flow) and there's no draggable splitter — the layout scrolls instead.
+export function TradingView({ market, mobile = false }) {
   const elRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
   const [tf, setTf] = useState('1M');
   const [noData, setNoData] = useState(false);
-  const [panelHeight, setPanelHeight] = useState(() => clampPanel(Number(localStorage.getItem('gachadex_panel_h')) || 210));
+  // splitter state is desktop-only; on mobile the panel isn't rendered here at all
+  const [panelHeight, setPanelHeight] = useState(() => (mobile ? 0 : clampPanel(Number(localStorage.getItem('gachadex_panel_h')) || 210)));
   const [dragging, setDragging] = useState(false);
 
   const marks = useRealtime((s) => s.marks);
@@ -110,15 +114,16 @@ export function TradingView({ market }) {
     }
   }, [liveMark, market?.id, tf]);
 
-  // persist the panel height + re-clamp it if the window shrinks
+  // persist the panel height + re-clamp it if the window shrinks (desktop-only machinery)
   useEffect(() => {
-    localStorage.setItem('gachadex_panel_h', String(panelHeight));
-  }, [panelHeight]);
+    if (!mobile) localStorage.setItem('gachadex_panel_h', String(panelHeight));
+  }, [panelHeight, mobile]);
   useEffect(() => {
+    if (mobile) return undefined;
     const onResize = () => setPanelHeight((h) => clampPanel(h));
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, []);
+  }, [mobile]);
 
   // drag the splitter: dragging up grows the panel and shrinks the chart (which refits via its
   // ResizeObserver). The listeners live in an effect so they're torn down even if we unmount mid-drag.
@@ -150,17 +155,16 @@ export function TradingView({ market }) {
   return (
     <div className="trading-center">
       <div className="card-header-bar">
-        <div className="card-header-left">
-          {market?.imageSmall ? (
-            <img src={market.imageSmall} alt="" className="header-card-thumb" />
-          ) : (
-            <span className="header-card-thumb idx-thumb">{market?.kind === 'index' ? 'IDX' : '—'}</span>
-          )}
-          <div className="card-header-meta">
-            <div className="card-header-name">{market?.displayName ?? 'Select a market'}</div>
-            <div className="card-header-set">{market ? (market.kind === 'index' ? 'GachaDex Index' : market.symbol) : ''}</div>
+        {/* on mobile the market bar above already names the market */}
+        {!mobile && (
+          <div className="card-header-left">
+            <MarketThumb market={market} className="header-card-thumb" />
+            <div className="card-header-meta">
+              <div className="card-header-name">{market?.displayName ?? 'Select a market'}</div>
+              <div className="card-header-set">{market ? (market.kind === 'index' ? 'GachaDex Index' : market.symbol) : ''}</div>
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="card-header-stats">
           <div className="stat-block">
@@ -196,8 +200,12 @@ export function TradingView({ market }) {
         {noData && <div className="chart-empty">No price history yet — it builds as prices update and the market trades.</div>}
       </div>
 
-      <div className="panel-resizer" onMouseDown={startResize} title="Drag to resize" />
-      <BottomPanel market={market} height={panelHeight} />
+      {!mobile && (
+        <>
+          <div className="panel-resizer" onMouseDown={startResize} title="Drag to resize" />
+          <BottomPanel market={market} height={panelHeight} />
+        </>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChatSidebar } from './ChatSidebar';
-import { useChat } from '../store/chat';
+import { useChat, initialChatOpen, persistChatOpen } from '../store/chat';
 import '../landing.css';
 
 const CYCLE = ['LONG', 'SHORT', 'LONG', 'SHORT']; // hero word swap (gold)
@@ -44,11 +44,11 @@ const SOCIALS = [
 export function Landing() {
   const navigate = useNavigate();
   const unread = useChat((s) => s.unread);
-  const [chatOpen, setChatOpen] = useState(() => localStorage.getItem('gachadex_chat_open') !== '0');
+  const [chatOpen, setChatOpen] = useState(initialChatOpen);
   const onToggleChat = () =>
     setChatOpen((o) => {
       const next = !o;
-      localStorage.setItem('gachadex_chat_open', next ? '1' : '0');
+      persistChatOpen(next);
       return next;
     });
   const [w, setW] = useState(0);

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { formatUsd } from '@pokex/pricing';
-import { useRealtime } from '../store/realtime';
+import { useRealtime, liveMarkE6 } from '../store/realtime';
 
 const TABS = ['indices', 'cards'];
 
@@ -31,7 +31,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, collapsed
   const marks = useRealtime((s) => s.marks);
 
   const activeGame = GAMES.find((g) => g.id === game) ?? GAMES[0];
-  const livePrice = (m) => marks[m.id]?.markE6 ?? m.markE6;
+  const livePrice = (m) => liveMarkE6(marks, m);
   // the dot switcher scopes both tabs; treat untagged markets as Pokémon (backend is Pokémon-only for now)
   const inGame = (m) => (m.game ?? 'pokemon') === game;
   const cards = markets.filter((m) => m.kind === 'card' && inGame(m));
@@ -43,9 +43,9 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, collapsed
 
   return (
     <div className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
-      <div className="sidebar-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem' }}>
-        <span style={{ fontSize: '0.6rem', color: 'var(--text)' }}>Markets</span>
-        <button className="collapse-btn" onClick={() => setCollapsed(!collapsed)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
+      <div className="sidebar-header">
+        <span>Markets</span>
+        <button className="collapse-btn" onClick={() => setCollapsed(!collapsed)}>
           {collapsed ? '▶' : '◀'}
         </button>
       </div>

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import './index.css';
 import './themes.css';
+import './mobile.css'; /* last: mobile overrides must win over base + skins */
 import { initialSkin } from './store/theme';
 
 document.documentElement.setAttribute('data-theme', initialSkin());

@@ -3,19 +3,22 @@ import { AuthButton } from './AuthButton';
 import { ThemePicker } from './ThemePicker';
 import { useChat } from '../store/chat';
 
-const NAV = [
-  ['home', 'Home'],
-  ['trade', 'Exchange'],
-  ['markets', 'Markets'],
-  ['pool', 'Pool'],
-  ['leaderboard', 'Leaderboard'],
-  ['portfolio', 'Portfolio'],
+// One list drives both bars: desktop nav links use `label`; the mobile bottom tab bar uses
+// `icon` + `short` (views without an icon — Home, which lives on the logo — get no tab).
+const VIEWS = [
+  { id: 'home', label: 'Home' },
+  { id: 'trade', label: 'Exchange', icon: '📈', short: 'Trade' },
+  { id: 'markets', label: 'Markets', icon: '🎴', short: 'Markets' },
+  { id: 'pool', label: 'Pool', icon: '💧', short: 'Pool' },
+  { id: 'leaderboard', label: 'Leaderboard', icon: '🏆', short: 'Ranks' },
+  { id: 'portfolio', label: 'Portfolio', icon: '👤', short: 'Folio' },
 ];
 
 export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat }) {
   const unread = useChat((s) => s.unread);
   const navigate = useNavigate();
   return (
+    <>
     <nav className="navbar">
       <div className="nav-left">
         <button type="button" className="nav-brand" onClick={() => navigate('/')} title="Back to home">
@@ -33,11 +36,11 @@ export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat }) {
       </div>
 
       <div className="nav-links">
-        {NAV.map(([v, label]) => (
+        {VIEWS.map(({ id, label }) => (
           <button
-            key={v}
-            className={`nav-link ${activeView === v ? 'active' : ''}`}
-            onClick={() => (v === 'home' ? navigate('/') : setActiveView(v))}
+            key={id}
+            className={`nav-link ${activeView === id ? 'active' : ''}`}
+            onClick={() => (id === 'home' ? navigate('/') : setActiveView(id))}
           >
             {label}
           </button>
@@ -61,5 +64,20 @@ export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat }) {
         <AuthButton />
       </div>
     </nav>
+
+    {/* mobile-only bottom tab bar (display:none on desktop, see mobile.css) */}
+    <nav className="mobile-tabbar" aria-label="Primary">
+      {VIEWS.filter((v) => v.icon).map(({ id, icon, short }) => (
+        <button
+          key={id}
+          className={`mobile-tab ${activeView === id ? 'active' : ''}`}
+          onClick={() => setActiveView(id)}
+        >
+          <span className="mt-ico" aria-hidden="true">{icon}</span>
+          {short}
+        </button>
+      ))}
+    </nav>
+    </>
   );
 }

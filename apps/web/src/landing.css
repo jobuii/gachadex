@@ -185,12 +185,35 @@
 .lp-foot-social a svg { width: 18px; height: 18px; }
 .lp-foot-social a:hover { color: var(--gold); }
 
-/* ---- responsive ------------------------------------------------------------ */
-@media (max-width: 760px) {
+/* ---- responsive (breakpoint matches the app's mobile.css) ------------------ */
+@media (max-width: 768px) {
   .lp-hero { grid-template-columns: 1fr; text-align: center; }
   .lp-hero-copy { order: 2; }
   .lp-screen { order: 1; }
   .lp-cta-row, .lp-kicker, .lp-sub { justify-content: center; margin-left: auto; margin-right: auto; }
   .lp-steps, .lp-features { grid-template-columns: 1fr; }
-  .lp-nav-links a:not(:last-child) { display: none; }
+  /* nav: logo + chat + ENTER only — section anchors & socials live on the page itself */
+  .lp-nav-links a { display: none; }
+  .lp-logo { height: 32px; }
+  .lp-wordmark { height: 18px; }
+
+  /* hero card fan: smaller cards, tighter fan, clear of the copy */
+  .lp-hero-art { padding: 1.8rem 0 2.4rem; }
+  .lp-card { width: 72px; }
+  .lp-card-a { left: 2%; }
+  .lp-card-b { right: 2%; }
+
+  /* big CTAs fit side by side or wrap cleanly */
+  .lp-btn-lg { padding: 0.9rem 1.1rem; font-size: 0.66rem; }
+
+  .lp-ticker-item { font-size: 0.62rem; padding: 0.55rem 0; }
+  .lp-spark { margin: 0 0.9rem; }
+
+  .lp-ca { gap: 0.55rem; }
+  .lp-ca-addr { font-size: 0.66rem; padding: 0.5rem 0.6rem; }
+
+  .lp-feature { padding: 1rem; gap: 0.8rem; }
+  .lp-feature-icon { width: 40px; height: 40px; font-size: 1.25rem; }
+
+  .lp-footer { flex-direction: column; align-items: flex-start; }
 }
