@@ -1261,16 +1261,15 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
   color: var(--text); font-size: 1.15rem; font-weight: 700; line-height: 1.1;
   font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
 }
-.admin-stat.pnl-up { border-color: rgba(63, 185, 80, 0.45); }
-.admin-stat.pnl-up .val { color: #3fb950; }
-.admin-stat.pnl-down { border-color: rgba(231, 76, 60, 0.5); }
-.admin-stat.pnl-down .val { color: var(--accent-lit); }
+.admin-stat.pnl-up { border-color: color-mix(in srgb, var(--success) 50%, var(--border)); }
+.admin-stat.pnl-up .val { color: var(--success); }
+.admin-stat.pnl-down { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
+.admin-stat.pnl-down .val { color: var(--danger); }
 
-/* readable tables + inputs inside the panel */
+/* readable tables + inputs inside the panel (th inherits the table's --ops-font) */
 .admin-panel .hist-table { font-family: var(--ops-font); font-size: 0.8rem; }
 .admin-panel .hist-table th {
-  font-family: var(--ops-font); font-size: 0.66rem; letter-spacing: 0.03em;
-  color: var(--text-muted);
+  font-size: 0.66rem; letter-spacing: 0.03em; color: var(--text-muted);
 }
 .admin-panel .hist-table td { padding: 0.5rem 0.7rem; }
 .admin-panel .wallet-input { font-family: var(--ops-font); font-size: 0.82rem; }

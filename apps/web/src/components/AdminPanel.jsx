@@ -419,7 +419,7 @@ export function AdminPanel() {
       <h3 style={{ marginTop: '1.25rem' }}>Withdrawals queue</h3>
       <p className="ref-blurb">
         Pending withdrawals awaiting approval.{' '}
-        <span style={{ color: '#3fb950' }}>Green</span> rows go to the user's own sign-in wallet (lower risk).
+        <span style={{ color: 'var(--success)' }}>Green</span> rows go to the user's own sign-in wallet (lower risk).
         Approve signs + broadcasts the payout; reverse re-credits a row that never paid out.
       </p>
       {treasury ? (
@@ -434,11 +434,11 @@ export function AdminPanel() {
             {withdrawals.map((w) => {
               const self = w.dest_address && w.dest_address === w.pubkey;
               return (
-                <tr key={w.id} style={self ? { background: 'rgba(63,185,80,0.14)' } : undefined}>
+                <tr key={w.id} style={self ? { background: 'color-mix(in srgb, var(--success) 14%, transparent)' } : undefined}>
                   <td className="muted" title={w.pubkey}>{shortenPubkey(w.pubkey)}</td>
                   <td title={w.dest_address}>
                     {shortenPubkey(w.dest_address)}
-                    {self && <span style={{ color: '#3fb950', marginLeft: 6, fontSize: '0.72rem' }}>● self</span>}
+                    {self && <span style={{ color: 'var(--success)', marginLeft: 6, fontSize: '0.72rem' }}>● self</span>}
                   </td>
                   <td>{formatUsd(BigInt(w.amount_e6))}</td>
                   <td className="muted">{w.requested_at ? new Date(w.requested_at).toLocaleString() : '—'}</td>
