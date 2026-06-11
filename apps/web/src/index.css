@@ -1206,3 +1206,71 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 .wallet-input:focus { border-color: var(--gold); outline: none; }
 .wallet-txs-label { display: block; margin: 1rem 0 0.4rem; }
 .wallet-kind { text-transform: capitalize; }
+
+/* ===== Operator panel: readable, navigable data over the arcade base ===== */
+/* The app font is a pixel display face — great for chrome, unreadable for dense numbers.
+   Inside the operator panel we switch DATA to a tabular monospace and keep pixel for headings. */
+.admin-panel { --ops-font: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace; }
+
+.admin-panel h3 {
+  color: var(--gold);
+  border-left: 4px solid var(--accent);
+  padding-left: 0.6rem;
+  margin-top: 1.8rem;
+}
+.admin-panel .ref-blurb { font-family: var(--ops-font); font-size: 0.74rem; line-height: 1.55; }
+.admin-panel label { font-family: var(--ops-font); }
+
+/* unlocked bar + standout Lock button */
+.admin-unlocked {
+  display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap;
+  background: var(--bg-2); border: 2px solid var(--border);
+  padding: 0.55rem 0.8rem; margin: 0.4rem 0 1.2rem;
+}
+.admin-unlocked .who { color: var(--text-muted); font-family: var(--ops-font); font-size: 0.8rem; }
+.admin-lock-btn {
+  margin-left: auto; cursor: pointer;
+  font-family: var(--ops-font); font-size: 0.8rem; font-weight: 700;
+  letter-spacing: 0.07em; text-transform: uppercase;
+  color: #fff; background: var(--accent);
+  border: 2px solid var(--accent-lit); padding: 0.45rem 1.15rem;
+  box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.4);
+  transition: background 0.12s, transform 0.08s, box-shadow 0.08s;
+}
+.admin-lock-btn:hover { background: var(--accent-lit); }
+.admin-lock-btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 rgba(0, 0, 0, 0.4); }
+
+/* dashboard stat cards — a real grid, no overlap */
+.admin-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 0.7rem;
+  margin: 0.7rem 0 0.4rem;
+}
+.admin-stat {
+  background: var(--bg-3); border: 2px solid var(--border);
+  padding: 0.7rem 0.8rem; min-width: 0;
+  display: flex; flex-direction: column; gap: 0.45rem;
+  font-family: var(--ops-font);
+}
+.admin-stat .lbl {
+  color: var(--text-muted); font-size: 0.66rem; line-height: 1.35;
+  letter-spacing: 0.04em; text-transform: uppercase;
+}
+.admin-stat .val {
+  color: var(--text); font-size: 1.15rem; font-weight: 700; line-height: 1.1;
+  font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+}
+.admin-stat.pnl-up { border-color: rgba(63, 185, 80, 0.45); }
+.admin-stat.pnl-up .val { color: #3fb950; }
+.admin-stat.pnl-down { border-color: rgba(231, 76, 60, 0.5); }
+.admin-stat.pnl-down .val { color: var(--accent-lit); }
+
+/* readable tables + inputs inside the panel */
+.admin-panel .hist-table { font-family: var(--ops-font); font-size: 0.8rem; }
+.admin-panel .hist-table th {
+  font-family: var(--ops-font); font-size: 0.66rem; letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+.admin-panel .hist-table td { padding: 0.5rem 0.7rem; }
+.admin-panel .wallet-input { font-family: var(--ops-font); font-size: 0.82rem; }

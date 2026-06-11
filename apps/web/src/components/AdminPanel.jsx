@@ -24,9 +24,9 @@ const LIMIT_FIELDS = [
 
 function Stat({ label, value }) {
   return (
-    <div className="ins-stat" style={{ minWidth: 130 }}>
-      <div className="muted" style={{ fontSize: '0.72rem' }}>{label}</div>
-      <div style={{ fontWeight: 600 }}>{value != null ? formatUsd(BigInt(value)) : '—'}</div>
+    <div className="admin-stat">
+      <div className="lbl">{label}</div>
+      <div className="val">{value != null ? formatUsd(BigInt(value)) : '—'}</div>
     </div>
   );
 }
@@ -36,11 +36,9 @@ function PnlStat({ label, value }) {
   const v = BigInt(value);
   const neg = v < 0n;
   return (
-    <div className="ins-stat" style={{ minWidth: 130 }}>
-      <div className="muted" style={{ fontSize: '0.72rem' }}>{label}</div>
-      <div style={{ fontWeight: 700, color: neg ? '#e74c3c' : '#3fb950' }}>
-        {neg ? '-' : ''}{formatUsd(neg ? -v : v)}
-      </div>
+    <div className={`admin-stat ${neg ? 'pnl-down' : 'pnl-up'}`}>
+      <div className="lbl">{label}</div>
+      <div className="val">{neg ? '-' : ''}{formatUsd(neg ? -v : v)}</div>
     </div>
   );
 }
@@ -391,9 +389,9 @@ export function AdminPanel() {
         Operator-only tools. Authenticated with your <code>ADMIN_API_KEY</code>; it never leaves this device.
       </p>
 
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.5rem 0' }}>
-        <span className="muted" style={{ fontSize: '0.85rem' }}>🔓 Unlocked on this device.</span>
-        <button className="btn-ghost sm" onClick={lock}>Lock</button>
+      <div className="admin-unlocked">
+        <span className="who">🔓 Unlocked on this device</span>
+        <button className="admin-lock-btn" onClick={lock}>Lock</button>
       </div>
 
       {msg && <div className="ref-msg up">{msg}</div>}
@@ -402,7 +400,7 @@ export function AdminPanel() {
       {/* ---- Overview dashboard ---- */}
       <h3 style={{ marginTop: '1rem' }}>Overview</h3>
       {treasury ? (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', margin: '0.5rem 0' }}>
+        <div className="admin-stats">
           <Stat label="Total treasury (hot + cold)" value={treasury.onchainE6} />
           <Stat label="Hot balance" value={treasury.hotE6} />
           <Stat label="Cold treasury" value={treasury.coldE6} />
