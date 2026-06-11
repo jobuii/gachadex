@@ -17,10 +17,13 @@ import type { CustodyLog } from './deposits.ts';
  * already-signed payouts proceeds (those debits are final and re-broadcast is idempotent).
  * Unfreezing is deliberately manual (`unfreezeWithdrawals`) — a PoR breach is an incident.
  *
- * HOT/COLD FLOAT. The cold treasury is a multisig the server cannot sign for; the hot wallet
- * funds payouts + fees. Each pass sweeps hot-wallet USDC above the float target to cold (the
- * target reserves enough for pending payouts), and flags a shortfall — hot balance below what
- * pending payouts need — for the operator to top up from cold (a manual multisig action).
+ * HOT/COLD FLOAT. Deposits consolidate INTO the hot wallet (see deposits/solana sweepAll), so
+ * incoming deposits self-fund the payout float — the server never has to sign a cold->hot top-up
+ * under normal flow (it can't: cold is a multisig). The hot wallet runs as a BAND: once its balance
+ * reaches the cap (hotWalletMaxUsd), the pass drains it down to the floor (hotWalletFloorPct% of the
+ * cap) by sweeping the excess to cold — but never below what queued payouts need. So hot oscillates
+ * floor..cap. If withdrawals ever outrun deposits and drain hot below pending payouts, a shortfall is
+ * flagged for the operator to top up from cold (the one remaining manual multisig action).
  */
 
 /** Chain-facing surface, injectable for tests (same pattern as DepositChain/WithdrawChain). */
@@ -127,10 +130,15 @@ export async function treasuryPass(db: Db, chain: TreasuryChain, log?: CustodyLo
     log?.error({ onchainE6: s.onchainE6.toString(), liabilityE6: s.liabilityE6.toString() }, reason);
   }
 
-  // --- hot-float management ----------------------------------------------------------------
+  // --- hot-float management (band: fill to cap via deposits, drain to floor) ----------------
   const limits = getLimits();
-  const hotMax = usdc(limits.hotWalletMaxUsd);
-  const excess = s.hotE6 - (s.pendingE6 > hotMax ? s.pendingE6 : hotMax);
+  const cap = usdc(limits.hotWalletMaxUsd);
+  const floor = (cap * BigInt(limits.hotWalletFloorPct)) / 100n;
+  // Drain down to the floor, but never below what queued withdrawals need.
+  const reserve = s.pendingE6 > floor ? s.pendingE6 : floor;
+  // Band trigger: only rebalance once hot reaches the cap, then drain the excess above `reserve` to
+  // cold. The minSweep gate below drops a non-positive amount (e.g. when pending already exceeds hot).
+  const excess = s.hotE6 >= cap ? s.hotE6 - reserve : 0n;
   const sweptE6 = excess >= usdc(limits.minSweepUsd) ? excess : 0n;
   if (sweptE6 > 0n) await chain.sweepToCold(sweptE6);
 

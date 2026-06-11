@@ -56,9 +56,14 @@ curl -s -H "$AUTH" "$API/admin/treasury" | jq
 - **`breached: true`** — on-chain custody < ledger liabilities. The treasury worker will have
   auto-frozen withdrawals (or will within `TREASURY_PASS_MS`). This is an incident: find the
   discrepancy (missed deposit credit? treasury outflow?) before unfreezing.
-- **`shortfallE6 > 0`** — pending payouts exceed the hot wallet. Top up hot from cold
-  (a manual multisig transaction — the server cannot sign for cold) and re-check.
-- Hot-wallet excess above `HOT_WALLET_MAX_USD` is swept to cold automatically each pass.
+- **`shortfallE6 > 0`** — pending payouts exceed the hot wallet. Normally deposits keep the hot
+  float funded; a shortfall means withdrawals outran deposits. Top up hot from cold (a manual
+  multisig transaction — the server cannot sign for cold) and re-check.
+- **Hot float is a band.** Deposits sweep *into* the hot wallet (it funds withdrawals), so the float
+  self-replenishes. Once the hot balance reaches `HOT_WALLET_MAX_USD` (the cap), the pass drains it
+  back down to the floor — `HOT_WALLET_FLOOR_PCT`% of the cap — sweeping the excess to cold (never
+  below queued payouts). So hot oscillates floor..cap and cold→hot top-ups are only needed if
+  withdrawals outrun deposits.
 
 ## Freeze / unfreeze
 
@@ -114,9 +119,11 @@ curl -s -X POST -H "$AUTH" -H 'content-type: application/json' \
   "$API/admin/custody-limits" | jq
 ```
 
-Keys: `hotWalletMaxUsd`, `withdrawalDailyCapUsd`, `withdrawalAutoApproveMaxUsd`, `minWithdrawalUsd`,
-`minDepositUsd`, `minSweepUsd`, `swapSlippageBps`. The admin panel exposes the same fields. A change
-applies on the next worker pass / request and propagates to other API instances within ~30s.
+Keys: `hotWalletMaxUsd`, `hotWalletFloorPct`, `withdrawalDailyCapUsd`, `withdrawalAutoApproveMaxUsd`,
+`minWithdrawalUsd`, `minDepositUsd`, `minSweepUsd`, `swapSlippageBps`. `hotWalletFloorPct` is the
+percent of the cap to leave in hot when draining to cold (e.g. cap 5000 + floor 20 → drain to $1,000,
+sweep the rest). The admin panel exposes the same fields. A change applies on the next worker pass /
+request and propagates to other API instances within ~30s.
 
 ## What can go wrong
 

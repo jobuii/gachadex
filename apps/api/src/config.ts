@@ -140,7 +140,8 @@ export const config = {
   minSweepUsd: num('MIN_SWEEP_USD', 10), // don't pay a hot-wallet sweep fee for less than this (anti-griefing)
   minWithdrawalUsd: num('MIN_WITHDRAWAL_USD', 5),
   withdrawalDailyCapUsd: num('WITHDRAWAL_DAILY_CAP_USD', 10_000), // per-user velocity cap
-  hotWalletMaxUsd: num('HOT_WALLET_MAX_USD', 25_000), // hot float cap; excess swept to cold
+  hotWalletMaxUsd: num('HOT_WALLET_MAX_USD', 25_000), // hot float cap; once hit, drain to the floor below
+  hotWalletFloorPct: num('HOT_WALLET_FLOOR_PCT', 20), // % of the cap to LEAVE in hot when draining (working float for withdrawals)
   depositScanMs: num('DEPOSIT_SCAN_MS', 30_000), // deposit scanner cadence
   // P2 ships withdrawals with MANUAL admin approval: 'requested' rows are only signed/broadcast when
   // an operator runs processWithdrawal (or this flag turns on the automated loop — custody P3).

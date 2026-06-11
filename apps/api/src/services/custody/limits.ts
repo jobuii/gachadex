@@ -17,6 +17,7 @@ export interface CustodyLimits {
   minWithdrawalUsd: number;
   withdrawalDailyCapUsd: number;
   hotWalletMaxUsd: number;
+  hotWalletFloorPct: number; // % of the hot cap to leave in hot when draining to cold
   withdrawalAutoApproveMaxUsd: number;
   swapSlippageBps: number;
 }
@@ -27,6 +28,7 @@ const DEFAULTS: CustodyLimits = {
   minWithdrawalUsd: config.minWithdrawalUsd,
   withdrawalDailyCapUsd: config.withdrawalDailyCapUsd,
   hotWalletMaxUsd: config.hotWalletMaxUsd,
+  hotWalletFloorPct: config.hotWalletFloorPct,
   withdrawalAutoApproveMaxUsd: config.withdrawalAutoApproveMaxUsd,
   swapSlippageBps: config.swapSlippageBps,
 };
@@ -48,6 +50,8 @@ export function validateLimit(key: keyof CustodyLimits, value: unknown): number 
   if (!Number.isFinite(n) || n < 0) throw new Error(`${key} must be a non-negative number`);
   if (key === 'swapSlippageBps') {
     if (!Number.isInteger(n) || n > 1000) throw new Error('swapSlippageBps must be an integer 0-1000 (<= 10%)');
+  } else if (key === 'hotWalletFloorPct') {
+    if (!Number.isInteger(n) || n > 100) throw new Error('hotWalletFloorPct must be an integer 0-100 (% of the hot cap)');
   } else if (n > 1_000_000_000) {
     throw new Error(`${key} is implausibly large`);
   }

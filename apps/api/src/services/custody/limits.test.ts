@@ -13,6 +13,7 @@ after(() => closeDb());
 test('defaults: getLimits matches config before any override', () => {
   const l = getLimits();
   assert.equal(l.hotWalletMaxUsd, config.hotWalletMaxUsd);
+  assert.equal(l.hotWalletFloorPct, config.hotWalletFloorPct);
   assert.equal(l.minWithdrawalUsd, config.minWithdrawalUsd);
   assert.equal(l.swapSlippageBps, config.swapSlippageBps);
 });
@@ -40,6 +41,8 @@ test('validation rejects bad values', async () => {
   assert.throws(() => validateLimit('hotWalletMaxUsd', 2_000_000_000), /implausibly large/);
   assert.throws(() => validateLimit('swapSlippageBps', 1001), /0-1000/);
   assert.throws(() => validateLimit('swapSlippageBps', 12.5), /0-1000/);
+  assert.throws(() => validateLimit('hotWalletFloorPct', 101), /0-100/);
+  assert.throws(() => validateLimit('hotWalletFloorPct', 12.5), /0-100/);
   await assert.rejects(() => setLimits(db, {}), /no custody limits/);
   await assert.rejects(() => setLimits(db, { hotWalletMaxUsd: -5 }), /non-negative/);
 });

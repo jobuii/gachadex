@@ -126,6 +126,7 @@ export const CustodyLimitsRequest = z
     minWithdrawalUsd: LimitUsd.optional(),
     withdrawalDailyCapUsd: LimitUsd.optional(),
     hotWalletMaxUsd: LimitUsd.optional(),
+    hotWalletFloorPct: z.coerce.number().int().min(0).max(100).optional(),
     withdrawalAutoApproveMaxUsd: LimitUsd.optional(),
     swapSlippageBps: z.coerce.number().int().min(0).max(1000).optional(),
   })

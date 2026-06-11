@@ -27,8 +27,10 @@ import type { TreasuryChain } from './treasury.ts';
  * they can no longer be rolled back.
  *
  * The hot wallet is the fee payer for sweeps: fresh deposit addresses hold no SOL, so the
- * sweep transaction (and the treasury ATA's rent, if it doesn't exist yet) is paid by the
- * hot wallet. Its secret comes from the environment (dev/devnet) — never the config object.
+ * sweep transaction (and the hot wallet's USDC ATA rent, if it doesn't exist yet) is paid by
+ * the hot wallet. Deposits consolidate INTO the hot wallet — it funds withdrawals, so incoming
+ * deposits self-fund the payout float; the treasury pass later sweeps any hot balance above the
+ * cap down to the cold treasury. The hot secret comes from the environment — never the config.
  */
 
 function hotWallet(): Keypair {
@@ -90,7 +92,6 @@ async function signaturesSince(
 export function solanaDepositChain(): DepositChain {
   const conn = new Connection(config.solanaRpcUrl, 'finalized');
   const usdcMint = new PublicKey(config.usdcMint);
-  const treasury = new PublicKey(config.treasuryPubkey);
 
   return {
     supportsSolSwaps: config.solSwapsEnabled,
@@ -153,15 +154,17 @@ export function solanaDepositChain(): DepositChain {
       if (balance <= 0n || balance < usdc(getLimits().minSweepUsd)) return null; // sub-threshold balances accumulate (F5)
       const fromAta = getAssociatedTokenAddressSync(usdcMint, from.publicKey);
 
-      const payer = hotWallet();
-      // allowOwnerOffCurve: the treasury may be a Squads multisig PDA
-      const toAta = getAssociatedTokenAddressSync(usdcMint, treasury, true);
+      // Deposits consolidate into the HOT wallet (it funds withdrawals); the treasury pass sweeps
+      // any hot balance above the cap down to cold. The hot wallet is fee payer AND destination
+      // owner, funding its own ATA rent if the account doesn't exist yet.
+      const hot = hotWallet();
+      const toAta = getAssociatedTokenAddressSync(usdcMint, hot.publicKey);
       const tx = new Transaction().add(
-        createAssociatedTokenAccountIdempotentInstruction(payer.publicKey, toAta, treasury, usdcMint),
+        createAssociatedTokenAccountIdempotentInstruction(hot.publicKey, toAta, hot.publicKey, usdcMint),
         createTransferInstruction(fromAta, toAta, from.publicKey, balance),
       );
-      tx.feePayer = payer.publicKey;
-      const sig = await sendAndConfirmTransaction(conn, tx, [payer, from], { commitment: 'finalized' });
+      tx.feePayer = hot.publicKey;
+      const sig = await sendAndConfirmTransaction(conn, tx, [hot, from], { commitment: 'finalized' });
       return { sig, amountE6: balance };
     },
   };

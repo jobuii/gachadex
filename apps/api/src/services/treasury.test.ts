@@ -118,21 +118,24 @@ test('credited-but-unswept deposit balances count toward proof of reserves', asy
   assert.equal(report.onchainE6, report.liabilityE6); // balanced to the micro-dollar
 });
 
-test('hot-wallet excess above the float cap is swept to cold (threshold-gated)', async () => {
+test('hot wallet runs as a band: at the cap it drains to the floor; below the cap it sits', async () => {
   const SAFE_COLD = usdc(1_000_000_000); // PoR comfortably satisfied in float-only tests
+  // defaults: cap = hotWalletMaxUsd ($25k), floor = hotWalletFloorPct (20%) of the cap = $5k
 
-  // $30k hot vs the $25k cap -> sweep exactly the $5k excess
+  // at/above the cap -> drain down to the FLOOR: $30k hot sweeps $25k to cold, leaving $5k
   const over = fakeTreasury({ hot: usdc(30_000), cold: SAFE_COLD });
-  assert.equal((await treasuryPass(db, over)).sweptE6, usdc(5_000));
-  assert.deepEqual(over.sweeps, [usdc(5_000)]);
-  assert.equal(over.hot, usdc(25_000));
+  assert.equal((await treasuryPass(db, over)).sweptE6, usdc(25_000));
+  assert.deepEqual(over.sweeps, [usdc(25_000)]);
+  assert.equal(over.hot, usdc(5_000)); // left at the floor, not pinned at the cap
 
-  // under the cap -> nothing to do; excess below the sweep threshold -> accumulate, no fee
-  const under = fakeTreasury({ hot: usdc(10_000), cold: SAFE_COLD });
+  // below the cap -> the band isn't full; deposits keep filling it, nothing swept
+  const under = fakeTreasury({ hot: usdc(20_000), cold: SAFE_COLD });
   assert.equal((await treasuryPass(db, under)).sweptE6, 0n);
-  const dusty = fakeTreasury({ hot: usdc(25_000) + usdc(5), cold: SAFE_COLD });
-  assert.equal((await treasuryPass(db, dusty)).sweptE6, 0n);
-  assert.equal(dusty.sweeps.length, 0);
+  assert.equal(under.sweeps.length, 0);
+
+  // just shy of the cap -> still nothing (no premature dribble of sweeps)
+  const nearly = fakeTreasury({ hot: usdc(25_000) - usdc(1), cold: SAFE_COLD });
+  assert.equal((await treasuryPass(db, nearly)).sweptE6, 0n);
 });
 
 test('pending payouts are reserved in the float target, and a shortfall is reported', async () => {

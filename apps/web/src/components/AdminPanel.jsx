@@ -12,6 +12,7 @@ const KEY_STORE = 'gachadex_admin_key';
 // Live-tunable custody limits surfaced in the panel: [key, label, unit].
 const LIMIT_FIELDS = [
   ['hotWalletMaxUsd', 'Hot wallet cap', 'USD'],
+  ['hotWalletFloorPct', 'Hot wallet floor (% of cap)', '%'],
   ['withdrawalDailyCapUsd', 'Withdrawal daily cap / user', 'USD'],
   ['withdrawalAutoApproveMaxUsd', 'Auto-approve max', 'USD'],
   ['minWithdrawalUsd', 'Min withdrawal', 'USD'],
