@@ -2,6 +2,7 @@ import {
   Connection,
   Keypair,
   PublicKey,
+  SystemProgram,
   Transaction,
   sendAndConfirmTransaction,
   type ConfirmedSignatureInfo,
@@ -89,6 +90,9 @@ async function signaturesSince(
   return { sigs, highWater: until }; // capped: never advance past unfetched history
 }
 
+// Below this, residual SOL on a deposit address isn't worth a consolidation tx — leave it as dust.
+const SOL_SWEEP_MIN_LAMPORTS = 1_000_000n; // 0.001 SOL
+
 export function solanaDepositChain(): DepositChain {
   const conn = new Connection(config.solanaRpcUrl, 'finalized');
   const usdcMint = new PublicKey(config.usdcMint);
@@ -166,6 +170,20 @@ export function solanaDepositChain(): DepositChain {
       tx.feePayer = hot.publicKey;
       const sig = await sendAndConfirmTransaction(conn, tx, [hot, from], { commitment: 'finalized' });
       return { sig, amountE6: balance };
+    },
+
+    async sweepSolToHot(from: Keypair) {
+      const lamports = BigInt(await conn.getBalance(from.publicKey, 'finalized'));
+      if (lamports < SOL_SWEEP_MIN_LAMPORTS) return null; // dust — not worth a tx
+      const hot = hotWallet();
+      // Hot wallet pays the fee, so the deposit address drains fully to 0. Its USDC ATA is a separate
+      // account and is untouched — the swapped USDC stays put until the USDC sweep moves it.
+      const tx = new Transaction().add(
+        SystemProgram.transfer({ fromPubkey: from.publicKey, toPubkey: hot.publicKey, lamports }),
+      );
+      tx.feePayer = hot.publicKey;
+      const sig = await sendAndConfirmTransaction(conn, tx, [hot, from], { commitment: 'finalized' });
+      return { sig, lamports };
     },
   };
 }

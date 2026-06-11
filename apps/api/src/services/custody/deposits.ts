@@ -80,13 +80,18 @@ export interface DepositChain {
    *  (config.minSweepUsd: don't pay a hot-wallet fee to move dust; small credits accumulate
    *  until a sweep is economic — F5 anti-griefing). */
   sweepAll(from: Keypair): Promise<SweepResult | null>;
+  /** Drain the deposit wallet's residual native SOL into the hot wallet (hot = fee payer, so the
+   *  address can go to ~0; its USDC ATA is a separate account, untouched). Recycles the post-swap fee
+   *  reserve into hot-wallet gas. Returns null when the balance is too small to be worth a tx. */
+  sweepSolToHot(from: Keypair): Promise<{ sig: string; lamports: bigint } | null>;
 }
 
 const minDepositE6 = (): bigint => usdc(getLimits().minDepositUsd);
 
-/** Kept back from every SOL swap: the swap tx fee + wSOL/ATA rent headroom (0.01 SOL). The
- *  residue stays on the deposit address; an ops sweep can reclaim it later. */
-const SOL_FEE_RESERVE_LAMPORTS = 10_000_000n;
+/** Kept back from every SOL swap to pay the swap tx fee + the wSOL/USDC-ATA rent (0.005 SOL — a swap
+ *  costs ~0.003-0.0045 worst case). The swap TRIGGER is 2x this (deposits >= 0.01 SOL swap); the small
+ *  residue left after the swap is then recycled into the hot wallet (sweepSolToHot), so ~$0 SOL stays. */
+const SOL_FEE_RESERVE_LAMPORTS = 5_000_000n;
 
 /** Credit a finalized USDC deposit to the user's collateral — full amount, never clamped. Idempotent. */
 export async function creditDeposit(db: Db, depositId: string): Promise<string | null> {
@@ -211,15 +216,24 @@ export async function scanDeposits(
         if (solPending.rows.length > 0) {
           const balance = await chain.solBalance(a.address);
           if (balance > SOL_FEE_RESERVE_LAMPORTS * 2n) {
+            const kp = deriveDepositKeypair(a.derivation_index);
             for (const { id } of solPending.rows) {
               await db.query(`UPDATE deposits SET status = 'swapping' WHERE id = $1`, [id]);
             }
-            const sig = await chain.swapSolToUsdc(
-              deriveDepositKeypair(a.derivation_index),
-              balance - SOL_FEE_RESERVE_LAMPORTS,
-            );
+            const sig = await chain.swapSolToUsdc(kp, balance - SOL_FEE_RESERVE_LAMPORTS);
             for (const { id } of solPending.rows) {
               await db.query(`UPDATE deposits SET status = 'swapped', swap_sig = $2 WHERE id = $1`, [id, sig]);
+            }
+            // Recycle the leftover fee reserve into the hot wallet (where it funds gas) so the deposit
+            // address is left at ~$0 SOL. Best-effort: a failure must never abort the USDC credit/sweep
+            // below — the residue just stays and is reclaimed on the next swap.
+            // Scope: this only recycles the just-swapped address's reserve. Pre-existing residue on
+            // addresses that won't swap again, and sub-trigger SOL dust, aren't reached here.
+            // TODO: a low-frequency ops sweep over all deposit addresses would close that gap.
+            try {
+              await chain.sweepSolToHot(kp);
+            } catch {
+              /* leave the residue; recycled on the next swap */
             }
           } else {
             for (const { id } of solPending.rows) {
