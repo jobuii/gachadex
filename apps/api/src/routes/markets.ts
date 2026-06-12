@@ -33,8 +33,10 @@ export async function marketRoutes(app: FastifyInstance): Promise<void> {
   if (!catalogSearchEnabled) return;
 
   // Whole-catalog search (cached 1h per (q, game); uncached calls cost a provider request — capped
-  // per IP on top of the global limiter).
-  app.get('/catalog/search', rl(config.routeRateLimits.catalogSearch), async (req) => {
+  // per IP on top of the global limiter). Authenticated: the catalogue is a provider-billed lookup,
+  // not public browsing, so anonymous traffic can't drain the provider budget (trade scope = a
+  // delegated trading key may search too, mirroring /markets/ensure).
+  app.get('/catalog/search', rl(config.routeRateLimits.catalogSearch, { preHandler: authenticate, config: { scope: 'trade' as const } }), async (req) => {
     const { q, game } = (req.query ?? {}) as { q?: string; game?: string };
     const query = (q ?? '').trim();
     if (query.length < 2 || query.length > 80) throw new HttpError(400, 'query must be 2-80 characters', 'bad_query');
