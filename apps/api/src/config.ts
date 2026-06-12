@@ -234,19 +234,18 @@ if (config.adlPnlFactorBps > 0 && config.maxPnlFactorBps > 0 && config.adlPnlFac
   throw new Error('ADL_PNL_FACTOR_BPS must be >= MAX_PNL_FACTOR_BPS so opens pause (the gate) before ADL force-closes winners.');
 }
 
-// Search-and-bet activation, derived ONCE: the feature needs the flag on AND the provider that can
-// search/price the catalog (the route registration and the boot assertion both read this).
-export const searchAndBetActive = config.searchAndBet && config.oraclePrimary === 'tcgpricelookup';
-
-// Search-and-bet (P6) boot assertion: on-demand long-tail markets with REAL funds lean entirely on
-// the pool defenses, so all three NAV gates must be armed — refuse to start otherwise. Play-money
-// runs (realFunds=false) are exempt: the gates default to 0 there by design.
-if (
-  config.realFunds &&
-  searchAndBetActive &&
-  !(config.maxPnlFactorBps > 0 && config.adlPnlFactorBps > 0 && config.oiCapNavBps > 0)
-) {
-  throw new Error(
-    'SEARCH_AND_BET with REAL_FUNDS requires MAX_PNL_FACTOR_BPS, ADL_PNL_FACTOR_BPS and OI_CAP_NAV_BPS all > 0 (or set SEARCH_AND_BET=false).',
+// Search-and-bet activation, derived ONCE (route registration reads this). The feature needs the
+// flag on AND the provider that can search/price the catalog. On REAL funds it ALSO needs all three
+// NAV gates armed — on-demand long-tail markets lean entirely on the pool defenses. A missing gate
+// DISABLES search-and-bet (its routes don't register) but must NOT crash the whole API: custody and
+// trading have their own protections and have to keep running. Play money is exempt (gates default 0).
+const searchAndBetWanted = config.searchAndBet && config.oraclePrimary === 'tcgpricelookup';
+const navGatesArmed = config.maxPnlFactorBps > 0 && config.adlPnlFactorBps > 0 && config.oiCapNavBps > 0;
+export const searchAndBetActive = searchAndBetWanted && (!config.realFunds || navGatesArmed);
+if (searchAndBetWanted && config.realFunds && !navGatesArmed) {
+  console.warn(
+    '[config] search-and-bet DISABLED: REAL_FUNDS requires MAX_PNL_FACTOR_BPS, ADL_PNL_FACTOR_BPS and ' +
+      'OI_CAP_NAV_BPS all > 0 to enable on-demand listing. The rest of the API runs normally; set the ' +
+      'three gates (and redeploy) to turn search-and-bet on.',
   );
 }
