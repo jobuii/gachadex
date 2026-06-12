@@ -36,12 +36,13 @@ test('REAL_FUNDS boot with search-and-bet on but NAV gates unset: server comes u
   assert.equal(res.statusCode, 200);
   assert.equal(res.json().ok, true);
   assert.equal(res.json().realFunds, true);
+  assert.equal(res.json().listingEnabled, false, 'health reports listing off (NAV gates unset) so the web can hide LIST');
 });
 
-test('read-only catalogue search stays enabled without the gates; on-demand listing is disabled', async () => {
-  // /catalog/search registered → a too-short query is a 400 validation error, NOT a 404 missing route
-  const search = await app.inject({ method: 'GET', url: '/catalog/search?q=a&game=pokemon' });
-  assert.equal(search.statusCode, 400, 'catalogue search route is registered (read-only, no gate dependency)');
+test('catalogue search stays enabled (auth-gated) without the gates; on-demand listing is disabled', async () => {
+  // /catalog/search registered but authenticated → an anonymous request is 401, NOT a 404 missing route
+  const search = await app.inject({ method: 'GET', url: '/catalog/search?q=ab&game=pokemon' });
+  assert.equal(search.statusCode, 401, 'catalogue search route is registered (no NAV-gate dependency) and requires sign-in');
   // /markets/ensure NOT registered → 404 (creating a real-money market needs the NAV gates)
   const ensure = await app.inject({ method: 'POST', url: '/markets/ensure', payload: { providerCardId: 'x' } });
   assert.equal(ensure.statusCode, 404, 'on-demand listing is gated off until the NAV caps are set');

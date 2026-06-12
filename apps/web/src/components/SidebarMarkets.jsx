@@ -26,7 +26,7 @@ function marketSubtitle(m) {
 }
 
 /** One whole-catalog search result: trade it if a market exists, list it on demand if it qualifies. */
-function CatalogRow({ r, existing, user, onSelect, onListed }) {
+function CatalogRow({ r, existing, listingEnabled, onSelect, onListed }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -57,12 +57,13 @@ function CatalogRow({ r, existing, user, onSelect, onListed }) {
         <span className="market-item-price">{r.priceUsd > 0 ? `$${r.priceUsd.toFixed(2)}` : '—'}</span>
         {existing ? (
           <span className="catalog-state up">TRADE ▸</span>
-        ) : r.listable ? (
-          user
-            ? <button className="list-btn" disabled={busy} onClick={(e) => { e.stopPropagation(); list(); }}>{busy ? '…' : 'LIST'}</button>
-            : <span className="catalog-state">sign in</span>
-        ) : (
+        ) : !r.listable ? (
           <span className="catalog-state" title="Needs a $10+ TCGplayer price corroborated by eBay sales">not listable</span>
+        ) : !listingEnabled ? (
+          // listable, but on-demand listing is turned off server-side — hide the (dead) LIST button
+          <span className="catalog-state" title="On-demand listing is currently disabled">listing off</span>
+        ) : (
+          <button className="list-btn" disabled={busy} onClick={(e) => { e.stopPropagation(); list(); }}>{busy ? '…' : 'LIST'}</button>
         )}
       </div>
     </div>
@@ -76,8 +77,16 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
   const [catalog, setCatalog] = useState(null); // null = inactive; [] = no results
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState(false); // search failed/unavailable (≠ zero matches)
+  const [listingEnabled, setListingEnabled] = useState(false); // server-side: is /markets/ensure live?
   const marks = useRealtime((s) => s.marks);
   const { user } = useAuth();
+
+  // Whether on-demand listing is on server-side (gated by the NAV caps). Cached /health fetch.
+  useEffect(() => {
+    let alive = true;
+    api.getHealth().then((h) => alive && setListingEnabled(Boolean(h.listingEnabled))).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   const activeGame = GAMES.find((g) => g.id === game) ?? GAMES[0];
   const livePrice = (m) => liveMarkE6(marks, m);
@@ -85,8 +94,9 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
   const q = search.trim();
 
   // Whole-catalog search (cards only): debounced so typing doesn't spray provider requests.
+  // Requires sign-in — the catalogue is an authenticated, provider-billed lookup, not public browsing.
   useEffect(() => {
-    if (tab !== 'cards' || q.length < 2) {
+    if (tab !== 'cards' || q.length < 2 || !user) {
       setCatalog(null);
       setCatalogError(false);
       setCatalogLoading(false);
@@ -116,7 +126,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
       alive = false;
       clearTimeout(t);
     };
-  }, [q, game, tab]);
+  }, [q, game, tab, user]);
 
   // Default card list = the featured top-250, highest price first. A search widens to every locally
   // tracked market (long-tail listings included) and adds the whole-catalog section below. Sorted by
@@ -242,23 +252,29 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
           <>
             <div className="catalog-divider">
               <span className="gdot" style={{ '--dot': activeGame.color }} />
-              CATALOG{catalogLoading ? ' · searching…' : catalogError ? ' · unavailable' : catalogRows ? ` · ${catalogRows.length}` : ''}
+              CATALOG{!user ? '' : catalogLoading ? ' · searching…' : catalogError ? ' · unavailable' : catalogRows ? ` · ${catalogRows.length}` : ''}
             </div>
-            {catalogRows?.map((r) => (
-              <CatalogRow
-                key={r.providerCardId}
-                r={r}
-                existing={r.marketId ? marketById.get(r.marketId) ?? null : null}
-                user={user}
-                onSelect={onSelect}
-                onListed={onListed}
-              />
-            ))}
-            {catalogError && !catalogLoading && (
-              <div className="market-empty"><small>Catalogue search is unavailable right now.</small></div>
-            )}
-            {catalogRows && catalogRows.length === 0 && !catalogLoading && (
-              <div className="market-empty"><small>Nothing new in the {activeGame.label} catalog for “{q}”.</small></div>
+            {!user ? (
+              <div className="market-empty"><small>Sign in to search the full catalogue.</small></div>
+            ) : (
+              <>
+                {catalogRows?.map((r) => (
+                  <CatalogRow
+                    key={r.providerCardId}
+                    r={r}
+                    existing={r.marketId ? marketById.get(r.marketId) ?? null : null}
+                    listingEnabled={listingEnabled}
+                    onSelect={onSelect}
+                    onListed={onListed}
+                  />
+                ))}
+                {catalogError && !catalogLoading && (
+                  <div className="market-empty"><small>Catalogue search is unavailable right now.</small></div>
+                )}
+                {catalogRows && catalogRows.length === 0 && !catalogLoading && (
+                  <div className="market-empty"><small>Nothing new in the {activeGame.label} catalog for “{q}”.</small></div>
+                )}
+              </>
             )}
           </>
         )}
