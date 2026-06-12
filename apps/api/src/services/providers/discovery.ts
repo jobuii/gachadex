@@ -2,7 +2,7 @@ import { config } from '../../config.ts';
 import type { Db } from '../../db/client.ts';
 import { cardSymbol, upsertCardMarket } from '../markets.ts';
 import { toCardUpsert } from '../oracle.ts';
-import { rawPriceUsd, fromTplCard, tplTcgplayerId, type TcgPriceLookupClient, type TrackedMarket } from './tcgpricelookup.ts';
+import { rawPriceUsd, fromTplCard, tplTcgplayerId, MIN_LIST_PRICE_USD, type TcgPriceLookupClient, type TrackedMarket } from './tcgpricelookup.ts';
 
 /**
  * Discovery (P4): crawl a game's tcgpricelookup catalog (no price sort exists, so we enumerate) and
@@ -114,7 +114,9 @@ export async function discoverGame(
   game: string,
   opts: { topN?: number; minPriceUsd?: number; apply?: boolean; fresh?: boolean; force?: boolean; log?: (msg: string) => void },
 ): Promise<DiscoveryReport> {
-  const { topN = 250, minPriceUsd = 10, apply = false, fresh = false, force = false } = opts;
+  // the keep-threshold defaults to the SAME $10 floor as the search-and-bet listing gate, so the
+  // featured universe and the on-demand listable universe can't silently desynchronize
+  const { topN = 250, minPriceUsd = MIN_LIST_PRICE_USD, apply = false, fresh = false, force = false } = opts;
   const log = opts.log ?? (() => {});
   // Cutover-sequencing guard: while pokemontcg is the live feed it re-stamps ITS top-250 as featured
   // every pass, so a pokemon rebalance here would be silently reverted (and oscillate the index
@@ -183,6 +185,15 @@ export async function discoverGame(
     }
   }
   if (conflicts > 0) log(`${conflicts} candidate(s) skipped on identity conflicts`);
+  // A re-featured card that the retirement sweep had delisted (dropped out, sat dead, then its price
+  // rose back into the top-250) must REJOIN the live set — a featured market may never be delisted,
+  // or it gets no price and silently drops out of the index basket. created_at resets, so the engine
+  // freshness gate keeps it un-openable until the next refresh prints (no stale-mark opens).
+  await db.query(
+    `UPDATE markets SET status = 'active', tradeable = true, created_at = now()
+      WHERE game = $1 AND kind = 'card' AND featured AND status = 'delisted'`,
+    [game],
+  );
   // drop-outs leave the basket but stay tracked + priced
   await db.query(
     `UPDATE markets SET featured = false
@@ -193,4 +204,21 @@ export async function discoverGame(
   await clearState(db, game);
   log(`featured rebalanced: ${top.length} cards for ${game}`);
   return { game, scanned, kept: state.kept.length, top, applied: true, resumedFromOffset };
+}
+
+/** Dead-market retirement (P6 plan default): a NON-featured card market with zero open interest and
+ *  zero volume for `retireAfterDays` is delisted — it leaves the refresh set (fetchTrackedCards skips
+ *  delisted) so the long-tail can't grow the provider budget unboundedly. Markets with any open
+ *  position are NEVER retired; featured markets are the discovery job's to manage, not this sweep's. */
+export async function retireDeadMarkets(db: Db, retireAfterDays = config.retireAfterDays): Promise<string[]> {
+  const r = await db.query<{ id: string }>(
+    `UPDATE markets m SET status = 'delisted', tradeable = false
+      WHERE m.kind = 'card' AND m.featured = false AND m.status = 'active'
+        AND m.created_at < now() - ($1 || ' days')::interval
+        AND NOT EXISTS (SELECT 1 FROM positions p WHERE p.market_id = m.id AND p.status = 'open')
+        AND NOT EXISTS (SELECT 1 FROM fills f WHERE f.market_id = m.id AND f.created_at > now() - ($1 || ' days')::interval)
+      RETURNING m.id`,
+    [String(retireAfterDays)],
+  );
+  return r.rows.map((x) => x.id);
 }

@@ -1145,6 +1145,17 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 .grades-toggle { width: 100%; margin-top: 0.3rem; background: var(--bg-3); border: 1px solid var(--border); color: var(--text-muted); font-family: var(--font-base); font-size: 0.45rem; padding: 0.4rem; cursor: pointer; }
 .grades-toggle:hover { color: var(--gold); border-color: var(--gold); }
 
+/* Sidebar whole-catalog search section (search-and-bet) */
+.catalog-divider { display: flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.6rem 0.3rem; color: var(--gold); font-size: 0.45rem; letter-spacing: 0.05em; border-top: 1px solid var(--border); margin-top: 0.4rem; }
+.catalog-item.market-item-static { cursor: default; }
+.catalog-item .market-item-right { align-items: flex-end; }
+.catalog-state { font-size: 0.4rem; color: var(--text-muted); }
+.catalog-state.up { color: var(--up, #3fb950); cursor: pointer; }
+.catalog-err { color: var(--danger, #f85149); font-size: 0.4rem; }
+.list-btn { background: var(--bg-3); border: 1px solid var(--gold); color: var(--gold); font-family: var(--font-base); font-size: 0.42rem; padding: 0.25rem 0.5rem; cursor: pointer; }
+.list-btn:hover:not(:disabled) { background: var(--gold); color: var(--bg-1, #111); }
+.list-btn:disabled { opacity: 0.5; cursor: default; }
+
 .error-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; height: 100vh; text-align: center; padding: 2rem; }
 .error-screen h2 { color: var(--danger); font-size: 0.9rem; }
 .error-screen p { color: var(--text-muted); font-size: 0.6rem; max-width: 30rem; line-height: 1.6; }

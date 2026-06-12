@@ -175,6 +175,21 @@ export const LIQUID_THRESHOLD_USD = 25;
 // Condition preference for the raw price (plan section E fallback chain).
 const CONDITION_ORDER = ['near_mint', 'lightly_played'];
 
+/** Creatability gate (P6 search-and-bet, plan "Decisions & defaults"): NM TCGplayer market >= $10
+ *  AND the eBay 7d average agrees within ~25% — a liquidity/agreement proxy that rejects
+ *  null/sealed/one-sided cards. Lives beside rawPriceUsd because the two are coupled: for a card in
+ *  the [$10, $25) band rawPriceUsd prices the print from the eBay average, and it is exactly this
+ *  gate's agreement check that makes that smoothed price trustworthy at listing time. */
+export const MIN_LIST_PRICE_USD = 10;
+const PRICE_AGREEMENT_TOLERANCE = 0.25;
+
+export function isListable(c: TplCard): boolean {
+  const nm = c.prices?.raw?.near_mint;
+  const spot = nm?.tcgplayer?.market ?? 0;
+  const smooth = nm?.ebay?.avg_7d ?? 0;
+  return spot >= MIN_LIST_PRICE_USD && smooth > 0 && Math.abs(smooth / spot - 1) <= PRICE_AGREEMENT_TOLERANCE;
+}
+
 /** The raw spot in USD per the plan's fallback chain + thin-market smoothing. 0 = ineligible.
  *  Takes just the prices envelope so the history seeder can price past days through the SAME chain. */
 export function rawPriceUsd(card: Pick<TplCard, 'prices'>): number {

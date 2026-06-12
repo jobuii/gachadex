@@ -336,6 +336,8 @@ CREATE TABLE IF NOT EXISTS fills (
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_fills_position ON fills(position_id, created_at);
+-- the retirement sweep's "no volume in N days" anti-join probes by market + recency (P6)
+CREATE INDEX IF NOT EXISTS idx_fills_market_created ON fills(market_id, created_at);
 
 -- =========================================================================
 -- Funding / LP pool / liquidations

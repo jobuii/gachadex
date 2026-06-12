@@ -9,7 +9,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 const { config } = await import('../config.ts');
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
-const { upsertCardMarket, cardSymbol, getMarketById, getCandles, getMarketDetails } = await import('./markets.ts');
+const { upsertCardMarket, cardSymbol, getMarketById, getCandles, getMarketDetails, listMarketsWithData } = await import('./markets.ts');
 const { gradeLadder } = await import('./providers/tcgpricelookup.ts');
 
 await initDb();
@@ -96,6 +96,32 @@ test('cardSymbol namespaces by game (cross-game + INDEX:* collision proof)', asy
 
 test('ORACLE_PRIMARY defaults to pokemontcg (cutover is opt-in via env)', () => {
   assert.equal(config.oraclePrimary, 'pokemontcg');
+});
+
+test('change24hPct: real move off the marks series, flat = 0, <24h history = 0', async () => {
+  const moved = await upsertCardMarket(db, { ...base, symbol: 'chg-moved', cardId: 'chg-moved' });
+  const flat = await upsertCardMarket(db, { ...base, symbol: 'chg-flat', cardId: 'chg-flat' });
+  const fresh = await upsertCardMarket(db, { ...base, symbol: 'chg-fresh', cardId: 'chg-fresh' });
+  const mark = (id: string, e6: number, ago: string) =>
+    db.query(
+      `INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES ($1, $2, $2, now() - ($3)::interval)`,
+      [id, e6, ago],
+    );
+  // moved: $100 ~30h ago (the 24h reference) -> $125 now = +25%; an intraday mark must NOT be the ref
+  await mark(moved, 100_000_000, '30 hours');
+  await mark(moved, 110_000_000, '20 hours');
+  await mark(moved, 125_000_000, '1 hour');
+  // flat: same price across the window = 0
+  await mark(flat, 80_000_000, '30 hours');
+  await mark(flat, 80_000_000, '1 hour');
+  // fresh: only a recent mark (no >=24h reference) = 0
+  await mark(fresh, 60_000_000, '2 hours');
+
+  const views = await listMarketsWithData(db);
+  const by = new Map(views.map((v) => [v.id, v]));
+  assert.equal(by.get(moved)!.change24hPct, 25);
+  assert.equal(by.get(flat)!.change24hPct, 0);
+  assert.equal(by.get(fresh)!.change24hPct, 0);
 });
 
 test('getCandles: seeded history renders only BEFORE the first real mark; marks always win', async () => {

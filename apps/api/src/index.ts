@@ -10,7 +10,7 @@ import { loadLimits } from './services/custody/limits.ts';
 import { loadFee, loadLiqFee } from './services/fees.ts';
 import { tryAcquireLease, releaseLease } from './services/lease.ts';
 import { getDefaultClient } from './services/providers/tcgpricelookup.ts';
-import { discoverGame, dueForRebalance, markRebalanced } from './services/providers/discovery.ts';
+import { discoverGame, dueForRebalance, markRebalanced, retireDeadMarkets } from './services/providers/discovery.ts';
 import { countMissingHistory, seedMissingHistory } from './services/providers/history.ts';
 import { GAMES } from '@pokex/shared-types';
 import { randomUUID } from 'node:crypto';
@@ -67,6 +67,9 @@ function startDiscoveryLoop(db: Db, log: FastifyBaseLogger) {
           await releaseLease(db, 'chart-seed', INSTANCE_ID).catch(() => {});
         }
       }
+      // Dead long-tail retirement (P6): idempotent UPDATE, safe under N instances — no lease needed.
+      const retired = await retireDeadMarkets(db);
+      if (retired.length > 0) log.info({ retired: retired.length }, 'dead long-tail markets retired');
       if (!(await dueForRebalance(db, config.discoveryIntervalMs))) return;
       // TTL covers one full multi-game crawl (~30 min), NOT the weekly interval — a dead holder is
       // replaced within hours, and the settings timestamp (not the lease) enforces the cadence.

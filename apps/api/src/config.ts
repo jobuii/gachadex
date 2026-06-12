@@ -54,6 +54,8 @@ export const config = {
     delegateNonce: num('RL_DELEGATE_NONCE', 30), // trading-key delegation challenge (mirrors authNonce)
     delegateVerify: num('RL_DELEGATE_VERIFY', 30), // delegation authorization submit
     admin: num('RL_ADMIN', 30), // operator endpoints (also brute-force defense on the admin key)
+    catalogSearch: num('RL_CATALOG_SEARCH', 30), // each uncached search costs a provider request
+    marketEnsure: num('RL_MARKET_ENSURE', 10), // on-demand listing: provider request + market create
   },
 
   // Database. Empty => use embedded PGlite (local dev, zero deps).
@@ -94,6 +96,10 @@ export const config = {
   tcgpricelookupMinIntervalMs: num('TCGPRICELOOKUP_MIN_INTERVAL_MS', 1100), // 1 req/s + 10% headroom
   tcgpricelookupDailyCap: num('TCGPRICELOOKUP_DAILY_CAP', 10_000),
   discoveryIntervalMs: num('DISCOVERY_INTERVAL_MS', 7 * 24 * 60 * 60 * 1000), // weekly featured rebalance (post-cutover loop)
+  // Search-and-bet (P6): catalog search proxy + on-demand market creation. Endpoints only register
+  // when the tcgpricelookup feed is live; SEARCH_AND_BET=false turns them off without a deploy.
+  searchAndBet: process.env.SEARCH_AND_BET !== 'false',
+  retireAfterDays: num('RETIRE_AFTER_DAYS', 30), // dead long-tail markets (no OI, no volume) leave the refresh set
 
   // Money / safety
   realFunds: process.env.REAL_FUNDS === 'true', // hard gate; MVP must be false
@@ -226,4 +232,21 @@ if (
 // that pauses new opens — otherwise ADL fires while the pool is still admitting risk. (Both 0 = off.)
 if (config.adlPnlFactorBps > 0 && config.maxPnlFactorBps > 0 && config.adlPnlFactorBps < config.maxPnlFactorBps) {
   throw new Error('ADL_PNL_FACTOR_BPS must be >= MAX_PNL_FACTOR_BPS so opens pause (the gate) before ADL force-closes winners.');
+}
+
+// Search-and-bet activation, derived ONCE: the feature needs the flag on AND the provider that can
+// search/price the catalog (the route registration and the boot assertion both read this).
+export const searchAndBetActive = config.searchAndBet && config.oraclePrimary === 'tcgpricelookup';
+
+// Search-and-bet (P6) boot assertion: on-demand long-tail markets with REAL funds lean entirely on
+// the pool defenses, so all three NAV gates must be armed — refuse to start otherwise. Play-money
+// runs (realFunds=false) are exempt: the gates default to 0 there by design.
+if (
+  config.realFunds &&
+  searchAndBetActive &&
+  !(config.maxPnlFactorBps > 0 && config.adlPnlFactorBps > 0 && config.oiCapNavBps > 0)
+) {
+  throw new Error(
+    'SEARCH_AND_BET with REAL_FUNDS requires MAX_PNL_FACTOR_BPS, ADL_PNL_FACTOR_BPS and OI_CAP_NAV_BPS all > 0 (or set SEARCH_AND_BET=false).',
+  );
 }

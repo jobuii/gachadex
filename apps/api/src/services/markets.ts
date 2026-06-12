@@ -34,13 +34,14 @@ export interface MarketRow {
   qty_step_e6: string;
   price_tick_e6: string;
   price_pinned: boolean;
+  featured: boolean;
 }
 
 const COLS = `id, kind, game, symbol, display_name, card_id, variant, index_slug, image_small, set_logo, status, tradeable,
   max_leverage_e2, init_margin_bps, maint_margin_bps,
   max_oi_long_uusdc::text AS max_oi_long_uusdc, max_oi_short_uusdc::text AS max_oi_short_uusdc,
   skew_k_e6::text AS skew_k_e6, premium_cap_e6::text AS premium_cap_e6, max_dev_bps,
-  min_qty_e6::text AS min_qty_e6, qty_step_e6::text AS qty_step_e6, price_tick_e6::text AS price_tick_e6, price_pinned`;
+  min_qty_e6::text AS min_qty_e6, qty_step_e6::text AS qty_step_e6, price_tick_e6::text AS price_tick_e6, price_pinned, featured`;
 
 export async function getMarketById(q: Queryer, id: string): Promise<MarketRow | null> {
   const r = await q.query<MarketRow>(`SELECT ${COLS} FROM markets WHERE id = $1`, [id]);
@@ -63,6 +64,9 @@ export interface CardUpsert {
   providerCardId?: string | null;
   // Index-constituent eligibility (the discovery top-250). Omit to keep the stored value.
   featured?: boolean | null;
+  // Creation-only: minimum order size (P6 dollar-min-notional for long-tail listings). Never
+  // touched on re-upsert — the operator may retune a live market's min.
+  minQtyE6?: bigint | null;
 }
 
 /** Symbol for a provider-created card market: game-namespaced so provider ids can never collide across
@@ -77,8 +81,8 @@ export async function upsertCardMarket(q: Queryer, opts: CardUpsert): Promise<st
   const meta = opts.metadata != null ? JSON.stringify(opts.metadata) : null;
   await q.query(
     `INSERT INTO markets(id, kind, game, symbol, display_name, card_id, variant, image_small, image_large, set_logo, metadata, tradeable,
-       max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id, featured)
-     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13, COALESCE($14, false))
+       max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id, featured, min_qty_e6)
+     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13, COALESCE($14, false), COALESCE($15, 10000))
      ON CONFLICT(symbol) DO UPDATE
        SET display_name = EXCLUDED.display_name, image_small = EXCLUDED.image_small, image_large = EXCLUDED.image_large,
            set_logo = EXCLUDED.set_logo, metadata = EXCLUDED.metadata, variant = EXCLUDED.variant,
@@ -88,7 +92,7 @@ export async function upsertCardMarket(q: Queryer, opts: CardUpsert): Promise<st
     [
       id, opts.symbol, opts.displayName, opts.cardId, opts.variant, opts.imageSmall, opts.imageLarge ?? null,
       opts.setLogo ?? null, meta, CARD_OI_CAP, opts.game ?? 'pokemon', opts.tcgplayerId ?? null, opts.providerCardId ?? null,
-      opts.featured ?? null,
+      opts.featured ?? null, opts.minQtyE6?.toString() ?? null,
     ],
   );
   const r = await q.query<{ id: string }>(`SELECT id FROM markets WHERE symbol = $1`, [opts.symbol]);
@@ -116,7 +120,7 @@ export async function upsertIndexMarket(
   return r.rows[0].id;
 }
 
-/** Markets list for the API: latest mark + index + change-vs-previous-print. */
+/** Markets list for the API: latest mark + index + 24h change (off the marks series). */
 export interface MarketView {
   id: string;
   kind: 'card' | 'index';
@@ -138,6 +142,7 @@ export interface MarketView {
   indexE6: string | null;
   change24hPct: number;
   pricePinned: boolean;
+  featured: boolean; // top-250-by-price member (the sidebar's default card list)
 }
 
 /** Per-market details (card metadata + graded prices) for the detail panel. */
@@ -186,18 +191,21 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
   );
   const latestMap = new Map(latest.rows.map((r) => [r.market_id, r]));
 
-  // change vs the previous accepted oracle print
-  const hist = await db.query<{ market_id: string; latest: string | null; prev: string | null }>(
-    `SELECT market_id,
-            (array_agg(index_price_e6 ORDER BY source_observed_at DESC))[1]::text AS latest,
-            (array_agg(index_price_e6 ORDER BY source_observed_at DESC))[2]::text AS prev
-     FROM oracle_prices WHERE is_accepted GROUP BY market_id`,
+  // 24h change, computed from the SAME mark series the chart + displayed price use (`marks` by
+  // computed_at) — NOT oracle_prices by source_observed_at. The provider's source_observed_at can be
+  // static/backdated, so that ordering disagreed with the marks the user actually sees and reported
+  // 0% for cards whose chart had clearly moved. Reference = the last mark at/before now-24h.
+  const ref = await db.query<{ market_id: string; ref: string }>(
+    `SELECT DISTINCT ON (market_id) market_id, mark_price_e6::text AS ref
+     FROM marks WHERE computed_at <= now() - interval '24 hours'
+     ORDER BY market_id, computed_at DESC`,
   );
   const changeMap = new Map<string, number>();
-  for (const h of hist.rows) {
-    if (h.latest && h.prev && BigInt(h.prev) !== 0n) {
-      const change = (Number(BigInt(h.latest) - BigInt(h.prev)) / Number(BigInt(h.prev))) * 100;
-      changeMap.set(h.market_id, Math.round(change * 100) / 100);
+  for (const r of ref.rows) {
+    const cur = latestMap.get(r.market_id)?.mark_e6;
+    if (cur && BigInt(r.ref) !== 0n) {
+      const change = (Number(BigInt(cur) - BigInt(r.ref)) / Number(BigInt(r.ref))) * 100;
+      changeMap.set(r.market_id, Math.round(change * 100) / 100);
     }
   }
 
@@ -224,6 +232,7 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
       indexE6: l?.index_e6 ?? null,
       change24hPct: changeMap.get(m.id) ?? 0,
       pricePinned: m.price_pinned,
+      featured: m.featured,
     };
   });
 }

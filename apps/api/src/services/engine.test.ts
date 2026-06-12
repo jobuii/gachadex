@@ -154,6 +154,24 @@ test('the slippage guard rejects a fill past the limit; feeBps is exposed on the
   await closeAll(userId);
 });
 
+test('freshness gate: a reactivated market cannot be OPENED against a mark predating its activation', async () => {
+  const userId = await newUser();
+  // Simulate a reactivation: bump created_at past the market's existing (now "stale") mark.
+  await db.query(`UPDATE markets SET created_at = now() WHERE id = $1`, [market.id]);
+  await assert.rejects(
+    openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 5_000_000n, leverage: 10, idempotencyKey: randomUUID() }),
+    /repricing/,
+    'opening on a pre-activation mark is refused',
+  );
+
+  // A fresh print (mark computed_at >= created_at) reopens the market for new positions.
+  await ingest(db, async () => fromPokemontcg([
+    { id: 'card-x', name: 'Test', number: '1', images: { small: 'x' }, tcgplayer: { prices: { holofoil: { market: 1000 } } } },
+  ]));
+  await openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 5_000_000n, leverage: 10, idempotencyKey: randomUUID() });
+  await closeAll(userId);
+});
+
 test('reconciler stays balanced after all trading activity', async () => {
   const report = await reconcile(db);
   assert.equal(report.ok, true, JSON.stringify(report, null, 2));
