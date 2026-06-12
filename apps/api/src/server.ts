@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
-import { config } from './config.ts';
+import { config, searchAndBetActive } from './config.ts';
 import { HttpError } from './errors.ts';
 import { authRoutes } from './routes/auth.ts';
 import { accountRoutes } from './routes/account.ts';
@@ -96,6 +96,7 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
     service: 'gachadex-api',
     env: config.env,
     realFunds: config.realFunds,
+    listingEnabled: searchAndBetActive, // on-demand /markets/ensure is registered — lets the web hide a dead LIST button
     apiVersion: API_VERSION,
     time: new Date().toISOString(),
   }));

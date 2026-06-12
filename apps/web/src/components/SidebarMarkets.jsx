@@ -26,7 +26,7 @@ function marketSubtitle(m) {
 }
 
 /** One whole-catalog search result: trade it if a market exists, list it on demand if it qualifies. */
-function CatalogRow({ r, existing, user, onSelect, onListed }) {
+function CatalogRow({ r, existing, user, listingEnabled, onSelect, onListed }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -57,12 +57,15 @@ function CatalogRow({ r, existing, user, onSelect, onListed }) {
         <span className="market-item-price">{r.priceUsd > 0 ? `$${r.priceUsd.toFixed(2)}` : '—'}</span>
         {existing ? (
           <span className="catalog-state up">TRADE ▸</span>
-        ) : r.listable ? (
-          user
-            ? <button className="list-btn" disabled={busy} onClick={(e) => { e.stopPropagation(); list(); }}>{busy ? '…' : 'LIST'}</button>
-            : <span className="catalog-state">sign in</span>
-        ) : (
+        ) : !r.listable ? (
           <span className="catalog-state" title="Needs a $10+ TCGplayer price corroborated by eBay sales">not listable</span>
+        ) : !listingEnabled ? (
+          // listable, but on-demand listing is turned off server-side — hide the (dead) LIST button
+          <span className="catalog-state" title="On-demand listing is currently disabled">listing off</span>
+        ) : user ? (
+          <button className="list-btn" disabled={busy} onClick={(e) => { e.stopPropagation(); list(); }}>{busy ? '…' : 'LIST'}</button>
+        ) : (
+          <span className="catalog-state">sign in</span>
         )}
       </div>
     </div>
@@ -76,8 +79,16 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
   const [catalog, setCatalog] = useState(null); // null = inactive; [] = no results
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState(false); // search failed/unavailable (≠ zero matches)
+  const [listingEnabled, setListingEnabled] = useState(false); // server-side: is /markets/ensure live?
   const marks = useRealtime((s) => s.marks);
   const { user } = useAuth();
+
+  // Whether on-demand listing is on server-side (gated by the NAV caps). Cached /health fetch.
+  useEffect(() => {
+    let alive = true;
+    api.getHealth().then((h) => alive && setListingEnabled(Boolean(h.listingEnabled))).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   const activeGame = GAMES.find((g) => g.id === game) ?? GAMES[0];
   const livePrice = (m) => liveMarkE6(marks, m);
@@ -250,6 +261,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
                 r={r}
                 existing={r.marketId ? marketById.get(r.marketId) ?? null : null}
                 user={user}
+                listingEnabled={listingEnabled}
                 onSelect={onSelect}
                 onListed={onListed}
               />

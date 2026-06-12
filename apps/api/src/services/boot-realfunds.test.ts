@@ -36,6 +36,7 @@ test('REAL_FUNDS boot with search-and-bet on but NAV gates unset: server comes u
   assert.equal(res.statusCode, 200);
   assert.equal(res.json().ok, true);
   assert.equal(res.json().realFunds, true);
+  assert.equal(res.json().listingEnabled, false, 'health reports listing off (NAV gates unset) so the web can hide LIST');
 });
 
 test('read-only catalogue search stays enabled without the gates; on-demand listing is disabled', async () => {
