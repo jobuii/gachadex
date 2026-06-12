@@ -5,7 +5,7 @@ import { listMarketsWithData, getCandles, getMarketDetails } from '../services/m
 import { searchCatalog, ensureMarketFromCard } from '../services/providers/search.ts';
 import { getDefaultClient } from '../services/providers/tcgpricelookup.ts';
 import { authenticate } from '../plugins/auth.ts';
-import { config, searchAndBetActive } from '../config.ts';
+import { config, catalogSearchEnabled, searchAndBetActive } from '../config.ts';
 import { rl } from './_ratelimit.ts';
 import { HttpError } from '../errors.ts';
 
@@ -28,9 +28,9 @@ export async function marketRoutes(app: FastifyInstance): Promise<void> {
     return details;
   });
 
-  // Search-and-bet (P6): only live once tcgpricelookup drives the oracle — the pokemontcg feed can
-  // neither search the catalog nor price an on-demand market.
-  if (!searchAndBetActive) return;
+  // Catalogue search (read-only) is live once the feature flag is on + tcgpricelookup drives the
+  // oracle — it does NOT depend on the NAV gates (it browses, it doesn't create a market).
+  if (!catalogSearchEnabled) return;
 
   // Whole-catalog search (cached 1h per (q, game); uncached calls cost a provider request — capped
   // per IP on top of the global limiter).
@@ -43,8 +43,12 @@ export async function marketRoutes(app: FastifyInstance): Promise<void> {
     return { results: await searchCatalog(db, getDefaultClient(db), query, game) };
   });
 
-  // On-demand market creation. Authenticated (trade scope: delegated trading keys may list too) so
-  // anonymous traffic can't mint markets; idempotent — an existing market is returned, not duplicated.
+  // On-demand market creation CREATES a real-money-tradeable market, so it additionally requires the
+  // NAV gates (searchAndBetActive). When they're unset, search still works but listing is off.
+  if (!searchAndBetActive) return;
+
+  // Authenticated (trade scope: delegated trading keys may list too) so anonymous traffic can't mint
+  // markets; idempotent — an existing market is returned, not duplicated.
   app.post(
     '/markets/ensure',
     rl(config.routeRateLimits.marketEnsure, { preHandler: authenticate, config: { scope: 'trade' as const } }),
