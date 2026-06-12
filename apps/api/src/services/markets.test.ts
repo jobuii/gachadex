@@ -129,15 +129,22 @@ test('getCandles: seeded history renders only BEFORE the first real mark; marks 
 
 test('gradeLadder: full PSA/BGS/CGC ladder, oracle price chain per grade, sorted', () => {
   const graded = {
-    psa: { '10': { ebay: { avg_7d: 418.5 } }, '9': { ebay: { avg_1d: 150 } } }, // 7d -> 1d chain
+    psa: {
+      '10': { ebay: { avg_7d: 418.5 } },
+      '9': { ebay: { avg_1d: 150 } }, // 7d -> 1d chain
+      '104': { ebay: { avg_7d: 17500 } }, // mis-parsed listing (collector number as grade) — verified live; dropped
+      'authentic': { ebay: { avg_7d: 50 } }, // non-numeric grade: dropped
+    },
     cgc: { '9.5': { ebay: { avg_30d: 120 } } },
     bgs: { '10': { ebay: { avg_7d: 0 } }, '9.5': { ebay: { avg_7d: 200 } } }, // 0 = no data: dropped
+    sgc: { '10': { ebay: { avg_7d: 90 } } }, // unranked grader: after PSA/BGS/CGC
   };
   assert.deepEqual(gradeLadder(graded), [
     { grader: 'PSA', grade: '10', priceE6: '418500000' },
     { grader: 'PSA', grade: '9', priceE6: '150000000' },
     { grader: 'BGS', grade: '9.5', priceE6: '200000000' },
     { grader: 'CGC', grade: '9.5', priceE6: '120000000' },
+    { grader: 'SGC', grade: '10', priceE6: '90000000' },
   ]);
   assert.deepEqual(gradeLadder(null), [], 'prints without a graded object (non-tpl payloads) have no ladder');
 });

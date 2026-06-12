@@ -216,19 +216,26 @@ export interface GradeRow {
 const GRADER_ORDER: Record<string, number> = { PSA: 0, BGS: 1, CGC: 2 };
 
 /** The full grade ladder out of this provider's graded prices object ({ psa: { '10': { ebay: … }}, …}),
- *  each rung priced through the same chain as the PSA-10 oracle price. Sorted PSA/BGS/CGC, grade desc. */
+ *  each rung priced through the same chain as the PSA-10 oracle price. Sorted PSA/BGS/CGC (other
+ *  graders after, alphabetical), grade desc. Grade keys are VALIDATED to (0, 10]: the live data
+ *  contains mis-parsed listings (a verified 'psa.104' — the card's collector number read as a grade). */
 export function gradeLadder(graded: unknown): GradeRow[] {
   if (!graded || typeof graded !== 'object') return [];
   const rows: GradeRow[] = [];
   for (const [grader, grades] of Object.entries(graded as NonNullable<NonNullable<TplCard['prices']>['graded']>)) {
     if (!grades || typeof grades !== 'object') continue;
     for (const [grade, src] of Object.entries(grades)) {
+      const g = Number(grade);
+      if (!Number.isFinite(g) || g <= 0 || g > 10) continue;
       const v = ebayAvgUsd(src?.ebay);
       if (v != null) rows.push({ grader: grader.toUpperCase(), grade, priceE6: toE6(v).toString() });
     }
   }
   return rows.sort(
-    (a, b) => (GRADER_ORDER[a.grader] ?? 9) - (GRADER_ORDER[b.grader] ?? 9) || (Number(b.grade) || 0) - (Number(a.grade) || 0),
+    (a, b) =>
+      (GRADER_ORDER[a.grader] ?? 9) - (GRADER_ORDER[b.grader] ?? 9) ||
+      a.grader.localeCompare(b.grader) ||
+      Number(b.grade) - Number(a.grade),
   );
 }
 
