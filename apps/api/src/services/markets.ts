@@ -120,7 +120,7 @@ export async function upsertIndexMarket(
   return r.rows[0].id;
 }
 
-/** Markets list for the API: latest mark + index + change-vs-previous-print. */
+/** Markets list for the API: latest mark + index + 24h change (off the marks series). */
 export interface MarketView {
   id: string;
   kind: 'card' | 'index';
@@ -191,18 +191,21 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
   );
   const latestMap = new Map(latest.rows.map((r) => [r.market_id, r]));
 
-  // change vs the previous accepted oracle print
-  const hist = await db.query<{ market_id: string; latest: string | null; prev: string | null }>(
-    `SELECT market_id,
-            (array_agg(index_price_e6 ORDER BY source_observed_at DESC))[1]::text AS latest,
-            (array_agg(index_price_e6 ORDER BY source_observed_at DESC))[2]::text AS prev
-     FROM oracle_prices WHERE is_accepted GROUP BY market_id`,
+  // 24h change, computed from the SAME mark series the chart + displayed price use (`marks` by
+  // computed_at) — NOT oracle_prices by source_observed_at. The provider's source_observed_at can be
+  // static/backdated, so that ordering disagreed with the marks the user actually sees and reported
+  // 0% for cards whose chart had clearly moved. Reference = the last mark at/before now-24h.
+  const ref = await db.query<{ market_id: string; ref: string }>(
+    `SELECT DISTINCT ON (market_id) market_id, mark_price_e6::text AS ref
+     FROM marks WHERE computed_at <= now() - interval '24 hours'
+     ORDER BY market_id, computed_at DESC`,
   );
   const changeMap = new Map<string, number>();
-  for (const h of hist.rows) {
-    if (h.latest && h.prev && BigInt(h.prev) !== 0n) {
-      const change = (Number(BigInt(h.latest) - BigInt(h.prev)) / Number(BigInt(h.prev))) * 100;
-      changeMap.set(h.market_id, Math.round(change * 100) / 100);
+  for (const r of ref.rows) {
+    const cur = latestMap.get(r.market_id)?.mark_e6;
+    if (cur && BigInt(r.ref) !== 0n) {
+      const change = (Number(BigInt(cur) - BigInt(r.ref)) / Number(BigInt(r.ref))) * 100;
+      changeMap.set(r.market_id, Math.round(change * 100) / 100);
     }
   }
 
