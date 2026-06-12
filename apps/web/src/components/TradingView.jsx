@@ -1,12 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import { createChart, ColorType, AreaSeries } from 'lightweight-charts';
+import {
+  createChart, ColorType, CrosshairMode, LineStyle,
+  AreaSeries, LineSeries, CandlestickSeries, BaselineSeries, HistogramSeries,
+} from 'lightweight-charts';
 import { formatUsd, formatPct } from '@pokex/pricing';
 import { useRealtime } from '../store/realtime';
+import { useAuth } from '../auth/AuthContext';
+import { useTheme } from '../store/theme';
 import { BottomPanel } from './BottomPanel';
 import { MarketThumb } from './MarketThumb';
 import * as api from '../lib/api.js';
 
 const TIMEFRAMES = ['1D', '1W', '1M', '3M', '1Y'];
+const CHART_TYPES = [{ id: 'area', label: 'Area' }, { id: 'line', label: 'Line' }, { id: 'candles', label: 'Candle' }, { id: 'baseline', label: 'Base' }];
+const MA_PERIOD = 7;
 const px = (e6) => (e6 == null ? 0 : Number(e6) / 1_000_000);
 
 // Floor "now" to the current timeframe's bucket (hourly for 1D/1W, daily for 1M+), as UTC unix
@@ -17,21 +24,67 @@ const bucketTime = (tf) => {
   return sec - (sec % size);
 };
 
+// localStorage-backed prefs (chart type / timeframe / overlays), with safe fallbacks.
+const load = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
+const save = (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } };
+
+// Read the active skin's tokens so the chart matches the theme (recomputed on skin change).
+function readTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (name, fb) => (cs.getPropertyValue(name).trim() || fb);
+  return {
+    bg: v('--bg', '#111418'),
+    text: v('--text-muted', '#8b949e'),
+    border: v('--border', '#30363d'),
+    accent: v('--gold', '#f0c040'),
+    up: v('--success', '#3fb950'),
+    down: v('--danger', '#f85149'),
+    font: v('--font-base', "'Press Start 2P', monospace"),
+  };
+}
+
+// Simple moving average; leading points (< period) are omitted (lightweight-charts whitespace).
+function smaSeries(candles, period) {
+  const out = [];
+  let sum = 0;
+  for (let i = 0; i < candles.length; i++) {
+    sum += candles[i].close;
+    if (i >= period) sum -= candles[i - period].close;
+    if (i >= period - 1) out.push({ time: candles[i].time, value: sum / period });
+  }
+  return out;
+}
+
+const hexAlpha = (hex, a) => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+};
+
 // Bound the bottom panel so both it and the chart stay usable.
-const PANEL_MIN = 120; // keep the tabs + a row of content visible
-const CHART_MIN = 150; // never starve the chart below this
-const CHART_CHROME = 190; // fixed height above the panel: navbar + card header + timeframe bar + resizer
+const PANEL_MIN = 120;
+const CHART_MIN = 150;
+const CHART_CHROME = 190;
 const clampPanel = (h) => Math.min(Math.max(h, PANEL_MIN), Math.max(PANEL_MIN + 100, window.innerHeight - CHART_CHROME - CHART_MIN));
 
-// `mobile` renders chart-only: the page owns the BottomPanel (placed after the order form in the
-// single-column flow) and there's no draggable splitter — the layout scrolls instead.
 export function TradingView({ market, mobile = false }) {
   const elRef = useRef(null);
   const chartRef = useRef(null);
-  const seriesRef = useRef(null);
-  const [tf, setTf] = useState('1M');
+  const mainRef = useRef(null);
+  const maRef = useRef(null);
+  const volRef = useRef(null);
+  const priceLinesRef = useRef([]);
+  const lastBarRef = useRef(null); // current bucket's bar, for live OHLC updates
+
+  const [tf, setTf] = useState(() => (TIMEFRAMES.includes(load('gachadex_tf', '1M')) ? load('gachadex_tf', '1M') : '1M'));
+  const [chartType, setChartType] = useState(() => (CHART_TYPES.some((t) => t.id === load('gachadex_chart_type', 'area')) ? load('gachadex_chart_type', 'area') : 'area'));
+  const [maOn, setMaOn] = useState(() => load('gachadex_chart_ma', '0') === '1');
+  const [volOn, setVolOn] = useState(() => load('gachadex_chart_vol', '0') === '1');
+  const [candles, setCandles] = useState([]);
   const [noData, setNoData] = useState(false);
-  // splitter state is desktop-only; on mobile the panel isn't rendered here at all
+  const [positions, setPositions] = useState([]);
+  const [seriesVersion, setSeriesVersion] = useState(0); // bumped when the main series is rebuilt
   const [panelHeight, setPanelHeight] = useState(() => (mobile ? 0 : clampPanel(Number(localStorage.getItem('gachadex_panel_h')) || 210)));
   const [dragging, setDragging] = useState(false);
 
@@ -39,34 +92,32 @@ export function TradingView({ market, mobile = false }) {
   const oi = useRealtime((s) => s.oi);
   const watch = useRealtime((s) => s.watch);
   const unwatch = useRealtime((s) => s.unwatch);
+  const skin = useTheme((s) => s.skin);
+  const { user } = useAuth();
 
   const liveMark = market ? marks[market.id]?.markE6 ?? market.markE6 : null;
   const liveIndex = market ? marks[market.id]?.indexE6 ?? market.indexE6 : null;
   const change = market?.change24hPct ?? 0;
   const changeUp = change >= 0;
 
-  // init chart once
+  useEffect(() => save('gachadex_tf', tf), [tf]);
+  useEffect(() => save('gachadex_chart_type', chartType), [chartType]);
+  useEffect(() => save('gachadex_chart_ma', maOn ? '1' : '0'), [maOn]);
+  useEffect(() => save('gachadex_chart_vol', volOn ? '1' : '0'), [volOn]);
+
+  // create the chart once; the container tracks its own size via ResizeObserver
   useEffect(() => {
-    if (!elRef.current) return;
+    if (!elRef.current) return undefined;
     const chart = createChart(elRef.current, {
-      layout: { background: { type: ColorType.Solid, color: '#111418' }, textColor: '#8b949e', fontFamily: "'Press Start 2P', monospace", fontSize: 9 },
+      layout: { background: { type: ColorType.Solid, color: '#111418' }, textColor: '#8b949e', fontSize: 9 },
       grid: { vertLines: { color: 'rgba(255,255,255,0.04)' }, horzLines: { color: 'rgba(255,255,255,0.04)' } },
       rightPriceScale: { borderColor: '#30363d' },
       timeScale: { borderColor: '#30363d', timeVisible: true },
-      crosshair: { mode: 1 },
+      crosshair: { mode: CrosshairMode.Normal },
       width: elRef.current.clientWidth,
       height: elRef.current.clientHeight,
     });
-    const series = chart.addSeries(AreaSeries, {
-      lineColor: '#f0c040',
-      topColor: 'rgba(240,192,64,0.25)',
-      bottomColor: 'rgba(240,192,64,0.0)',
-      lineWidth: 2,
-    });
     chartRef.current = chart;
-    seriesRef.current = series;
-    // Track the CONTAINER's size, not just the window — otherwise the canvas keeps its initial
-    // height when the layout changes (e.g. the bottom panel resizing) and overflows over it.
     const fit = () => elRef.current && chart.applyOptions({ width: elRef.current.clientWidth, height: elRef.current.clientHeight });
     const ro = new ResizeObserver(fit);
     ro.observe(elRef.current);
@@ -75,49 +126,145 @@ export function TradingView({ market, mobile = false }) {
       ro.disconnect();
       window.removeEventListener('resize', fit);
       chart.remove();
+      chartRef.current = mainRef.current = maRef.current = volRef.current = null;
     };
   }, []);
 
   // subscribe to the selected market's live channels
   useEffect(() => {
-    if (!market) return;
+    if (!market) return undefined;
     watch(market.id);
     return () => unwatch(market.id);
   }, [market?.id, watch, unwatch]);
 
   // load candle history on market / timeframe change
   useEffect(() => {
-    if (!market || !seriesRef.current) return;
+    if (!market) return undefined;
     let alive = true;
-    api
-      .getCandles(market.id, tf)
-      .then(({ candles }) => {
-        if (!alive || !seriesRef.current) return;
-        seriesRef.current.setData(candles.map((c) => ({ time: c.time, value: c.value })));
-        chartRef.current?.timeScale().fitContent();
-        setNoData(candles.length === 0); // real-data only; show an empty state when there's no history
+    api.getCandles(market.id, tf)
+      .then(({ candles: data }) => {
+        if (!alive) return;
+        setCandles(data);
+        setNoData(data.length === 0);
       })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
+      .catch(() => alive && setCandles([]));
+    return () => { alive = false; };
   }, [market?.id, tf]);
 
-  // live-update the latest point from the mark feed (bucket must match the active timeframe)
+  // chart chrome (background / text / borders) follows the active skin
   useEffect(() => {
-    if (!market || !seriesRef.current || !liveMark) return;
-    try {
-      seriesRef.current.update({ time: bucketTime(tf), value: px(liveMark) });
-      setNoData(false); // a live point means there's something to show
-    } catch {
-      /* out-of-order time during history load */
+    const chart = chartRef.current;
+    if (!chart) return;
+    const t = readTheme();
+    chart.applyOptions({
+      layout: { background: { type: ColorType.Solid, color: t.bg }, textColor: t.text, fontFamily: t.font },
+      rightPriceScale: { borderColor: t.border },
+      timeScale: { borderColor: t.border },
+    });
+  }, [skin]);
+
+  // the PRICE series — rebuilt only on chart-type or skin change, re-fed on new data. Overlays
+  // (MA / volume) live in their own effects below, so toggling them never disturbs this series.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const t = readTheme();
+    if (mainRef.current) { try { chart.removeSeries(mainRef.current); } catch { /* gone */ } mainRef.current = null; }
+    priceLinesRef.current = [];
+
+    const closes = candles.map((c) => ({ time: c.time, value: c.close }));
+    if (chartType === 'candles') {
+      mainRef.current = chart.addSeries(CandlestickSeries, { upColor: t.up, downColor: t.down, borderUpColor: t.up, borderDownColor: t.down, wickUpColor: t.up, wickDownColor: t.down });
+      mainRef.current.setData(candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
+    } else if (chartType === 'line') {
+      mainRef.current = chart.addSeries(LineSeries, { color: t.accent, lineWidth: 2 });
+      mainRef.current.setData(closes);
+    } else if (chartType === 'baseline') {
+      mainRef.current = chart.addSeries(BaselineSeries, {
+        baseValue: { type: 'price', price: closes.length ? closes[0].value : 0 },
+        topLineColor: t.up, topFillColor1: hexAlpha(t.up, 0.28), topFillColor2: hexAlpha(t.up, 0.05),
+        bottomLineColor: t.down, bottomFillColor1: hexAlpha(t.down, 0.05), bottomFillColor2: hexAlpha(t.down, 0.28),
+        lineWidth: 2,
+      });
+      mainRef.current.setData(closes);
+    } else {
+      mainRef.current = chart.addSeries(AreaSeries, { lineColor: t.accent, topColor: hexAlpha(t.accent, 0.25), bottomColor: hexAlpha(t.accent, 0.0), lineWidth: 2 });
+      mainRef.current.setData(closes);
     }
-  }, [liveMark, market?.id, tf]);
+    chart.timeScale().fitContent();
+    lastBarRef.current = candles.length ? { ...candles[candles.length - 1] } : null;
+    setSeriesVersion((v) => v + 1); // signal the price-line effect to redraw on the new series
+  }, [candles, chartType, skin]);
+
+  // MA(7) overlay — toggled independently of the price series (no flicker)
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (maRef.current) { try { chart.removeSeries(maRef.current); } catch { /* gone */ } maRef.current = null; }
+    if (maOn && candles.length >= MA_PERIOD) {
+      const t = readTheme();
+      maRef.current = chart.addSeries(LineSeries, { color: hexAlpha(t.text, 0.9), lineWidth: 1, lineStyle: LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+      maRef.current.setData(smaSeries(candles, MA_PERIOD));
+    }
+  }, [candles, maOn, skin]);
+
+  // volume histogram on the bottom strip — toggled independently of the price series
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (volRef.current) { try { chart.removeSeries(volRef.current); } catch { /* gone */ } volRef.current = null; }
+    if (volOn) {
+      const t = readTheme();
+      volRef.current = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: 'vol', lastValueVisible: false, priceLineVisible: false });
+      volRef.current.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+      volRef.current.setData(candles.map((c) => ({ time: c.time, value: c.volume, color: hexAlpha(c.close >= c.open ? t.up : t.down, 0.5) })));
+    }
+  }, [candles, volOn, skin]);
+
+  // draw entry / liquidation price lines for any open position in this market
+  useEffect(() => {
+    const series = mainRef.current;
+    if (!series) return;
+    const t = readTheme();
+    for (const l of priceLinesRef.current) { try { series.removePriceLine(l); } catch { /* gone */ } }
+    priceLinesRef.current = [];
+    for (const p of positions) {
+      const entry = px(p.avgEntryE6);
+      const liq = px(p.liqPriceE6);
+      if (entry > 0) priceLinesRef.current.push(series.createPriceLine({ price: entry, color: hexAlpha(t.text, 0.9), lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: `entry ${p.side}` }));
+      if (liq > 0) priceLinesRef.current.push(series.createPriceLine({ price: liq, color: t.down, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'liq' }));
+    }
+  }, [positions, seriesVersion]);
+
+  // live-update the latest bar from the mark feed (maintains the current bucket's OHLC for candles)
+  useEffect(() => {
+    if (!market || !mainRef.current || !liveMark) return;
+    const time = bucketTime(tf);
+    const price = px(liveMark);
+    let bar = lastBarRef.current;
+    if (!bar || bar.time < time) bar = { time, open: price, high: price, low: price, close: price };
+    else bar = { time, open: bar.open, high: Math.max(bar.high, price), low: Math.min(bar.low, price), close: price };
+    lastBarRef.current = bar;
+    try {
+      mainRef.current.update(chartType === 'candles' ? bar : { time, value: price });
+      setNoData(false);
+    } catch { /* out-of-order time during a history reload */ }
+  }, [liveMark, market?.id, tf, chartType]);
+
+  // open positions for this market (auth-only); polled so a fresh open/close updates the lines
+  useEffect(() => {
+    if (!market || !user) { setPositions([]); return undefined; }
+    let alive = true;
+    const refresh = () => api.getPositions()
+      .then((r) => alive && setPositions((r.positions ?? []).filter((p) => p.marketId === market.id)))
+      .catch(() => {});
+    refresh();
+    const id = setInterval(refresh, 8000);
+    return () => { alive = false; clearInterval(id); };
+  }, [market?.id, user]);
 
   // persist the panel height + re-clamp it if the window shrinks (desktop-only machinery)
-  useEffect(() => {
-    if (!mobile) localStorage.setItem('gachadex_panel_h', String(panelHeight));
-  }, [panelHeight, mobile]);
+  useEffect(() => { if (!mobile) localStorage.setItem('gachadex_panel_h', String(panelHeight)); }, [panelHeight, mobile]);
   useEffect(() => {
     if (mobile) return undefined;
     const onResize = () => setPanelHeight((h) => clampPanel(h));
@@ -125,17 +272,12 @@ export function TradingView({ market, mobile = false }) {
     return () => window.removeEventListener('resize', onResize);
   }, [mobile]);
 
-  // drag the splitter: dragging up grows the panel and shrinks the chart (which refits via its
-  // ResizeObserver). The listeners live in an effect so they're torn down even if we unmount mid-drag.
-  const startResize = (e) => {
-    e.preventDefault();
-    setDragging(true);
-  };
+  const startResize = (e) => { e.preventDefault(); setDragging(true); };
   useEffect(() => {
     if (!dragging) return undefined;
     document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';
-    const onMove = (ev) => setPanelHeight((h) => clampPanel(h - ev.movementY)); // moving up grows the panel
+    const onMove = (ev) => setPanelHeight((h) => clampPanel(h - ev.movementY));
     const onUp = () => setDragging(false);
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
@@ -150,12 +292,9 @@ export function TradingView({ market, mobile = false }) {
   const o = market ? oi[market.id] : null;
   const totalOi = o ? (Number(o.longUusdc) + Number(o.shortUusdc)) / 1e6 : 0;
 
-  // NOTE: the chart container must always be mounted so the init effect (run once) can
-  // attach the chart; we guard a null market inline rather than early-returning.
   return (
     <div className="trading-center">
       <div className="card-header-bar">
-        {/* on mobile the market bar above already names the market */}
         {!mobile && (
           <div className="card-header-left">
             <MarketThumb market={market} className="header-card-thumb" />
@@ -187,11 +326,18 @@ export function TradingView({ market, mobile = false }) {
       </div>
 
       <div className="timeframe-bar">
-        {TIMEFRAMES.map((t) => (
-          <button key={t} className={`tf-btn ${tf === t ? 'active' : ''}`} onClick={() => setTf(t)}>
-            {t}
-          </button>
-        ))}
+        <div className="tf-group">
+          {TIMEFRAMES.map((t) => (
+            <button key={t} className={`tf-btn ${tf === t ? 'active' : ''}`} onClick={() => setTf(t)}>{t}</button>
+          ))}
+        </div>
+        <div className="chart-tools">
+          {CHART_TYPES.map((c) => (
+            <button key={c.id} className={`tf-btn ${chartType === c.id ? 'active' : ''}`} onClick={() => setChartType(c.id)} title={`${c.label} chart`}>{c.label}</button>
+          ))}
+          <button className={`tf-btn ${maOn ? 'active' : ''}`} onClick={() => setMaOn((v) => !v)} title={`${MA_PERIOD}-period moving average`}>MA</button>
+          <button className={`tf-btn ${volOn ? 'active' : ''}`} onClick={() => setVolOn((v) => !v)} title="Volume">VOL</button>
+        </div>
         {market && market.status !== 'active' && <span className="market-halt-badge">{market.status.toUpperCase()}</span>}
       </div>
 
