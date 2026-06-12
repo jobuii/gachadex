@@ -75,6 +75,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
   const [search, setSearch] = useState('');
   const [catalog, setCatalog] = useState(null); // null = inactive; [] = no results
   const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState(false); // search failed/unavailable (≠ zero matches)
   const marks = useRealtime((s) => s.marks);
   const { user } = useAuth();
 
@@ -87,6 +88,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
   useEffect(() => {
     if (tab !== 'cards' || q.length < 2) {
       setCatalog(null);
+      setCatalogError(false);
       setCatalogLoading(false);
       return;
     }
@@ -95,9 +97,17 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
     const t = setTimeout(async () => {
       try {
         const { results } = await api.searchCatalog(q, game);
-        if (alive) setCatalog(results);
+        if (alive) {
+          setCatalog(results);
+          setCatalogError(false);
+        }
       } catch {
-        if (alive) setCatalog([]);
+        // the endpoint is unavailable (catalogue search off) or errored — NOT "zero matches", so
+        // don't render it as "· 0". Surface an explicit unavailable state instead.
+        if (alive) {
+          setCatalog(null);
+          setCatalogError(true);
+        }
       } finally {
         if (alive) setCatalogLoading(false);
       }
@@ -232,7 +242,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
           <>
             <div className="catalog-divider">
               <span className="gdot" style={{ '--dot': activeGame.color }} />
-              CATALOG{catalogLoading ? ' · searching…' : catalogRows ? ` · ${catalogRows.length}` : ''}
+              CATALOG{catalogLoading ? ' · searching…' : catalogError ? ' · unavailable' : catalogRows ? ` · ${catalogRows.length}` : ''}
             </div>
             {catalogRows?.map((r) => (
               <CatalogRow
@@ -244,6 +254,9 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
                 onListed={onListed}
               />
             ))}
+            {catalogError && !catalogLoading && (
+              <div className="market-empty"><small>Catalogue search is unavailable right now.</small></div>
+            )}
             {catalogRows && catalogRows.length === 0 && !catalogLoading && (
               <div className="market-empty"><small>Nothing new in the {activeGame.label} catalog for “{q}”.</small></div>
             )}
