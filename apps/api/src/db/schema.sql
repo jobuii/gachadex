@@ -263,6 +263,18 @@ CREATE TABLE IF NOT EXISTS marks (
 );
 CREATE INDEX IF NOT EXISTS idx_marks_market ON marks(market_id, computed_at);
 
+-- Provider-sourced pre-listing price history (tcgpricelookup /cards/:id/history), seeded once per
+-- market so charts aren't empty on day one. Kept SEPARATE from marks on purpose: a mark is a price
+-- someone could have traded at on THIS venue; these are the card market's prior prices. getCandles
+-- only reads seed days that precede the market's first mark — real marks always win. A single
+-- price_e6=0 row is the "provider has no history" sentinel (renders nowhere, stops re-fetching).
+CREATE TABLE IF NOT EXISTS chart_seed (
+  market_id TEXT NOT NULL REFERENCES markets(id),
+  day       DATE NOT NULL,
+  price_e6  BIGINT NOT NULL,
+  PRIMARY KEY (market_id, day)
+);
+
 -- =========================================================================
 -- Positions / orders / fills
 -- =========================================================================

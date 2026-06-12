@@ -45,6 +45,27 @@ export interface TplSearchParams {
   offset?: number;
 }
 
+/** One per-source price row inside a history point (verified live 2026-06-12): raw rows carry
+ *  source='tcgplayer'|'ebay' + condition; graded rows carry grader+grade instead of condition. */
+export interface TplHistoryRow {
+  source: string | null;
+  condition: string | null;
+  grader: string | null;
+  grade: string | null;
+  price_market: number | null;
+  price_low: number | null;
+  price_mid: number | null;
+  price_high: number | null;
+  avg_1d: number | null;
+  avg_7d: number | null;
+  avg_30d: number | null;
+}
+
+export interface TplHistoryPoint {
+  date: string; // 'YYYY-MM-DD'
+  prices: TplHistoryRow[];
+}
+
 export const TPL_BATCH_SIZE = 20; // documented max ids per search request
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
@@ -104,6 +125,12 @@ export class TcgPriceLookupClient {
     return json && typeof json === 'object' && 'id' in json ? (json as TplCard) : null;
   }
 
+  /** GET /cards/:id/history — daily price series (Trader-gated). Sparse: only days with data. */
+  async getCardHistory(id: string, period: '7d' | '30d' | '90d' | '1y', priority: ProviderPriority): Promise<TplHistoryPoint[]> {
+    const json = await this.request(`/cards/${encodeURIComponent(id)}/history?period=${period}`, priority);
+    return Array.isArray(json?.data) ? json.data : [];
+  }
+
   /** One paced+retried GET. Throws on non-retryable errors or when attempts are exhausted. */
   private async request(path: string, priority: ProviderPriority): Promise<any> {
     for (let attempt = 0; ; attempt++) {
@@ -148,8 +175,9 @@ export const LIQUID_THRESHOLD_USD = 25;
 // Condition preference for the raw price (plan section E fallback chain).
 const CONDITION_ORDER = ['near_mint', 'lightly_played'];
 
-/** The raw spot in USD per the plan's fallback chain + thin-market smoothing. 0 = ineligible. */
-export function rawPriceUsd(card: TplCard): number {
+/** The raw spot in USD per the plan's fallback chain + thin-market smoothing. 0 = ineligible.
+ *  Takes just the prices envelope so the history seeder can price past days through the SAME chain. */
+export function rawPriceUsd(card: Pick<TplCard, 'prices'>): number {
   for (const cond of CONDITION_ORDER) {
     const c = card.prices?.raw?.[cond];
     if (!c) continue;
@@ -167,11 +195,41 @@ export function tplTcgplayerId(c: TplCard): number | null {
   return c.tcgplayer_id != null && c.tcgplayer_id !== '' ? Number(c.tcgplayer_id) : null;
 }
 
-/** PSA-10 in USD: ebay avg_7d (stable) -> avg_1d -> avg_30d -> null. */
-export function gradedPsa10Usd(card: TplCard): number | null {
-  const e = card.prices?.graded?.psa?.['10']?.ebay;
+/** The one graded-price chain: ebay avg_7d (stable) -> avg_1d -> avg_30d -> null. */
+function ebayAvgUsd(e: { avg_1d?: number; avg_7d?: number; avg_30d?: number } | undefined): number | null {
   const v = e?.avg_7d ?? e?.avg_1d ?? e?.avg_30d;
   return v != null && v > 0 ? v : null;
+}
+
+/** PSA-10 in USD (drives the Graded index + the markets.graded_psa10_e6 column). */
+export function gradedPsa10Usd(card: TplCard): number | null {
+  return ebayAvgUsd(card.prices?.graded?.psa?.['10']?.ebay);
+}
+
+/** One rung of the graded-price ladder (PSA 10 / BGS 9.5 / …) for the market-details panel. */
+export interface GradeRow {
+  grader: string; // 'PSA' | 'BGS' | 'CGC' | …
+  grade: string; // '10', '9.5', …
+  priceE6: string;
+}
+
+const GRADER_ORDER: Record<string, number> = { PSA: 0, BGS: 1, CGC: 2 };
+
+/** The full grade ladder out of this provider's graded prices object ({ psa: { '10': { ebay: … }}, …}),
+ *  each rung priced through the same chain as the PSA-10 oracle price. Sorted PSA/BGS/CGC, grade desc. */
+export function gradeLadder(graded: unknown): GradeRow[] {
+  if (!graded || typeof graded !== 'object') return [];
+  const rows: GradeRow[] = [];
+  for (const [grader, grades] of Object.entries(graded as NonNullable<NonNullable<TplCard['prices']>['graded']>)) {
+    if (!grades || typeof grades !== 'object') continue;
+    for (const [grade, src] of Object.entries(grades)) {
+      const v = ebayAvgUsd(src?.ebay);
+      if (v != null) rows.push({ grader: grader.toUpperCase(), grade, priceE6: toE6(v).toString() });
+    }
+  }
+  return rows.sort(
+    (a, b) => (GRADER_ORDER[a.grader] ?? 9) - (GRADER_ORDER[b.grader] ?? 9) || (Number(b.grade) || 0) - (Number(a.grade) || 0),
+  );
 }
 
 /** The tracked market row a provider card re-prices. Identity (game/symbol/card_id) comes from OUR

@@ -19,14 +19,12 @@ export function OrderEntry({ market, onTraded }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [details, setDetails] = useState(null);
-  const [showMore, setShowMore] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
 
   useEffect(() => {
     if (!market?.id) return;
     let alive = true;
     setDetails(null); // hide the prior market's panel during the new round-trip
-    setShowMore(false); // collapse so stale expanded details can't render under the new card
     setModalOpen(false); // close the enlarged-image modal when switching markets
     api.getMarketDetails(market.id).then((d) => alive && setDetails(d)).catch(() => alive && setDetails(null));
     return () => {
@@ -128,27 +126,32 @@ export function OrderEntry({ market, onTraded }) {
         </div>
       )}
 
-      {details && (details.gradedPsa10E6 || details.metadata) && (
+      {details && (details.grades?.length > 0 || details.gradedPsa10E6 || details.metadata) && (
         <div className="details-panel">
-          <button className="more-info-btn" onClick={() => setShowMore((v) => !v)}>
-            {showMore ? 'Hide details' : 'Show more'}
-          </button>
-          {showMore && (
-            <div className="details-body">
-              {details.gradedPsa10E6 && (
-                <div className="detail-row">
-                  <span>PSA-10</span>
-                  <strong className="up">{formatUsd(BigInt(details.gradedPsa10E6))}</strong>
-                </div>
-              )}
-              {details.metadata?.setName && (
-                <div className="detail-row"><span>Set</span><strong>{details.metadata.setName}</strong></div>
-              )}
-              {details.metadata?.rarity && (
-                <div className="detail-row"><span>Rarity</span><strong>{details.metadata.rarity}</strong></div>
-              )}
-            </div>
-          )}
+          <div className="details-body">
+            {details.metadata?.setName && (
+              <div className="detail-row"><span>Set</span><strong>{details.metadata.setName}</strong></div>
+            )}
+            {details.metadata?.rarity && (
+              <div className="detail-row"><span>Rarity</span><strong>{details.metadata.rarity}</strong></div>
+            )}
+            {details.grades?.length > 0 ? (
+              <>
+                <div className="detail-section">Graded (eBay 7d avg)</div>
+                {details.grades.map((g) => (
+                  <div className="detail-row" key={`${g.grader}-${g.grade}`}>
+                    <span>{g.grader} {g.grade}</span>
+                    <strong className="up">{formatUsd(BigInt(g.priceE6))}</strong>
+                  </div>
+                ))}
+              </>
+            ) : details.gradedPsa10E6 ? (
+              <div className="detail-row">
+                <span>PSA-10</span>
+                <strong className="up">{formatUsd(BigInt(details.gradedPsa10E6))}</strong>
+              </div>
+            ) : null}
+          </div>
         </div>
       )}
 
