@@ -61,16 +61,28 @@ const saveState = (db: Db, game: string, state: CrawlState) => putSetting(db, st
 
 const clearState = (db: Db, game: string) => db.query(`DELETE FROM settings WHERE key = $1`, [stateKey(game)]);
 
-/** Deterministic top-N: price desc, then tcgplayer id asc (nulls last), then provider id (section E). */
+/** Deterministic top-N: price desc, then tcgplayer id asc (nulls last), then provider id (section E).
+ *  Printing variants of one physical product share a tcgplayer_id (verified live: Normal vs Reverse
+ *  rows are separate provider cards, same product) — keep only the highest-priced printing, per the
+ *  one-market-per-canonical-variant decision (a duplicate would also trip idx_markets_tcgplayer). */
 export function topCandidates(kept: Candidate[], topN: number): Candidate[] {
-  return [...kept]
-    .sort(
-      (a, b) =>
-        b.price - a.price ||
-        (a.tid ?? Number.MAX_SAFE_INTEGER) - (b.tid ?? Number.MAX_SAFE_INTEGER) ||
-        a.id.localeCompare(b.id),
-    )
-    .slice(0, topN);
+  const sorted = [...kept].sort(
+    (a, b) =>
+      b.price - a.price ||
+      (a.tid ?? Number.MAX_SAFE_INTEGER) - (b.tid ?? Number.MAX_SAFE_INTEGER) ||
+      a.id.localeCompare(b.id),
+  );
+  const seenTid = new Set<number>();
+  const out: Candidate[] = [];
+  for (const c of sorted) {
+    if (c.tid != null) {
+      if (seenTid.has(c.tid)) continue; // a pricier printing of this product already made the cut
+      seenTid.add(c.tid);
+    }
+    out.push(c);
+    if (out.length === topN) break;
+  }
+  return out;
 }
 
 // Global weekly-rebalance bookkeeping (read by the index.ts discovery loop): the interval is enforced
@@ -155,13 +167,22 @@ export async function discoverGame(
     [topIds],
   );
   const byId = new Map(existing.rows.map((t) => [t.provider_card_id, t]));
+  let conflicts = 0;
   for (const c of full) {
     const t: TrackedMarket =
       byId.get(c.id) ?? { provider_card_id: c.id, symbol: cardSymbol(game, c.id), card_id: c.id, game, featured: true };
     const oc = fromTplCard(c, t);
-    await upsertCardMarket(db, { ...toCardUpsert(oc), featured: true });
-    // no oracle print here — the refresh loop prices new markets on its next pass
+    try {
+      await upsertCardMarket(db, { ...toCardUpsert(oc), featured: true });
+      // no oracle print here — the refresh loop prices new markets on its next pass
+    } catch {
+      // unique-violation (identity already claimed by another market) — skip this card, never die
+      // mid-apply: the rest of the featured set still lands and the report surfaces the skip.
+      conflicts++;
+      log(`✗ skipped (identity conflict): ${oc.displayName} [${c.id}]`);
+    }
   }
+  if (conflicts > 0) log(`${conflicts} candidate(s) skipped on identity conflicts`);
   // drop-outs leave the basket but stay tracked + priced
   await db.query(
     `UPDATE markets SET featured = false
