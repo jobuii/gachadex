@@ -118,7 +118,12 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
         .filter((m) => m.displayName.toLowerCase().includes(q.toLowerCase()))
         .sort((a, b) => Number(b.tradeable) - Number(a.tradeable));
     }
-    return (q ? mine : mine.filter((m) => m.featured))
+    // Default (no search) = the featured top-250. Fall back to ALL cards when nothing is featured —
+    // an API build that predates the `featured` field (deploy race / rollback) or a transient data
+    // gap must never collapse the list into an empty "coming soon".
+    const featured = mine.filter((m) => m.featured);
+    const base = q ? mine : featured.length ? featured : mine;
+    return base
       .filter((m) => m.displayName.toLowerCase().includes(q.toLowerCase()))
       .sort((a, b) => Number(b.markE6 ?? 0) - Number(a.markE6 ?? 0));
     // eslint-disable-next-line react-hooks/exhaustive-deps
