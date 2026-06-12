@@ -67,6 +67,27 @@ test('same-set printing rows are picked by the market variant (exact first, then
   assert.equal(matchCard({ number: '4', setName: 'Base', variant: 'holofoil', priceUsd: null }, [first, unl]), null, 'no price: still never guess');
 });
 
+test('promo aliases + the [Staff] prefix rule + the price-agreeing fallback (live straggler cases)', () => {
+  // Gyarados XY60: '(Prerelease)' $378 vs '(Prerelease) [Staff]' $399, market $384 — both in band,
+  // the base product's name is a strict prefix of the qualified one -> base wins
+  const pre = tpl('uuid-pre', 'Gyarados - XY60 (Prerelease)', 'XY60', 'XY Promos', 1, 378.13);
+  const staff = tpl('uuid-staff', 'Gyarados - XY60 (Prerelease) [Staff]', 'XY60', 'XY Promos', 2, 399.95);
+  const market = { number: 'XY60', setName: 'XY Black Star Promos', variant: 'holofoil', priceUsd: 383.94 };
+  assert.equal(matchCard(market, [staff, pre]), pre);
+
+  // SWSH066 Charizard: $82.56 vs $563.65 [Staff], market $580.92 — only [Staff] is in band -> unique
+  const cheap = tpl('uuid-c', 'Charizard - SWSH066 (Prerelease)', 'SWSH066', 'SWSH: Sword & Shield Promo Cards', 3, 82.56);
+  const exp = tpl('uuid-e', 'Charizard - SWSH066 (Prerelease) [Staff]', 'SWSH066', 'SWSH: Sword & Shield Promo Cards', 4, 563.65);
+  assert.equal(matchCard({ number: 'SWSH066', setName: 'SWSH Black Star Promos', variant: 'holofoil', priceUsd: 580.92 }, [cheap, exp]), exp);
+
+  // the cross-set unique fallback must price-agree: q='Mew ★ δ' surfaced Mewtwo ex 101/109 ($283)
+  // as the ONLY number match for a $2200 market — must NOT match
+  const mewtwo = tpl('uuid-mt', 'Mewtwo ex', '101/109', 'Ruby and Sapphire', 5, 283.43);
+  assert.equal(matchCard({ number: '101', setName: 'Dragon Frontiers', variant: 'holofoil', priceUsd: 2200 }, [mewtwo]), null);
+  // …but a price-agreeing unique fallback still matches (no set agreement, right price)
+  assert.equal(matchCard({ number: '101', setName: 'Dragon Frontiers', variant: 'holofoil', priceUsd: 290 }, [mewtwo]), mewtwo);
+});
+
 test('a prefixed-set candidate beats a same-number reprint from another set', () => {
   // tpl reality: Umbreon VMAX 095/203 exists in BOTH 'SWSH07: Evolving Skies' and 'Prize Pack Series
   // Cards' — the market's set name must pick the real one despite tpl's set-code prefix.

@@ -32,6 +32,13 @@ export function normSet(s: string | null | undefined): string | null {
 const SET_ALIASES: Record<string, string> = {
   base: 'baseset', // pokemontcg 'Base' = tpl 'Base Set'
   expeditionbaseset: 'expedition', // pokemontcg 'Expedition Base Set' = tpl 'Expedition'
+  // Black Star Promos families (tpl names verified live 2026-06-12):
+  xyblackstarpromos: 'xypromos',
+  bwblackstarpromos: 'blackandwhitepromos',
+  smblackstarpromos: 'smpromos',
+  swshblackstarpromos: 'swshswordandshieldpromocards',
+  nintendoblackstarpromos: 'nintendopromos',
+  wizardsblackstarpromos: 'wotcpromo',
 };
 
 /** tcgpricelookup prefixes set codes ('SWSH07: Evolving Skies' vs pokemontcg 'Evolving Skies'), so
@@ -76,13 +83,34 @@ export interface MarketToMatch {
 const PRICE_MATCH_TOLERANCE = 0.4;
 const MAX_CANDIDATES = 600; // search-pagination cap per market (biggest observed name: Charizard, 560)
 
+const normName = (n: string | null | undefined) => (n ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
 function uniqueByPrice(pool: TplCard[], priceUsd: number | null | undefined): TplCard | null {
   if (priceUsd == null || priceUsd <= 0) return null;
   const within = pool.filter((c) => {
     const p = rawPriceUsd(c);
     return p > 0 && Math.abs(p / priceUsd - 1) <= PRICE_MATCH_TOLERANCE;
   });
-  return within.length === 1 ? within[0] : null;
+  if (within.length === 1) return within[0];
+  // Several rows in the band: tpl qualifies sub-printings by SUFFIXING the name ('… (Prerelease)' vs
+  // '… (Prerelease) [Staff]'). The base product is the one whose name is a strict prefix of every
+  // other in-band candidate's — anything else stays ambiguous.
+  if (within.length > 1) {
+    const sorted = [...within].sort((a, b) => normName(a.name).length - normName(b.name).length);
+    const base = normName(sorted[0].name);
+    if (base && sorted.slice(1).every((c) => normName(c.name).startsWith(base) && normName(c.name) !== base)) {
+      return sorted[0];
+    }
+  }
+  return null;
+}
+
+/** The cross-set fallback must ALSO price-agree: a unique number match can still be a different card
+ *  entirely (q='Mew ★ δ' returns Mewtwo ex 101/109 — caught live only by the unique index). */
+function priceAgrees(c: TplCard, priceUsd: number | null | undefined): boolean {
+  if (priceUsd == null || priceUsd <= 0) return true; // no reference price — keep the old behavior
+  const p = rawPriceUsd(c);
+  return p > 0 && Math.abs(p / priceUsd - 1) <= PRICE_MATCH_TOLERANCE;
 }
 
 /** Pick the ONE candidate matching on collector number + set name; printing-variant ambiguity is
@@ -102,8 +130,8 @@ export function matchCard(market: MarketToMatch, candidates: TplCard[]): TplCard
     return uniqueByPrice(narrowed, market.priceUsd);
   }
   // No set metadata (or no set agreement): cross-set same-number cards have no price-separation
-  // guarantee, so stay strictly conservative — unique or nothing.
-  return byNumber.length === 1 ? byNumber[0] : null;
+  // guarantee, so stay strictly conservative — unique AND price-agreeing, or nothing.
+  return byNumber.length === 1 && priceAgrees(byNumber[0], market.priceUsd) ? byNumber[0] : null;
 }
 
 export interface BackfillReport {
