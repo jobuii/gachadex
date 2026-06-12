@@ -489,12 +489,17 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 
 .timeframe-bar {
   display: flex;
+  align-items: center;
   gap: 0;
   padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--border);
   background: var(--bg-2);
   flex-shrink: 0;
 }
+/* timeframes on the left, chart tools pushed to the right; wraps gracefully on narrow screens */
+.tf-group { display: flex; }
+.chart-tools { display: flex; flex-wrap: wrap; margin-left: auto; gap: 0; }
+.chart-tools .tf-btn { padding: 0.4rem 0.55rem; }
 
 .tf-btn {
   background: none;

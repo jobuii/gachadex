@@ -239,7 +239,12 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
 
 export interface Candle {
   time: number; // UTC unix seconds (bucket start)
-  value: number;
+  value: number; // = close (back-compat: line/area/baseline read this)
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number; // traded notional (USD) in the bucket; 0 when nothing traded
 }
 
 /**
@@ -254,14 +259,18 @@ export async function getCandles(db: Db, marketId: string, days: number): Promis
   // a bucket (lightweight-charts requires strictly ascending times). Every date cast is pinned to
   // UTC like the mark buckets are — a non-UTC session TimeZone must not shift the cutoff day.
   // price_e6 > 0 drops the "provider had no history" sentinel rows.
-  const r = await db.query<{ t: string; v: string }>(
-    `SELECT t::text AS t, v::text AS v FROM (
+  const r = await db.query<{ t: string; o: string; h: string; l: string; c: string }>(
+    `SELECT t::text AS t, o::text AS o, h::text AS h, l::text AS l, c::text AS c FROM (
        SELECT extract(epoch FROM date_trunc($3, computed_at AT TIME ZONE 'UTC'))::bigint AS t,
-              (array_agg(mark_price_e6 ORDER BY computed_at DESC))[1] AS v
+              (array_agg(mark_price_e6 ORDER BY computed_at ASC))[1] AS o,  -- open  = first mark in the bucket
+              max(mark_price_e6) AS h,                                       -- high
+              min(mark_price_e6) AS l,                                       -- low
+              (array_agg(mark_price_e6 ORDER BY computed_at DESC))[1] AS c   -- close = last mark
          FROM marks WHERE market_id = $1 AND computed_at > now() - ($2 || ' days')::interval
         GROUP BY 1
        UNION ALL
-       SELECT extract(epoch FROM day::timestamp)::bigint, price_e6
+       -- seeded pre-listing days are a single daily price → flat OHLC
+       SELECT extract(epoch FROM day::timestamp)::bigint, price_e6, price_e6, price_e6, price_e6
          FROM chart_seed
         WHERE market_id = $1 AND price_e6 > 0
           AND day > ((now() AT TIME ZONE 'UTC') - ($2 || ' days')::interval)::date
@@ -271,5 +280,25 @@ export async function getCandles(db: Db, marketId: string, days: number): Promis
      ) series ORDER BY t`,
     [marketId, String(days), bucket],
   );
-  return r.rows.map((row) => ({ time: Number(row.t), value: Number(row.v) / 1_000_000 }));
+  // Traded volume (USD notional) per bucket, from fills — same UTC bucketing as the candles.
+  const vol = await db.query<{ t: string; usd: string }>(
+    `SELECT extract(epoch FROM date_trunc($3, created_at AT TIME ZONE 'UTC'))::bigint::text AS t,
+            (sum(qty_e6::numeric * exec_price_e6::numeric) / 1000000000000)::text AS usd
+       FROM fills WHERE market_id = $1 AND created_at > now() - ($2 || ' days')::interval
+      GROUP BY 1`,
+    [marketId, String(days), bucket],
+  );
+  const volByT = new Map(vol.rows.map((v) => [v.t, Number(v.usd)]));
+  return r.rows.map((row) => {
+    const e6 = (s: string) => Number(s) / 1_000_000;
+    return {
+      time: Number(row.t),
+      value: e6(row.c),
+      open: e6(row.o),
+      high: e6(row.h),
+      low: e6(row.l),
+      close: e6(row.c),
+      volume: volByT.get(row.t) ?? 0,
+    };
+  });
 }

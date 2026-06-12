@@ -1,5 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 
 process.env.PGLITE_DIR = 'memory://';
 process.env.DATABASE_URL = '';
@@ -151,6 +152,48 @@ test('getCandles: seeded history renders only BEFORE the first real mark; marks 
     [bare],
   );
   assert.deepEqual((await getCandles(db, bare, 30)).map((c) => c.value), [20, 25]);
+  // seeded days are a single price → flat OHLC, no volume
+  const seedBar = (await getCandles(db, bare, 30))[0];
+  assert.deepEqual([seedBar.open, seedBar.high, seedBar.low, seedBar.close, seedBar.volume], [20, 20, 20, 20, 0]);
+});
+
+test('getCandles: OHLC aggregates multiple marks per bucket; volume comes from fills', async () => {
+  const id = await upsertCardMarket(db, { ...base, symbol: 'ohlc-1', cardId: 'ohlc-1' });
+  // four marks anchored to the SAME day bucket (1h–4h into today, deterministic regardless of run time):
+  // open=100, high=130, low=90, close=110 by computed_at order
+  await db.query(
+    `INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES
+       ($1, 100000000, 100000000, date_trunc('day', now()) + interval '1 hour'),
+       ($1, 130000000, 130000000, date_trunc('day', now()) + interval '2 hours'),
+       ($1,  90000000,  90000000, date_trunc('day', now()) + interval '3 hours'),
+       ($1, 110000000, 110000000, date_trunc('day', now()) + interval '4 hours')`,
+    [id],
+  );
+  const c = (await getCandles(db, id, 30)).at(-1)!; // day bucket → one candle for today
+  assert.deepEqual([c.open, c.high, c.low, c.close, c.value], [100, 130, 90, 110, 110]);
+  assert.equal(c.volume, 0, 'no fills yet');
+
+  // a fill in that bucket → volume = qty(2.0) × price($110) = $220 notional
+  const uid = randomUUID();
+  await db.query(`INSERT INTO users(id, solana_pubkey) VALUES($1, $2)`, [uid, 'pk-' + uid.slice(0, 8)]);
+  await db.query(
+    `INSERT INTO orders(id, user_id, market_id, kind, side, qty_e6, leverage_e2, status, idempotency_key)
+     VALUES($1, $2, $3, 'market', 'long', 2000000, 100, 'filled', $4)`,
+    [randomUUID(), uid, id, randomUUID()],
+  );
+  const oid = (await db.query<{ id: string }>(`SELECT id FROM orders WHERE user_id = $1`, [uid])).rows[0].id;
+  const pid = randomUUID();
+  await db.query(
+    `INSERT INTO positions(id, user_id, market_id, side, qty_e6, avg_entry_e6, margin_uusdc, leverage_e2, status)
+     VALUES($1, $2, $3, 'long', 2000000, 110000000, 1000000, 100, 'open')`,
+    [pid, uid, id],
+  );
+  await db.query(
+    `INSERT INTO fills(id, order_id, position_id, market_id, exec_price_e6, qty_e6, created_at)
+     VALUES($1, $2, $3, $4, 110000000, 2000000, date_trunc('day', now()) + interval '2 hours')`,
+    [randomUUID(), oid, pid, id],
+  );
+  assert.equal((await getCandles(db, id, 30)).at(-1)!.volume, 220, 'fills notional aggregated into the bucket');
 });
 
 test('gradeLadder: full PSA/BGS/CGC ladder, oracle price chain per grade, sorted', () => {
