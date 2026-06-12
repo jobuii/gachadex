@@ -19,12 +19,14 @@ export function OrderEntry({ market, onTraded }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [details, setDetails] = useState(null);
+  const [showGrades, setShowGrades] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
 
   useEffect(() => {
     if (!market?.id) return;
     let alive = true;
     setDetails(null); // hide the prior market's panel during the new round-trip
+    setShowGrades(false); // collapse so the prior market's ladder can't flash under the new card
     setModalOpen(false); // close the enlarged-image modal when switching markets
     api.getMarketDetails(market.id).then((d) => alive && setDetails(d)).catch(() => alive && setDetails(null));
     return () => {
@@ -135,22 +137,30 @@ export function OrderEntry({ market, onTraded }) {
             {details.metadata?.rarity && (
               <div className="detail-row"><span>Rarity</span><strong>{details.metadata.rarity}</strong></div>
             )}
-            {details.grades?.length > 0 ? (
+            {(details.grades?.length > 0 || details.gradedPsa10E6) && (
               <>
-                <div className="detail-section">Graded (eBay 7d avg)</div>
-                {details.grades.map((g) => (
-                  <div className="detail-row" key={`${g.grader}-${g.grade}`}>
-                    <span>{g.grader} {g.grade}</span>
-                    <strong className="up">{formatUsd(BigInt(g.priceE6))}</strong>
-                  </div>
-                ))}
+                <button className="grades-toggle" onClick={() => setShowGrades((v) => !v)}>
+                  {showGrades ? 'Hide graded prices' : 'Show graded prices'}
+                </button>
+                {showGrades &&
+                  (details.grades?.length > 0 ? (
+                    <>
+                      <div className="detail-section">Graded (eBay 7d avg)</div>
+                      {details.grades.map((g) => (
+                        <div className="detail-row" key={`${g.grader}-${g.grade}`}>
+                          <span>{g.grader} {g.grade}</span>
+                          <strong className="up">{formatUsd(BigInt(g.priceE6))}</strong>
+                        </div>
+                      ))}
+                    </>
+                  ) : (
+                    <div className="detail-row">
+                      <span>PSA-10</span>
+                      <strong className="up">{formatUsd(BigInt(details.gradedPsa10E6))}</strong>
+                    </div>
+                  ))}
               </>
-            ) : details.gradedPsa10E6 ? (
-              <div className="detail-row">
-                <span>PSA-10</span>
-                <strong className="up">{formatUsd(BigInt(details.gradedPsa10E6))}</strong>
-              </div>
-            ) : null}
+            )}
           </div>
         </div>
       )}

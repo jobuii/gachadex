@@ -1135,12 +1135,15 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 
 .set-logo { height: 11px; max-width: 80px; object-fit: contain; opacity: 0.85; }
 
-/* OrderEntry card details / graded panel (always visible) */
+/* OrderEntry card details / graded panel (Set + Rarity visible; the grade ladder is toggled) */
 .details-panel { width: 100%; margin-top: 0.5rem; }
 .details-body { background: var(--bg-2); border: 1px solid var(--border); padding: 0.6rem; display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.45rem; }
-.detail-row { display: flex; justify-content: space-between; color: var(--text-muted); }
-.detail-row strong { color: var(--text); }
+.detail-row { display: flex; justify-content: space-between; gap: 0.6rem; color: var(--text-muted); line-height: 1.5; }
+.detail-row span { flex-shrink: 0; }
+.detail-row strong { color: var(--text); text-align: right; min-width: 0; overflow-wrap: anywhere; }
 .detail-section { margin-top: 0.3rem; padding-top: 0.4rem; border-top: 1px solid var(--border); color: var(--gold); letter-spacing: 0.05em; }
+.grades-toggle { width: 100%; margin-top: 0.3rem; background: var(--bg-3); border: 1px solid var(--border); color: var(--text-muted); font-family: var(--font-base); font-size: 0.45rem; padding: 0.4rem; cursor: pointer; }
+.grades-toggle:hover { color: var(--gold); border-color: var(--gold); }
 
 .error-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; height: 100vh; text-align: center; padding: 2rem; }
 .error-screen h2 { color: var(--danger); font-size: 0.9rem; }
