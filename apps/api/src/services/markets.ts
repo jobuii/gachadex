@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Db, Queryer } from '../db/client.ts';
 import { usdc } from '../money.ts';
 import { getFeeBps } from './fees.ts';
+import { gradeLadder, type GradeRow } from './providers/tcgpricelookup.ts';
 
 // Per-side open-interest caps (risk parameters). Indices are diversified -> deeper books.
 const CARD_OI_CAP = usdc(50_000).toString();
@@ -139,23 +140,40 @@ export interface MarketView {
   pricePinned: boolean;
 }
 
-/** Per-market details (card metadata + graded price) for the detail panel. */
+/** Per-market details (card metadata + graded prices) for the detail panel. */
 export interface MarketDetails {
   imageLarge: string | null;
   setLogo: string | null;
-  metadata: unknown; // { hp, retreat, attacks[], setName }
+  metadata: unknown; // { setName, rarity }
   gradedPsa10E6: string | null;
+  grades: GradeRow[]; // full ladder from the latest provider print; [] until one carries graded data
 }
 
 export async function getMarketDetails(db: Db, id: string): Promise<MarketDetails | null> {
-  const r = await db.query<{ image_large: string | null; set_logo: string | null; metadata: unknown; graded: string | null }>(
-    `SELECT image_large, set_logo, metadata, graded_psa10_e6::text AS graded FROM markets WHERE id = $1`,
-    [id],
-  );
+  // The latest accepted print's archived payload carries the provider's whole graded object (PSA/BGS/
+  // CGC × grade); markets columns only persist the PSA-10 the graded index needs. Project just the
+  // graded subtree — the full payload is the entire provider print.
+  const [r, p] = await Promise.all([
+    db.query<{ image_large: string | null; set_logo: string | null; metadata: unknown; graded: string | null }>(
+      `SELECT image_large, set_logo, metadata, graded_psa10_e6::text AS graded FROM markets WHERE id = $1`,
+      [id],
+    ),
+    db.query<{ graded: unknown }>(
+      // Latest accepted print THAT CARRIES a graded object — a manual admin print or a legacy
+      // pokemontcg print on top must not blank the ladder until the next provider print.
+      `SELECT raw_payload #> '{tcgpricelookup,prices,graded}' AS graded
+         FROM oracle_prices WHERE market_id = $1 AND is_accepted
+          AND raw_payload #> '{tcgpricelookup,prices,graded}' IS NOT NULL
+        ORDER BY source_observed_at DESC LIMIT 1`,
+      [id],
+    ),
+  ]);
   const row = r.rows[0];
   if (!row) return null;
   const metadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : (row.metadata ?? null);
-  return { imageLarge: row.image_large, setLogo: row.set_logo, metadata, gradedPsa10E6: row.graded };
+  const graded = p.rows[0]?.graded;
+  const grades = gradeLadder(typeof graded === 'string' ? JSON.parse(graded) : graded);
+  return { imageLarge: row.image_large, setLogo: row.set_logo, metadata, gradedPsa10E6: row.graded, grades };
 }
 
 export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
@@ -217,15 +235,30 @@ export interface Candle {
 /**
  * Real price history for the chart, from the `marks` series. Buckets are intraday (hourly) for short
  * windows and daily for longer ones; each bucket's value is its last mark (the close). NO synthetic /
- * fabricated data — a market with no history returns [] and the UI shows an empty state.
+ * fabricated data — the only non-mark series is the provider-seeded PRE-listing history (chart_seed),
+ * which renders strictly before the market's first real mark; marks always win from then on.
  */
 export async function getCandles(db: Db, marketId: string, days: number): Promise<Candle[]> {
   const bucket = days <= 7 ? 'hour' : 'day'; // intraday for 1D/1W, daily for 1M+
+  // Seeded days are capped at the day BEFORE the first mark, so the two series can never collide on
+  // a bucket (lightweight-charts requires strictly ascending times). Every date cast is pinned to
+  // UTC like the mark buckets are — a non-UTC session TimeZone must not shift the cutoff day.
+  // price_e6 > 0 drops the "provider had no history" sentinel rows.
   const r = await db.query<{ t: string; v: string }>(
-    `SELECT extract(epoch FROM date_trunc($3, computed_at AT TIME ZONE 'UTC'))::bigint::text AS t,
-            (array_agg(mark_price_e6 ORDER BY computed_at DESC))[1]::text AS v
-     FROM marks WHERE market_id = $1 AND computed_at > now() - ($2 || ' days')::interval
-     GROUP BY date_trunc($3, computed_at AT TIME ZONE 'UTC') ORDER BY t`,
+    `SELECT t::text AS t, v::text AS v FROM (
+       SELECT extract(epoch FROM date_trunc($3, computed_at AT TIME ZONE 'UTC'))::bigint AS t,
+              (array_agg(mark_price_e6 ORDER BY computed_at DESC))[1] AS v
+         FROM marks WHERE market_id = $1 AND computed_at > now() - ($2 || ' days')::interval
+        GROUP BY 1
+       UNION ALL
+       SELECT extract(epoch FROM day::timestamp)::bigint, price_e6
+         FROM chart_seed
+        WHERE market_id = $1 AND price_e6 > 0
+          AND day > ((now() AT TIME ZONE 'UTC') - ($2 || ' days')::interval)::date
+          AND day < COALESCE(
+                (SELECT (min(computed_at) AT TIME ZONE 'UTC')::date FROM marks WHERE market_id = $1),
+                'infinity'::date)
+     ) series ORDER BY t`,
     [marketId, String(days), bucket],
   );
   return r.rows.map((row) => ({ time: Number(row.t), value: Number(row.v) / 1_000_000 }));

@@ -11,6 +11,7 @@ import { loadFee, loadLiqFee } from './services/fees.ts';
 import { tryAcquireLease, releaseLease } from './services/lease.ts';
 import { getDefaultClient } from './services/providers/tcgpricelookup.ts';
 import { discoverGame, dueForRebalance, markRebalanced } from './services/providers/discovery.ts';
+import { countMissingHistory, seedMissingHistory } from './services/providers/history.ts';
 import { GAMES } from '@pokex/shared-types';
 import { randomUUID } from 'node:crypto';
 import { solanaDepositChain, solanaWithdrawChain, solanaTreasuryChain } from './services/custody/solana.ts';
@@ -55,6 +56,17 @@ function startDiscoveryLoop(db: Db, log: FastifyBaseLogger) {
   const client = getDefaultClient(db); // the SAME instance as the refresh path — in-process priority preemption works across loops
   const run = async () => {
     try {
+      // Chart seeding for any unseeded tracked market (new listings, prior failures): a cheap
+      // NOT EXISTS probe every tick, so a chart appears within the hour rather than a week. The
+      // sweep is one provider request per missing market — the 1h TTL covers a full-universe pass.
+      if ((await countMissingHistory(db)) > 0 && (await tryAcquireLease(db, 'chart-seed', INSTANCE_ID, 60 * 60_000))) {
+        try {
+          const s = await seedMissingHistory(db, client, { log: (m) => log.info(m) });
+          log.info(s, 'chart history seeded');
+        } finally {
+          await releaseLease(db, 'chart-seed', INSTANCE_ID).catch(() => {});
+        }
+      }
       if (!(await dueForRebalance(db, config.discoveryIntervalMs))) return;
       // TTL covers one full multi-game crawl (~30 min), NOT the weekly interval — a dead holder is
       // replaced within hours, and the settings timestamp (not the lease) enforces the cadence.
