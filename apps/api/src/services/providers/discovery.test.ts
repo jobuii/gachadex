@@ -48,6 +48,35 @@ test('topCandidates: price desc, tcgplayer-id asc (nulls last), provider id — 
   assert.deepEqual(topCandidates(kept, 3).map((c) => c.id), ['c', 'a', 'b']);
 });
 
+test('topCandidates dedupes printing variants sharing a tcgplayer product (highest price wins)', () => {
+  const kept = [
+    { id: 'manga-art', price: 500, tid: 579378 },
+    { id: 'base-print', price: 60, tid: 579378 }, // same physical product, cheaper printing
+    { id: 'other-card', price: 80, tid: 111 },
+    { id: 'null-a', price: 70, tid: null }, // null tids can never dedupe
+    { id: 'null-b', price: 65, tid: null },
+  ];
+  assert.deepEqual(topCandidates(kept, 4).map((c) => c.id), ['manga-art', 'other-card', 'null-a', 'null-b']);
+});
+
+test('apply skips an identity-conflicting candidate instead of dying mid-run', async () => {
+  // a market in ANOTHER game already holds this tcgplayer id with a different provider card id
+  await upsertCardMarket(db, {
+    symbol: 'conflict-holder', cardId: 'conflict-holder', displayName: 'Holder', variant: null,
+    imageSmall: null, providerCardId: 'uuid-holder', tcgplayerId: 579378,
+  });
+  const catalog = [card('op-conflict', 500, 579378), card('op-fine', 400, 999111)];
+  const client = catalogClient(catalog);
+  const r = await discoverGame(db, client, 'mtg', { topN: 2, minPriceUsd: 10, apply: true, fresh: true });
+  assert.equal(r.applied, true);
+  const fine = await db.query<{ featured: boolean }>(
+    `SELECT featured FROM markets WHERE provider_card_id = 'op-fine'`,
+  );
+  assert.equal(fine.rows[0].featured, true, 'the rest of the set still landed');
+  const conflicted = await db.query(`SELECT 1 FROM markets WHERE provider_card_id = 'op-conflict'`);
+  assert.equal(conflicted.rows.length, 0, 'the conflicting candidate was skipped, not stamped');
+});
+
 test('dry run crawls the catalog, filters by threshold, writes no markets, keeps the checkpoint', async () => {
   // 230 cards: 5 valuable, the rest cheap/unpriced — spread across 3 pages
   const catalog = [
