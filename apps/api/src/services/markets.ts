@@ -144,6 +144,7 @@ export interface MarketView {
 export interface MarketDetails {
   imageLarge: string | null;
   setLogo: string | null;
+  variant: string | null; // printing ('Standard', 'Holofoil', …) — the market row's own column
   metadata: unknown; // { setName, rarity }
   gradedPsa10E6: string | null;
   grades: GradeRow[]; // full ladder from the latest provider print; [] until one carries graded data
@@ -154,8 +155,8 @@ export async function getMarketDetails(db: Db, id: string): Promise<MarketDetail
   // CGC × grade); markets columns only persist the PSA-10 the graded index needs. Project just the
   // graded subtree — the full payload is the entire provider print.
   const [r, p] = await Promise.all([
-    db.query<{ image_large: string | null; set_logo: string | null; metadata: unknown; graded: string | null }>(
-      `SELECT image_large, set_logo, metadata, graded_psa10_e6::text AS graded FROM markets WHERE id = $1`,
+    db.query<{ image_large: string | null; set_logo: string | null; variant: string | null; metadata: unknown; graded: string | null }>(
+      `SELECT image_large, set_logo, variant, metadata, graded_psa10_e6::text AS graded FROM markets WHERE id = $1`,
       [id],
     ),
     db.query<{ graded: unknown }>(
@@ -173,7 +174,7 @@ export async function getMarketDetails(db: Db, id: string): Promise<MarketDetail
   const metadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : (row.metadata ?? null);
   const graded = p.rows[0]?.graded;
   const grades = gradeLadder(typeof graded === 'string' ? JSON.parse(graded) : graded);
-  return { imageLarge: row.image_large, setLogo: row.set_logo, metadata, gradedPsa10E6: row.graded, grades };
+  return { imageLarge: row.image_large, setLogo: row.set_logo, variant: row.variant, metadata, gradedPsa10E6: row.graded, grades };
 }
 
 export async function listMarketsWithData(db: Db): Promise<MarketView[]> {

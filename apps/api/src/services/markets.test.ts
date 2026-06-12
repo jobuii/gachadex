@@ -161,6 +161,7 @@ test('getMarketDetails surfaces the ladder from the latest ACCEPTED print only',
   );
   const d = await getMarketDetails(db, id);
   assert.deepEqual(d!.grades, [{ grader: 'PSA', grade: '10', priceE6: '300000000' }]);
+  assert.equal(d!.variant, 'holofoil', 'the market row variant is surfaced for the panel');
 
   // markets with no tpl print yet (e.g. pokemon pre-handover) -> empty ladder, panel falls back to PSA-10
   const bare = await upsertCardMarket(db, { ...base, symbol: 'details-2', cardId: 'details-2' });

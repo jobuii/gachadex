@@ -134,6 +134,9 @@ export function OrderEntry({ market, onTraded }) {
             {details.metadata?.setName && (
               <div className="detail-row"><span>Set</span><strong>{details.metadata.setName}</strong></div>
             )}
+            {details.variant && (
+              <div className="detail-row"><span>Variant</span><strong>{details.variant}</strong></div>
+            )}
             {details.metadata?.rarity && (
               <div className="detail-row"><span>Rarity</span><strong>{details.metadata.rarity}</strong></div>
             )}
