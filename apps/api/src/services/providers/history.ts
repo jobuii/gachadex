@@ -49,7 +49,7 @@ export function dailySeedPoints(points: TplHistoryPoint[]): { day: string; price
  *  row-by-row inserts would round-trip ~365×). ON CONFLICT guards a concurrent seeder (ops script vs
  *  the server loop). A market whose provider history is empty would be retried every sweep by the
  *  NOT EXISTS filter — pin a 0-price sentinel on today instead; getCandles drops non-positive rows. */
-async function seedMarketHistory(
+export async function seedMarketHistory(
   db: Db,
   client: TcgPriceLookupClient,
   market: { id: string; providerCardId: string },

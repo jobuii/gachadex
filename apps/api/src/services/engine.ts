@@ -314,6 +314,15 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
       const market = await validateMarketAndOrder(q, input);
       const mi = await getLatestMarkIndex(q, market.id);
       if (!mi) throw new HttpError(400, 'no price available for market');
+      // Freshness invariant (P6): a market reactivated from retirement resets created_at, so its
+      // newest mark may predate the current activation (a stale price from before it was delisted).
+      // NEVER open a new position against such a mark — wait for a fresh oracle print. Closes and
+      // liquidations are intentionally exempt (they must work on any market, stale or not).
+      const fresh = await q.query(
+        `SELECT 1 FROM marks WHERE market_id = $1 AND computed_at >= (SELECT created_at FROM markets WHERE id = $1) LIMIT 1`,
+        [market.id],
+      );
+      if (!fresh.rows[0]) throw new HttpError(400, 'market is repricing — not yet open for new positions', 'market_repricing');
       const { markE6, indexE6 } = mi;
       // slippage guard: reject if the fill mark moved past the caller's limit (long: cap, short: floor)
       if (input.limitPriceE6 != null && (input.side === 'long' ? markE6 > input.limitPriceE6 : markE6 < input.limitPriceE6)) {

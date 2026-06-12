@@ -81,6 +81,11 @@ export function Exchange() {
 
   const selected = markets.find((m) => m.id === selectedId) || null;
   const onSelectMarket = (m) => setSelectedId(m.id);
+  // A just-listed catalog card: refresh the markets list, then jump to the new market.
+  const onMarketListed = useCallback(async (marketId) => {
+    await loadMarkets();
+    setSelectedId(marketId);
+  }, [loadMarkets]);
   const handleTradeMarket = (m) => {
     setSelectedId(m.id);
     setActiveView('trade');
@@ -100,6 +105,7 @@ export function Exchange() {
             loading={loading}
             selected={selected}
             onSelect={onSelectMarket}
+            onListed={onMarketListed}
             collapsed={sidebarCollapsed}
             setCollapsed={setSidebarCollapsed}
           />
@@ -143,6 +149,7 @@ export function Exchange() {
                 loading={loading}
                 selected={selected}
                 onSelect={(m) => { onSelectMarket(m); setMarketsOpen(false); }}
+                onListed={async (id) => { await onMarketListed(id); setMarketsOpen(false); }}
                 collapsed={false}
                 setCollapsed={() => {}}
               />

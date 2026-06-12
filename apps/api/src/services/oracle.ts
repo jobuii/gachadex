@@ -133,6 +133,28 @@ function primaryFetcher(db: Db): CardFetcher {
 }
 
 /** Ingest a price snapshot: upsert card markets, record prints, recompute marks, rebuild indices. */
+/** Upsert one card's market, record its print, recompute its mark — the per-card unit of `ingest`,
+ *  also the creation path for on-demand markets (P6 `markets/ensure`). Operator-pinned markets keep
+ *  their manual price (the upsert still refreshes display fields). Returns the market id. */
+export async function ingestCard(
+  db: Db,
+  c: OracleCard,
+  fallbackObservedAt: Date,
+  pinned?: Set<string>,
+  extra?: Partial<CardUpsert>, // creation-time overrides (e.g. the P6 dollar-min-notional min qty)
+): Promise<string> {
+  const marketId = await db.tx((q) => upsertCardMarket(q, { ...toCardUpsert(c), ...extra }));
+  if (pinned?.has(marketId)) return marketId; // manual override in effect — skip the auto print + mark
+  const accepted = await db.tx((q) =>
+    recordOracle(q, marketId, c.rawE6, c.observedAt ?? fallbackObservedAt, c.payload ?? null),
+  );
+  if (accepted) {
+    const market = await getMarketById(db, marketId);
+    if (market) await db.tx((q) => recomputeMark(q, market, c.rawE6, 0n, 0n));
+  }
+  return marketId;
+}
+
 export async function ingest(
   db: Db,
   fetcher?: CardFetcher,
@@ -145,17 +167,7 @@ export async function ingest(
   const pinnedRows = await db.query<{ id: string }>(`SELECT id FROM markets WHERE price_pinned`);
   const pinned = new Set(pinnedRows.rows.map((r) => r.id));
 
-  for (const c of priced) {
-    const marketId = await db.tx((q) => upsertCardMarket(q, toCardUpsert(c)));
-    if (pinned.has(marketId)) continue; // manual override in effect — skip the auto print + mark
-    const accepted = await db.tx((q) =>
-      recordOracle(q, marketId, c.rawE6, c.observedAt ?? passObservedAt, c.payload ?? null),
-    );
-    if (accepted) {
-      const market = await getMarketById(db, marketId);
-      if (market) await db.tx((q) => recomputeMark(q, market, c.rawE6, 0n, 0n));
-    }
-  }
+  for (const c of priced) await ingestCard(db, c, passObservedAt, pinned);
 
   // Index baskets are PER-GAME and FEATURED-ONLY (P4): the tracked universe (everything priced above)
   // and the index constituents are deliberately distinct sets, so long-tail on-demand markets can never
