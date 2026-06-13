@@ -12,6 +12,7 @@ import { tryAcquireLease, releaseLease } from './services/lease.ts';
 import { getDefaultClient } from './services/providers/tcgpricelookup.ts';
 import { discoverGame, dueForRebalance, markRebalanced, retireDeadMarkets } from './services/providers/discovery.ts';
 import { countMissingHistory, seedMissingHistory } from './services/providers/history.ts';
+import { dueForSetWarm, warmSetCache } from './services/providers/sets.ts';
 import { GAMES } from '@pokex/shared-types';
 import { randomUUID } from 'node:crypto';
 import { solanaDepositChain, solanaWithdrawChain, solanaTreasuryChain } from './services/custody/solana.ts';
@@ -70,6 +71,18 @@ function startDiscoveryLoop(db: Db, log: FastifyBaseLogger) {
       // Dead long-tail retirement (P6): idempotent UPDATE, safe under N instances — no lease needed.
       const retired = await retireDeadMarkets(db);
       if (retired.length > 0) log.info({ retired: retired.length }, 'dead long-tail markets retired');
+      // Set-metadata cache (release years): a few paced calls per day, gated by a settings timestamp +
+      // a short lease so N instances don't all warm it at once.
+      if ((await dueForSetWarm(db, 24 * 60 * 60_000)) && (await tryAcquireLease(db, 'set-warm', INSTANCE_ID, 15 * 60_000))) {
+        try {
+          const r = await warmSetCache(db, client);
+          log.info(r, 'set-metadata cache warmed');
+        } catch (e) {
+          log.warn(e, 'set-cache warm failed (will retry next tick)');
+        } finally {
+          await releaseLease(db, 'set-warm', INSTANCE_ID).catch(() => {});
+        }
+      }
       if (!(await dueForRebalance(db, config.discoveryIntervalMs))) return;
       // TTL covers one full multi-game crawl (~30 min), NOT the weekly interval — a dead holder is
       // replaced within hours, and the settings timestamp (not the lease) enforces the cadence.

@@ -36,6 +36,17 @@ export interface TplPage {
   offset: number;
 }
 
+/** A set from GET /sets (verified live: game is a slug STRING here, unlike the card endpoint's object;
+ *  released_at can be null for some promo sets). */
+export interface TplSet {
+  id: string;
+  slug: string;
+  name: string;
+  game: string;
+  count: number;
+  released_at: string | null; // 'YYYY-MM-DD' or null
+}
+
 export interface TplSearchParams {
   q?: string;
   game?: string; // 'pokemon' | 'mtg' | 'onepiece' | ...
@@ -129,6 +140,15 @@ export class TcgPriceLookupClient {
   async getCardHistory(id: string, period: '7d' | '30d' | '90d' | '1y', priority: ProviderPriority): Promise<TplHistoryPoint[]> {
     const json = await this.request(`/cards/${encodeURIComponent(id)}/history?period=${period}`, priority);
     return Array.isArray(json?.data) ? json.data : [];
+  }
+
+  /** GET /sets — browse sets for a game (paginated). One row per set incl. its release date. */
+  async getSets(game: string, opts: { limit?: number; offset?: number }, priority: ProviderPriority): Promise<{ data: TplSet[]; total: number }> {
+    const qs = new URLSearchParams({ game });
+    if (opts.limit != null) qs.set('limit', String(opts.limit));
+    if (opts.offset != null) qs.set('offset', String(opts.offset));
+    const json = await this.request(`/sets?${qs}`, priority);
+    return { data: Array.isArray(json?.data) ? json.data : [], total: Number(json?.total ?? 0) };
   }
 
   /** One paced+retried GET. Throws on non-retryable errors or when attempts are exhausted. */
@@ -277,7 +297,7 @@ export function fromTplCard(c: TplCard, t: TrackedMarket): OracleCard {
     variant: c.variant,
     imageSmall: c.image_url,
     imageLarge: c.image_url, // the provider serves one asset; both slots point at it
-    metadata: { setName: c.set?.name ?? null, rarity: c.rarity ?? null }, // uniform multi-game panel (no game-specific fields)
+    metadata: { setName: c.set?.name ?? null, setSlug: c.set?.slug ?? null, rarity: c.rarity ?? null }, // setSlug keys the release-year cache
     rawE6: toE6(rawPriceUsd(c)),
     gradedE6: graded != null ? toE6(graded) : null,
     observedAt: c.updated_at ? new Date(c.updated_at) : null, // provider freshness -> print dedup + staleness gate

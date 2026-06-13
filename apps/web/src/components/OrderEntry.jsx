@@ -140,6 +140,9 @@ export function OrderEntry({ market, onTraded }) {
             {details.metadata?.rarity && (
               <div className="detail-row"><span>Rarity</span><strong>{details.metadata.rarity}</strong></div>
             )}
+            {details.releaseYear && (
+              <div className="detail-row"><span>Release Year</span><strong>{details.releaseYear}</strong></div>
+            )}
             {(details.grades?.length > 0 || details.gradedPsa10E6) && (
               <>
                 <button className="grades-toggle" onClick={() => setShowGrades((v) => !v)}>

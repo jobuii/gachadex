@@ -496,6 +496,19 @@ CREATE TABLE IF NOT EXISTS provider_rate (
   used_today   INT  NOT NULL DEFAULT 0
 );
 
+-- Set metadata cache (tcgpricelookup /sets). Warmed once a day in a handful of calls; every card maps
+-- to its set's release year by slug (or game+name) — so card details show the year with no per-card
+-- provider call. released_at can be NULL (some promo sets) → that card shows no year.
+CREATE TABLE IF NOT EXISTS tcg_sets (
+  game         TEXT NOT NULL,
+  slug         TEXT NOT NULL,
+  name         TEXT,
+  release_year INT,  -- the only field the UI reads; storing the raw date would just risk a bad-date INSERT
+  fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (game, slug)  -- slugs are per-game; (game, slug) avoids a cross-game collision clobbering a row
+);
+CREATE INDEX IF NOT EXISTS idx_tcg_sets_game_name ON tcg_sets(game, name);
+
 -- Single-leader leases for background loops (oracle ingest, discovery rebalance): with N API
 -- instances only the lease holder runs a pass, so work isn't duplicated N× (the rate LIMIT is already
 -- safe via provider_rate; this guards the budget + duplicate writes). Expired leases are taken over.
