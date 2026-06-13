@@ -151,18 +151,25 @@ export interface MarketDetails {
   imageLarge: string | null;
   setLogo: string | null;
   variant: string | null; // printing ('Standard', 'Holofoil', …) — the market row's own column
-  metadata: unknown; // { setName, rarity }
+  metadata: unknown; // { setName, setSlug, rarity }
   gradedPsa10E6: string | null;
   grades: GradeRow[]; // full ladder from the latest provider print; [] until one carries graded data
+  releaseYear: number | null; // the card's set release year (from the tcg_sets cache); null if unknown
 }
 
 export async function getMarketDetails(db: Db, id: string): Promise<MarketDetails | null> {
   // The latest accepted print's archived payload carries the provider's whole graded object (PSA/BGS/
   // CGC × grade); markets columns only persist the PSA-10 the graded index needs. Project just the
-  // graded subtree — the full payload is the entire provider print.
+  // graded subtree — the full payload is the entire provider print. release_year joins the cached set
+  // metadata by slug first (precise), falling back to game+name so already-listed markets resolve too.
   const [r, p] = await Promise.all([
-    db.query<{ image_large: string | null; set_logo: string | null; variant: string | null; metadata: unknown; graded: string | null }>(
-      `SELECT image_large, set_logo, variant, metadata, graded_psa10_e6::text AS graded FROM markets WHERE id = $1`,
+    db.query<{ image_large: string | null; set_logo: string | null; variant: string | null; metadata: unknown; graded: string | null; release_year: number | null }>(
+      `SELECT m.image_large, m.set_logo, m.variant, m.metadata, m.graded_psa10_e6::text AS graded,
+              COALESCE(
+                (SELECT release_year FROM tcg_sets WHERE game = m.game AND slug = m.metadata->>'setSlug'),
+                (SELECT release_year FROM tcg_sets WHERE game = m.game AND name = m.metadata->>'setName' LIMIT 1)
+              ) AS release_year
+         FROM markets m WHERE m.id = $1`,
       [id],
     ),
     db.query<{ graded: unknown }>(
@@ -180,7 +187,10 @@ export async function getMarketDetails(db: Db, id: string): Promise<MarketDetail
   const metadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : (row.metadata ?? null);
   const graded = p.rows[0]?.graded;
   const grades = gradeLadder(typeof graded === 'string' ? JSON.parse(graded) : graded);
-  return { imageLarge: row.image_large, setLogo: row.set_logo, variant: row.variant, metadata, gradedPsa10E6: row.graded, grades };
+  return {
+    imageLarge: row.image_large, setLogo: row.set_logo, variant: row.variant, metadata,
+    gradedPsa10E6: row.graded, grades, releaseYear: row.release_year ?? null,
+  };
 }
 
 export async function listMarketsWithData(db: Db): Promise<MarketView[]> {

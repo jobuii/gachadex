@@ -218,6 +218,31 @@ test('gradeLadder: full PSA/BGS/CGC ladder, oracle price chain per grade, sorted
   assert.deepEqual(gradeLadder(null), [], 'prints without a graded object (non-tpl payloads) have no ladder');
 });
 
+test('getMarketDetails resolves the set release year by slug, then by game+name fallback', async () => {
+  await db.query(
+    `INSERT INTO tcg_sets(slug, name, game, released_at, release_year) VALUES
+       ('obsidian-flames', 'Obsidian Flames', 'pokemon', '2023-08-11', 2023)`,
+  );
+  // a card carrying setSlug -> matched precisely by slug
+  const bySlug = await upsertCardMarket(db, {
+    ...base, symbol: 'ry-slug', cardId: 'ry-slug',
+    metadata: { setName: 'Obsidian Flames', setSlug: 'obsidian-flames', rarity: 'Double Rare' },
+  });
+  assert.equal((await getMarketDetails(db, bySlug))!.releaseYear, 2023);
+
+  // a legacy card with only setName (no slug) -> matched by game + name
+  const byName = await upsertCardMarket(db, {
+    ...base, symbol: 'ry-name', cardId: 'ry-name', metadata: { setName: 'Obsidian Flames', rarity: 'Rare' },
+  });
+  assert.equal((await getMarketDetails(db, byName))!.releaseYear, 2023);
+
+  // an unknown set -> null (no year shown)
+  const unknown = await upsertCardMarket(db, {
+    ...base, symbol: 'ry-none', cardId: 'ry-none', metadata: { setName: 'Mystery Set', setSlug: 'mystery', rarity: 'Rare' },
+  });
+  assert.equal((await getMarketDetails(db, unknown))!.releaseYear, null);
+});
+
 test('getMarketDetails surfaces the ladder from the latest ACCEPTED print only', async () => {
   const id = await upsertCardMarket(db, { ...base, symbol: 'details-1', cardId: 'details-1' });
   const pl = (psa10: number) =>
