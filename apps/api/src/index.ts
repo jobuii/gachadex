@@ -7,7 +7,7 @@ import { scanDeposits } from './services/custody/deposits.ts';
 import { recoverInFlight, processAllRequested } from './services/custody/withdrawals.ts';
 import { treasuryPass } from './services/custody/treasury.ts';
 import { loadLimits } from './services/custody/limits.ts';
-import { loadFee, loadLiqFee } from './services/fees.ts';
+import { loadFee, loadLiqFee, loadFundingFactor } from './services/fees.ts';
 import { tryAcquireLease, releaseLease } from './services/lease.ts';
 import { getDefaultClient } from './services/providers/tcgpricelookup.ts';
 import { discoverGame, dueForRebalance, markRebalanced, retireDeadMarkets } from './services/providers/discovery.ts';
@@ -201,9 +201,9 @@ async function main() {
     startDiscoveryLoop(db, app.log); // no-op until ORACLE_PRIMARY=tcgpricelookup
     startFundingLoop(db, app.log);
     startLiquidationLoop(db, app.log);
-    // Live trading-fee override (works in both modes — trading happens in play money too). Loaded on
-    // boot, then refreshed for multi-instance convergence + to pick up admin edits within ~30s.
-    const loadFees = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d)]);
+    // Live engine knobs — trading fee, liquidation penalty, funding factor (all work in play money too).
+    // Loaded on boot, then refreshed for multi-instance convergence + to pick up admin edits within ~30s.
+    const loadFees = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d)]);
     await loadFees(db);
     setInterval(() => void loadFees(db).catch((e) => app.log.warn(e, 'fee refresh failed')), 30_000);
     if (config.realFunds) {

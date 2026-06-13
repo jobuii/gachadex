@@ -144,6 +144,10 @@ export const CustodyLimitsRequest = z
 // The admin panel takes a percentage from the operator and converts (pct * 100 = bps).
 export const FeeRequest = z.object({ bps: z.coerce.number().int().min(0).max(1000) }).strict();
 
+// Live-tunable funding factor — the max hourly funding rate (bps) at full skew; 0-100 (<=1%/hour). The
+// admin panel takes a percentage and converts (pct * 100 = bps). Scaled by the book's skew each hour.
+export const FundingFactorRequest = z.object({ bps: z.coerce.number().int().min(0).max(100) }).strict();
+
 // --- real-funds wallet (custody P2) -------------------------------------------
 // Withdrawals need a step-up: the wallet signs a server-rendered message over the EXACT
 // (amount, dest, nonce) — get the message from /wallet/withdraw/nonce, sign it, submit both.

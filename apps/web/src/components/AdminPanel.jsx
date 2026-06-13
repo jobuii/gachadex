@@ -67,6 +67,8 @@ export function AdminPanel() {
   const [feeDraft, setFeeDraft] = useState(''); // operator enters a PERCENT (0.01 = 0.01%)
   const [liqFee, setLiqFeeState] = useState(null); // { bps, default } | null — liquidation penalty
   const [liqFeeDraft, setLiqFeeDraft] = useState('');
+  const [fundingFactor, setFundingFactorState] = useState(null); // { bps, default } | null — max hourly funding rate
+  const [fundingDraft, setFundingDraft] = useState(''); // operator enters a PERCENT (0.30 = 0.30%/hour)
   const [tab, setTab] = useState('main'); // 'main' (the operator tools) | 'customers'
   const [withdrawals, setWithdrawals] = useState([]); // requested withdrawal queue (real-funds)
   const [wbusy, setWbusy] = useState(null); // withdrawal id being approved/reversed
@@ -153,6 +155,13 @@ export function AdminPanel() {
       })(),
       (async () => {
         try {
+          setFundingFactorState(await api.adminGetFundingFactor(key)); // works in either mode
+        } catch {
+          setFundingFactorState(null);
+        }
+      })(),
+      (async () => {
+        try {
           setWithdrawals((await api.adminGetWithdrawals('requested', key)).withdrawals || []); // real-funds-only
         } catch {
           setWithdrawals([]);
@@ -198,6 +207,7 @@ export function AdminPanel() {
     setCustodyLimits(null);
     setFeeState(null);
     setLiqFeeState(null);
+    setFundingFactorState(null);
     setTab('main');
     setWithdrawals([]);
     setMsg(null);
@@ -289,6 +299,28 @@ export function AdminPanel() {
       setLiqFeeState(r);
       setLiqFeeDraft('');
       setMsg(`Liquidation penalty set to ${(r.bps / 100).toFixed(2)}% (taken into the insurance fund).`);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Funding factor: the operator enters a PERCENT (max hourly rate at full skew); we store bps (pct*100).
+  const saveFunding = async () => {
+    setErr(null);
+    setMsg(null);
+    const pct = Number(fundingDraft);
+    if (!Number.isFinite(pct) || pct < 0) {
+      setErr('Enter a funding factor percentage (e.g. 0.30 for 0.30%/hour at full skew).');
+      return;
+    }
+    setBusy('funding');
+    try {
+      const r = await api.adminSetFundingFactor(Math.round(pct * 100), adminKey.trim());
+      setFundingFactorState(r);
+      setFundingDraft('');
+      setMsg(`Funding factor set to ${(r.bps / 100).toFixed(2)}%/hour (max, scaled by the book's skew).`);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -583,6 +615,26 @@ export function AdminPanel() {
         <span className="muted" style={{ fontSize: '0.85rem' }}>%</span>
         <button className="btn-primary sm" disabled={busy === 'liqFee'} onClick={saveLiqFee}>
           {busy === 'liqFee' ? '…' : 'Save penalty'}
+        </button>
+      </div>
+
+      {/* ---- Funding factor ---- */}
+      <h3 style={{ marginTop: '1.25rem' }}>Funding factor</h3>
+      <p className="ref-blurb">
+        The <strong>max hourly funding rate</strong>, charged each hour and scaled by the book's long/short
+        skew (the heavy side pays the lighter side via the LP pool). Enter a percentage: <code>0.30</code>{' '}
+        means up to 0.30%/hour at full skew. Currently{' '}
+        <strong>{fundingFactor ? `${(fundingFactor.bps / 100).toFixed(2)}%/hour` : '—'}</strong>
+        {fundingFactor ? ` (env default ${(fundingFactor.default / 100).toFixed(2)}%/hour)` : ''}.
+      </p>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.35rem 0' }}>
+        <input
+          className="wallet-input" type="number" min="0" step="0.01" placeholder="0.30"
+          value={fundingDraft} onChange={(e) => setFundingDraft(e.target.value)} style={{ width: 120 }}
+        />
+        <span className="muted" style={{ fontSize: '0.85rem' }}>%/hour</span>
+        <button className="btn-primary sm" disabled={busy === 'funding'} onClick={saveFunding}>
+          {busy === 'funding' ? '…' : 'Save funding'}
         </button>
       </div>
 

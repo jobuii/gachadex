@@ -1,12 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import { SetPriceRequest, InsuranceFundRequest, FeeRequest } from '@pokex/shared-types';
+import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { rl } from './_ratelimit.ts';
 import { requireAdminKey } from './admin.ts';
 import { setManualPrice, setPricePin } from '../services/admin-pricing.ts';
 import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from '../services/insurance.ts';
-import { feeView, setFee, liqFeeView, setLiqFee } from '../services/fees.ts';
+import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFactor } from '../services/fees.ts';
 import { listCustomers } from '../services/customers.ts';
 
 /**
@@ -70,6 +70,15 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     const { bps } = FeeRequest.parse(req.body);
     await setLiqFee(await getDb(), bps);
     return liqFeeView();
+  });
+
+  // Live-tunable funding factor — the MAX hourly funding rate (bps) at full skew. accrueFunding scales
+  // it by the book's long/short skew each hour. GET -> { bps, default }; POST a bps value -> the new one.
+  app.get('/admin/funding-factor', rl(config.routeRateLimits.admin), async () => fundingFactorView());
+  app.post('/admin/funding-factor', rl(config.routeRateLimits.admin), async (req) => {
+    const { bps } = FundingFactorRequest.parse(req.body);
+    await setFundingFactor(await getDb(), bps);
+    return fundingFactorView();
   });
 
   // Operator "Customers" view — one row per user (wallet, deposit address, balances, lifetime volume,

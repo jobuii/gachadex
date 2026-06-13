@@ -204,6 +204,9 @@ export const adminSetFee = (bps, adminKey) => adminReq('/admin/fee', adminKey, {
 // Live liquidation penalty (bps; charged on a liquidated position's notional -> insurance fund).
 export const adminGetLiqFee = (adminKey) => adminGet('/admin/liq-fee', adminKey);
 export const adminSetLiqFee = (bps, adminKey) => adminReq('/admin/liq-fee', adminKey, { bps });
+// Live funding factor (bps; max hourly funding rate at full skew). GET -> { bps, default }; POST { bps }.
+export const adminGetFundingFactor = (adminKey) => adminGet('/admin/funding-factor', adminKey);
+export const adminSetFundingFactor = (bps, adminKey) => adminReq('/admin/funding-factor', adminKey, { bps });
 // Per-customer operator view (paginated + sortable) -> { customers: [...], total }.
 export const adminGetCustomers = ({ limit = 50, offset = 0, sort = 'volume' } = {}, adminKey) =>
   adminGet(`/admin/customers?limit=${limit}&offset=${offset}&sort=${encodeURIComponent(sort)}`, adminKey);
