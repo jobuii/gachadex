@@ -8,6 +8,8 @@ import { setManualPrice, setPricePin } from '../services/admin-pricing.ts';
 import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from '../services/insurance.ts';
 import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFactor } from '../services/fees.ts';
 import { listCustomers } from '../services/customers.ts';
+import { marketStats } from '../services/admin-stats.ts';
+import { getUserPositions } from '../services/engine.ts';
 
 /**
  * Non-custody operator endpoints (ROADMAP §2). Unlike the custody admin routes, these register
@@ -82,11 +84,22 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Operator "Customers" view — one row per user (wallet, deposit address, balances, lifetime volume,
-  // fees, P/L). Paginated + sortable; `sort` is whitelisted inside listCustomers.
+  // fees, funding, realized/unrealized P/L, deposits/withdrawals). Paginated + sortable; `sort` is
+  // whitelisted inside listCustomers.
   app.get('/admin/customers', rl(config.routeRateLimits.admin), async (req) => {
     const q = req.query as { limit?: string; offset?: string; sort?: string };
     const limit = Math.min(200, Math.max(1, Math.floor(Number(q.limit)) || 50));
     const offset = Math.max(0, Math.floor(Number(q.offset)) || 0);
     return listCustomers(await getDb(), { limit, offset, sort: q.sort ?? 'volume' });
   });
+
+  // One customer's open positions per market (the expand-row drill-down). Reuses the engine's view.
+  app.get('/admin/customers/:id/positions', rl(config.routeRateLimits.admin), async (req) => {
+    const { id } = req.params as { id: string };
+    return { positions: await getUserPositions(await getDb(), id) };
+  });
+
+  // Per-asset trading stats (volume 24h, locked margin, capped/raw net player P/L, long/short notional)
+  // + the platform's total net payout exposure. Drives the main-view markets table + the exposure box.
+  app.get('/admin/market-stats', rl(config.routeRateLimits.admin), async () => marketStats(await getDb()));
 }

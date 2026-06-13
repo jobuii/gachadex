@@ -192,7 +192,7 @@ async function insertSystemOrder(q: Queryer, pos: PositionRow, marketId: string,
   return orderId;
 }
 
-interface OpenPositionPnl {
+export interface OpenPositionPnl {
   id: string;
   userId: string;
   marketId: string;
@@ -205,8 +205,9 @@ interface OpenPositionPnl {
 }
 
 /** Every open position with its current unrealized PnL (marked to each market's latest mark).
- *  Shared by the MAX_PNL_FACTOR gate and the ADL backstop so both see the pool the same way. */
-async function openPositionPnls(q: Queryer): Promise<OpenPositionPnl[]> {
+ *  Shared by the MAX_PNL_FACTOR gate, the ADL backstop, and the operator analytics so all see the
+ *  pool the same way. */
+export async function openPositionPnls(q: Queryer): Promise<OpenPositionPnl[]> {
   const r = await q.query<{ id: string; user_id: string; market_id: string; side: string; qty_e6: string; avg_entry_e6: string; margin_uusdc: string; mark: string }>(
     `SELECT p.id, p.user_id, p.market_id, p.side, p.qty_e6::text AS qty_e6, p.avg_entry_e6::text AS avg_entry_e6,
             p.margin_uusdc::text AS margin_uusdc, k.mark_price_e6::text AS mark
@@ -224,8 +225,9 @@ async function openPositionPnls(q: Queryer): Promise<OpenPositionPnl[]> {
 }
 
 /** A position's signed contribution to what the pool owes: a winner's profit in full; a loser's
- *  loss only down to its margin (isolated margin caps what the pool can collect). */
-function poolLiabilityOf(p: OpenPositionPnl): bigint {
+ *  loss only down to its margin (isolated margin caps what the pool can collect). This is the
+ *  CAPPED ("actually collectable at settlement") number — the raw figure is just `pnlUusdc`. */
+export function poolLiabilityOf(p: OpenPositionPnl): bigint {
   return p.pnlUusdc < -p.marginUusdc ? -p.marginUusdc : p.pnlUusdc;
 }
 

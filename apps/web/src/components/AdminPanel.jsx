@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { formatUsd, toE6, shortenPubkey } from '@pokex/pricing';
+import { formatUsd, formatSignedUsd, toE6, shortenPubkey } from '@pokex/pricing';
 import * as api from '../lib/api.js';
 import { CustomersView } from './CustomersView.jsx';
 
@@ -69,6 +69,7 @@ export function AdminPanel() {
   const [liqFeeDraft, setLiqFeeDraft] = useState('');
   const [fundingFactor, setFundingFactorState] = useState(null); // { bps, default } | null — max hourly funding rate
   const [fundingDraft, setFundingDraft] = useState(''); // operator enters a PERCENT (0.30 = 0.30%/hour)
+  const [stats, setStats] = useState(null); // { markets: [...], totals } | null — per-asset trading stats
   const [tab, setTab] = useState('main'); // 'main' (the operator tools) | 'customers'
   const [withdrawals, setWithdrawals] = useState([]); // requested withdrawal queue (real-funds)
   const [wbusy, setWbusy] = useState(null); // withdrawal id being approved/reversed
@@ -162,6 +163,13 @@ export function AdminPanel() {
       })(),
       (async () => {
         try {
+          setStats(await api.adminGetMarketStats(key)); // per-asset stats + net exposure
+        } catch {
+          setStats(null);
+        }
+      })(),
+      (async () => {
+        try {
           setWithdrawals((await api.adminGetWithdrawals('requested', key)).withdrawals || []); // real-funds-only
         } catch {
           setWithdrawals([]);
@@ -208,6 +216,7 @@ export function AdminPanel() {
     setFeeState(null);
     setLiqFeeState(null);
     setFundingFactorState(null);
+    setStats(null);
     setTab('main');
     setWithdrawals([]);
     setMsg(null);
@@ -406,6 +415,17 @@ export function AdminPanel() {
   const rows = markets.filter(
     (m) => !q || m.symbol.toLowerCase().includes(q) || (m.displayName || '').toLowerCase().includes(q),
   );
+  const statsById = new Map((stats?.markets ?? []).map((s) => [s.marketId, s]));
+  // Long/short as a ratio (long$ ÷ short$) + the % split, e.g. 1.26 then 56%/44%.
+  const lsRatio = (s) => {
+    const long = Number(s?.longNotionalE6 ?? 0);
+    const short = Number(s?.shortNotionalE6 ?? 0);
+    if (long + short === 0) return null;
+    return {
+      ratio: short > 0 ? (long / short).toFixed(2) : '∞',
+      pct: `${Math.round((long / (long + short)) * 100)}%/${Math.round((short / (long + short)) * 100)}%`,
+    };
+  };
   // Dashboard figures derived once (only meaningful when treasury is loaded).
   const customerE6 = treasury ? BigInt(treasury.freeE6) + BigInt(treasury.lockedE6) : 0n;
   // P/L = on-chain treasury minus everything owed to customers. Pending withdrawals were debited from
@@ -676,10 +696,23 @@ export function AdminPanel() {
         </>
       )}
 
-      <h3 style={{ marginTop: '1.25rem' }}>Manual pricing</h3>
+      <h3 style={{ marginTop: '1.25rem' }}>Per-asset trading + manual pricing</h3>
+      {stats && (
+        <div className="admin-stats" style={{ marginBottom: '0.6rem' }}>
+          <PnlStat
+            label="NET player P/L — your payout exposure (collectable at settlement)"
+            value={stats.totals.netCappedE6}
+          />
+          <div className="admin-stat">
+            <div className="lbl">raw mark-to-market (uncapped)</div>
+            <div className="val">{formatSignedUsd(stats.totals.netRawE6)}</div>
+          </div>
+        </div>
+      )}
       <p className="ref-blurb">
-        Set a market's price by hand (e.g. from eBay sold listings or other sources without an API).
-        Setting a price <strong>pins</strong> the market so the automated feed won't overwrite it until you unpin.
+        Per asset: 24h volume, margin locked, net player P/L (capped = what you'd net at settlement),
+        and the long/short ratio. <strong>Set a price</strong> by hand to <strong>pin</strong> a market so
+        the automated feed won't overwrite it until you unpin.
       </p>
 
       <input
@@ -693,19 +726,29 @@ export function AdminPanel() {
       <table className="hist-table">
         <thead>
           <tr>
-            <th>Symbol</th><th>Name</th><th>Kind</th><th>Mark</th><th>Index</th><th>Pinned</th>
-            <th>Set price (USD)</th><th />
+            <th>Symbol</th><th>Name</th><th>Mark</th>
+            <th>Vol 24h</th><th>Locked</th><th>Net P/L</th><th>L/S</th>
+            <th>Pinned</th><th>Set price (USD)</th><th />
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 && <tr><td colSpan={8} className="hist-empty">No markets.</td></tr>}
-          {rows.map((m) => (
+          {rows.length === 0 && <tr><td colSpan={10} className="hist-empty">No markets.</td></tr>}
+          {rows.map((m) => {
+            const s = statsById.get(m.id);
+            const ls = lsRatio(s);
+            return (
             <tr key={m.id}>
               <td>{m.symbol}</td>
               <td>{m.displayName}</td>
-              <td className="muted">{m.kind}</td>
               <td>{m.markE6 ? formatUsd(BigInt(m.markE6)) : '—'}</td>
-              <td>{m.indexE6 ? formatUsd(BigInt(m.indexE6)) : '—'}</td>
+              <td className="num">{s ? formatUsd(BigInt(s.volume24hE6)) : '—'}</td>
+              <td className="num">{s ? formatUsd(BigInt(s.lockedE6)) : '—'}</td>
+              <td className="num" style={{ color: s && BigInt(s.netCappedE6) < 0n ? 'var(--danger)' : 'var(--success)' }}>
+                {s ? formatSignedUsd(s.netCappedE6) : '—'}
+              </td>
+              <td className="num">
+                {ls ? <>{ls.ratio}<br /><span className="muted" style={{ fontSize: '0.8em' }}>{ls.pct}</span></> : '—'}
+              </td>
               <td className={m.pricePinned ? 'up' : 'muted'}>{m.pricePinned ? 'PINNED' : '—'}</td>
               <td>
                 <input
@@ -735,7 +778,8 @@ export function AdminPanel() {
                 )}
               </td>
             </tr>
-          ))}
+          );
+          })}
         </tbody>
       </table>
         </>

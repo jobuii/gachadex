@@ -16,6 +16,7 @@ const { listMarketsWithData } = await import('./markets.ts');
 const { creditFaucet } = await import('./faucet.ts');
 const { openPosition } = await import('./engine.ts');
 const { listCustomers } = await import('./customers.ts');
+const { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } = await import('./ledger.ts');
 
 await initDb();
 const db = await getDb();
@@ -54,6 +55,45 @@ test('listCustomers joins wallet + deposit address + balances and aggregates vol
 
   // value is conserved: free + locked margin + fees paid == the $10,000 faucet
   assert.equal(BigInt(row!.freeE6) + BigInt(row!.lockedE6) + BigInt(row!.feesE6), 10_000_000_000n);
+});
+
+test('listCustomers surfaces deposits, withdrawals, pending, funding paid, and unrealized P/L', async () => {
+  const userId = await newUser('wallet-pk-3', 'deposit-addr-3', 3);
+  await openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 2_000_000n, leverage: 5, idempotencyKey: randomUUID() });
+
+  // a credited $50 deposit, a confirmed $20 withdrawal, a $5 pending withdrawal
+  await db.query(
+    `INSERT INTO deposits(id, user_id, onchain_sig, asset, amount_in_raw, usdc_credited_e6, status)
+     VALUES($1,$2,$3,'USDC',50000000,50000000,'credited')`,
+    [randomUUID(), userId, 'sig-' + randomUUID()],
+  );
+  const wd = (amount: number, status: string) =>
+    db.query(
+      `INSERT INTO withdrawals(id, user_id, dest_address, amount_e6, status, idempotency_key)
+       VALUES($1,$2,'dest',$3,$4,$5)`,
+      [randomUUID(), userId, amount, status, randomUUID()],
+    );
+  await wd(20_000_000, 'confirmed');
+  await wd(5_000_000, 'requested');
+
+  // a $3 funding charge on their collateral (negative = they paid), posted as a balanced txn
+  await db.tx(async (q) => {
+    const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
+    const lp = await getOrCreateSystemAccount(q, 'LP_POOL');
+    await postTxn(q, {
+      reason: 'FUNDING', refType: 'position', refId: 'test-funding',
+      entries: [{ accountId: coll, amount: -3_000_000n }, { accountId: lp, amount: 3_000_000n }],
+    });
+  });
+
+  const { customers } = await listCustomers(db, { limit: 200, offset: 0, sort: 'joined' });
+  const row = customers.find((c) => c.userId === userId)!;
+  assert.equal(row.depositsE6, '50000000', '$50 credited deposit');
+  assert.equal(row.withdrawalsE6, '20000000', '$20 confirmed withdrawal');
+  assert.equal(row.pendingWithdrawalsE6, '5000000', '$5 pending withdrawal');
+  assert.equal(row.fundingPaidE6, '3000000', '$3 funding paid (positive)');
+  assert.equal(row.pnlE6, '0', 'no closes -> realized P/L is 0');
+  assert.ok(typeof row.upnlE6 === 'string', 'unrealized P/L is reported for the open position');
 });
 
 test('listCustomers paginates and sorts (by volume desc) across users', async () => {
