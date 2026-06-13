@@ -167,7 +167,7 @@ export async function getMarketDetails(db: Db, id: string): Promise<MarketDetail
       `SELECT m.image_large, m.set_logo, m.variant, m.metadata, m.graded_psa10_e6::text AS graded,
               COALESCE(
                 (SELECT release_year FROM tcg_sets WHERE game = m.game AND slug = m.metadata->>'setSlug'),
-                (SELECT release_year FROM tcg_sets WHERE game = m.game AND name = m.metadata->>'setName' LIMIT 1)
+                (SELECT release_year FROM tcg_sets WHERE game = m.game AND name = m.metadata->>'setName' ORDER BY slug LIMIT 1)
               ) AS release_year
          FROM markets m WHERE m.id = $1`,
       [id],

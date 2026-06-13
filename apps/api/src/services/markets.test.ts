@@ -220,8 +220,7 @@ test('gradeLadder: full PSA/BGS/CGC ladder, oracle price chain per grade, sorted
 
 test('getMarketDetails resolves the set release year by slug, then by game+name fallback', async () => {
   await db.query(
-    `INSERT INTO tcg_sets(slug, name, game, released_at, release_year) VALUES
-       ('obsidian-flames', 'Obsidian Flames', 'pokemon', '2023-08-11', 2023)`,
+    `INSERT INTO tcg_sets(game, slug, name, release_year) VALUES('pokemon', 'obsidian-flames', 'Obsidian Flames', 2023)`,
   );
   // a card carrying setSlug -> matched precisely by slug
   const bySlug = await upsertCardMarket(db, {

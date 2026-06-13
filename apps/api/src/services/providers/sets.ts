@@ -1,6 +1,6 @@
 import { GAMES } from '@pokex/shared-types';
 import type { Db } from '../../db/client.ts';
-import type { TcgPriceLookupClient } from './tcgpricelookup.ts';
+import type { TcgPriceLookupClient, TplSet } from './tcgpricelookup.ts';
 
 /**
  * Set-metadata cache (tcgpricelookup /sets). The whole set list per game is ~hundreds of rows fetched
@@ -20,21 +20,27 @@ export async function dueForSetWarm(db: Db, intervalMs: number): Promise<boolean
 
 /** Pull every set for every game and upsert slug -> release year. Idempotent; safe to re-run. */
 export async function warmSetCache(db: Db, client: TcgPriceLookupClient): Promise<{ sets: number }> {
+  // Year only (no raw date): the UI shows the year, and an INT can't be rejected the way a malformed
+  // date string in a DATE column would (which would abort the whole warm). Year = first 4 digits of a
+  // well-formed YYYY-MM-DD; anything else -> null.
+  const yearOf = (s: TplSet): number | null =>
+    s.released_at && /^\d{4}-\d{2}-\d{2}$/.test(s.released_at) ? Number(s.released_at.slice(0, 4)) : null;
+
   let sets = 0;
   for (const game of GAMES) {
     for (let offset = 0; ; ) {
       const page = await client.getSets(game, { limit: PAGE, offset }, 'discovery');
-      for (const s of page.data) {
-        const year = s.released_at && /^\d{4}-\d{2}-\d{2}$/.test(s.released_at) ? Number(s.released_at.slice(0, 4)) : null;
+      if (page.data.length > 0) {
+        // one batched upsert per page (prod Postgres is remote — row-by-row would round-trip per set)
         await db.query(
-          `INSERT INTO tcg_sets(game, slug, name, released_at, release_year, fetched_at)
-             VALUES($1, $2, $3, $4, $5, now())
+          `INSERT INTO tcg_sets(game, slug, name, release_year, fetched_at)
+           SELECT $1, u.slug, u.name, u.yr, now()
+             FROM unnest($2::text[], $3::text[], $4::int[]) AS u(slug, name, yr)
            ON CONFLICT(game, slug) DO UPDATE
-             SET name = EXCLUDED.name, released_at = EXCLUDED.released_at,
-                 release_year = EXCLUDED.release_year, fetched_at = now()`,
-          [game, s.slug, s.name, s.released_at ?? null, year],
+             SET name = EXCLUDED.name, release_year = EXCLUDED.release_year, fetched_at = now()`,
+          [game, page.data.map((s) => s.slug), page.data.map((s) => s.name), page.data.map(yearOf)],
         );
-        sets++;
+        sets += page.data.length;
       }
       offset += page.data.length;
       if (page.data.length === 0 || offset >= page.total) break;

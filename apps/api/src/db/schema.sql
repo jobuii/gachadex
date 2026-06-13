@@ -503,8 +503,7 @@ CREATE TABLE IF NOT EXISTS tcg_sets (
   game         TEXT NOT NULL,
   slug         TEXT NOT NULL,
   name         TEXT,
-  released_at  DATE,
-  release_year INT,
+  release_year INT,  -- the only field the UI reads; storing the raw date would just risk a bad-date INSERT
   fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (game, slug)  -- slugs are per-game; (game, slug) avoids a cross-game collision clobbering a row
 );
