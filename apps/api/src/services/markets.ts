@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Db, Queryer } from '../db/client.ts';
 import { usdc } from '../money.ts';
-import { getFeeBps } from './fees.ts';
+import { getFeeBps, getFundingFactorBps } from './fees.ts';
 import { gradeLadder, type GradeRow } from './providers/tcgpricelookup.ts';
 
 // Per-side open-interest caps (risk parameters). Indices are diversified -> deeper books.
@@ -136,6 +136,7 @@ export interface MarketView {
   maxLeverage: number;
   maintMarginBps: number;
   feeBps: number;
+  fundingFactorBps: number; // operator-set max hourly funding rate at full skew; client scales by live skew
   qtyStepE6: string;
   minQtyE6: string;
   markE6: string | null;
@@ -226,6 +227,7 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
       maxLeverage: Math.round(m.max_leverage_e2 / 100),
       maintMarginBps: m.maint_margin_bps,
       feeBps: getFeeBps(), // live trading fee (same global knob for every market); lets clients preview the real fee
+      fundingFactorBps: getFundingFactorBps(), // live funding factor; the client estimates the rate from live OI skew
       qtyStepE6: m.qty_step_e6,
       minQtyE6: m.min_qty_e6,
       markE6: l?.mark_e6 ?? null,

@@ -290,7 +290,14 @@ export function TradingView({ market, mobile = false }) {
   }, [dragging]);
 
   const o = market ? oi[market.id] : null;
-  const totalOi = o ? (Number(o.longUusdc) + Number(o.shortUusdc)) / 1e6 : 0;
+  const longOi = o ? Number(o.longUusdc) : 0;
+  const shortOi = o ? Number(o.shortUusdc) : 0;
+  const totalOi = (longOi + shortOi) / 1e6;
+  // Funding rate per hour ≈ factor × skew. A live estimate off the displayed open interest (the engine
+  // settles on entry-priced notional, so it can differ slightly). Sign: + when longs pay shorts
+  // (long-heavy book), − when shorts pay longs; 0 with no open interest.
+  const skewRatio = longOi + shortOi > 0 ? (longOi - shortOi) / (longOi + shortOi) : 0;
+  const fundingPctH = Math.round((market?.fundingFactorBps ?? 0) * skewRatio) / 100;
 
   return (
     <div className="trading-center">
@@ -321,6 +328,12 @@ export function TradingView({ market, mobile = false }) {
           <div className="stat-block">
             <span className="stat-label">OPEN INT.</span>
             <span className="stat-value">{formatUsd(totalOi, { compact: true })}</span>
+          </div>
+          <div className="stat-block">
+            <span className="stat-label" title="Hourly funding: + longs pay shorts, − shorts pay longs">FUNDING/H</span>
+            <span className={`stat-value ${fundingPctH > 0 ? 'down' : fundingPctH < 0 ? 'up' : ''}`}>
+              {fundingPctH > 0 ? '+' : fundingPctH < 0 ? '−' : ''}{Math.abs(fundingPctH).toFixed(2)}%
+            </span>
           </div>
         </div>
       </div>

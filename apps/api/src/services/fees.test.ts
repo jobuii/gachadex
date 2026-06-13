@@ -7,12 +7,15 @@ process.env.NODE_ENV = 'production';
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 process.env.FEE_BPS = '5'; // a non-zero default to prove getFeeBps starts from config
 process.env.LIQ_FEE_BPS = '75'; // a distinct default to prove the liq knob is independent of the trading fee
+process.env.FUNDING_SKEW_FACTOR_BPS = '20'; // distinct default to prove the funding knob is independent
 
 const { config } = await import('../config.ts');
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
-const { getFeeBps, loadFee, setFee, feeView, validateFeeBps, getLiqFeeBps, loadLiqFee, setLiqFee, liqFeeView } =
-  await import('./fees.ts');
+const {
+  getFeeBps, loadFee, setFee, feeView, validateFeeBps, getLiqFeeBps, loadLiqFee, setLiqFee, liqFeeView,
+  getFundingFactorBps, loadFundingFactor, setFundingFactor, fundingFactorView, validateFundingFactorBps,
+} = await import('./fees.ts');
 
 await initDb();
 const db = await getDb();
@@ -57,4 +60,22 @@ test('the liquidation penalty is an independent live knob: default from config, 
   assert.equal(liqFeeView().default, config.liqFeeBps);
 
   assert.equal(getFeeBps(), tradingBefore); // setting the liq knob does NOT move the trading fee
+});
+
+test('the funding factor is an independent live knob: default from config, override persists, capped at 100', async () => {
+  assert.equal(config.fundingSkewFactorBps, 20);
+  assert.equal(getFundingFactorBps(), 20); // starts from config (FUNDING_SKEW_FACTOR_BPS)
+
+  const tradingBefore = getFeeBps();
+  await setFundingFactor(db, 40);
+  assert.equal(getFundingFactorBps(), 40); // synchronous read updated immediately
+  assert.equal(await loadFundingFactor(db), 40); // survives a DB re-read
+  assert.equal(fundingFactorView().bps, 40);
+  assert.equal(fundingFactorView().default, config.fundingSkewFactorBps);
+  assert.equal(getFeeBps(), tradingBefore); // independent of the trading fee
+
+  // funding has its own ceiling (1%/hour = 100 bps), distinct from the fee 10% ceiling
+  assert.throws(() => validateFundingFactorBps(101), /100/);
+  assert.throws(() => validateFundingFactorBps(-1), /non-negative/);
+  await assert.rejects(setFundingFactor(db, 200), /100/);
 });

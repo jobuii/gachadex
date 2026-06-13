@@ -1,7 +1,7 @@
 import { notional } from '@pokex/pricing';
-import { config } from '../config.ts';
 import { advisoryXactLock, type Db, type Queryer } from '../db/client.ts';
 import { openNotionalBySide } from './oi.ts';
+import { getFundingFactorBps } from './fees.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './ledger.ts';
 
 /**
@@ -29,7 +29,7 @@ export async function accrueFunding(db: Db, marketId: string): Promise<{ rateE6:
     let skewBps = 0;
     if (oi > 0n) {
       const skewRatio = Number(longOi - shortOi) / Number(oi); // -1..1
-      skewBps = Math.round(config.fundingSkewFactorBps * skewRatio);
+      skewBps = Math.round(getFundingFactorBps() * skewRatio); // operator-tunable max (admin panel)
     }
     const rateE6 = BigInt(Math.round((skewBps / 10_000) * 1_000_000)); // bps -> 1e6 fraction
     const cumulative = (await getCumulativeFundingE6(q, marketId)) + rateE6;
