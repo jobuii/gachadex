@@ -210,6 +210,10 @@ export const adminSetFundingFactor = (bps, adminKey) => adminReq('/admin/funding
 // Per-customer operator view (paginated + sortable) -> { customers: [...], total }.
 export const adminGetCustomers = ({ limit = 50, offset = 0, sort = 'volume' } = {}, adminKey) =>
   adminGet(`/admin/customers?limit=${limit}&offset=${offset}&sort=${encodeURIComponent(sort)}`, adminKey);
+// One customer's open positions per market (expand-row drill-down) -> { positions: [...] }.
+export const adminGetCustomerPositions = (userId, adminKey) => adminGet(`/admin/customers/${userId}/positions`, adminKey);
+// Per-asset trading stats + total net exposure -> { markets: [...], totals: { netCappedE6, netRawE6 } }.
+export const adminGetMarketStats = (adminKey) => adminGet('/admin/market-stats', adminKey);
 // Withdrawal queue (real-funds). GET by status; approve = sign+broadcast; reverse = re-credit an unpaid row.
 export const adminGetWithdrawals = (status, adminKey) => adminGet(`/admin/withdrawals?status=${encodeURIComponent(status)}`, adminKey);
 export const adminApproveWithdrawal = (id, adminKey) => adminReq(`/admin/withdrawals/${id}/approve`, adminKey);
