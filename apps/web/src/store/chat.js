@@ -33,7 +33,8 @@ export const useChat = create((set, get) => ({
     subscribe(['chat']);
     api.getChat().then((r) => set({ messages: r.messages })).catch(() => {});
     onMessage((m) => {
-      if (m.ch !== 'chat' || m.type !== 'message' || !m.data) return;
+      // 'message' = a user post; 'event' = a BIG BET / BIG WIN action bar (rendered inline in the rail)
+      if (m.ch !== 'chat' || (m.type !== 'message' && m.type !== 'event') || !m.data) return;
       set((s) =>
         s.messages.some((x) => x.id === m.data.id)
           ? s

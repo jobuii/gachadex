@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { formatUsd } from '@pokex/pricing';
 import { useAuth } from '../auth/AuthContext';
 import { useChat } from '../store/chat';
 import * as api from '../lib/api.js';
@@ -16,6 +17,29 @@ function fmtTime(iso) {
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 const snippet = (s) => (s.length > 48 ? `${s.slice(0, 48)}…` : s);
+const usd0 = (e6) => formatUsd(BigInt(e6 ?? 0), { decimals: 0 }); // tolerate a missing field rather than blank the rail
+
+// BIG BET (gold) / BIG WIN (green) action bar — a trade broadcast that persists inline in the rail.
+function ActionBar({ m }) {
+  const meta = m.meta || {};
+  const win = meta.variant === 'big_win';
+  const side = String(meta.side || '').toUpperCase();
+  const roe = meta.roeBps != null ? `+${Math.round(meta.roeBps / 100)}%` : null;
+  return (
+    <div className={`chat-event ${win ? 'big-win' : 'big-bet'}`}>
+      <span className="chat-event-tag">{win ? '🏆 BIG WIN' : '🔥 BIG BET'}</span>
+      <span className="chat-event-body">
+        <b>{m.handle}</b>{' '}
+        {win ? (
+          <>won <b>{usd0(meta.pnlE6)}</b>{roe && <b className="chat-event-roe"> {roe}</b>}</>
+        ) : (
+          <>opened <b>{usd0(meta.notionalE6)}</b></>
+        )}{' '}
+        <span className={`chat-event-side ${side.toLowerCase()}`}>{side}</span> on <b>{meta.marketName}</b>
+      </span>
+    </div>
+  );
+}
 
 // render @mentions as highlighted chips; a mention of your own username gets a stronger highlight
 function renderBody(body, myName) {
@@ -129,6 +153,7 @@ export function ChatSidebar({ open, onToggle }) {
           <div className="chat-empty">No messages yet.<br />Say hi 👋</div>
         ) : (
           messages.map((m) => {
+            if (m.kind === 'event') return <ActionBar key={m.id} m={m} />;
             const mine = m.userId === user?.id;
             const hColor = colorFor(m.handle);
             return (

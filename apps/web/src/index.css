@@ -187,6 +187,21 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
   padding: 0.1rem 0.4rem; margin: 0.15rem 0; line-height: 1.5;
 }
 .chat-quote b { color: var(--text); }
+
+/* BIG BET / BIG WIN action bars (kind='event') — a trade broadcast, persisted inline in the rail */
+.chat-event {
+  display: flex; flex-direction: column; gap: 0.25rem;
+  padding: 0.4rem 0.55rem; border-radius: 4px; border-left: 3px solid;
+}
+.chat-event.big-bet { border-color: var(--gold);    background: rgba(240, 192, 64, 0.10); }
+.chat-event.big-win { border-color: var(--success); background: rgba(63, 185, 80, 0.10); }
+.chat-event-tag { font-size: 0.42rem; letter-spacing: 0.04em; }
+.chat-event.big-bet .chat-event-tag { color: var(--gold); }
+.chat-event.big-win .chat-event-tag { color: var(--success); }
+.chat-event-body { font-size: 0.5rem; color: var(--text); line-height: 1.6; word-break: break-word; }
+.chat-event-roe { color: var(--success); }
+.chat-event-side.long  { color: var(--success); }
+.chat-event-side.short { color: var(--accent-lit); }
 .chat-reply-btn { margin-left: auto; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.55rem; padding: 0 0.2rem; }
 .chat-reply-btn:hover { color: var(--gold); }
 

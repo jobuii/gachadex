@@ -111,6 +111,10 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS reply_to TEXT REFERENCES chat_messages(id);
+-- 'message' (a user post) | 'event' (a BIG BET / BIG WIN action bar); meta carries the structured payload
+-- the client renders the bar from (variant, side, notionalE6, pnlE6, roeBps, marketName).
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'message';
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS meta JSONB;
 CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_messages(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS auth_nonces (

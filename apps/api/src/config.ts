@@ -113,6 +113,11 @@ export const config = {
   feeBps: num('FEE_BPS', 0),
   feeLpSharePct: num('FEE_LP_SHARE_PCT', 50), // % of fees that go to LPs (rest to platform revenue)
 
+  // Chat action bars: broadcast a BIG BET when an open's notional >= this (USD) and a BIG WIN when a
+  // close's realized profit >= this (USD). Live-tunable via settings (see chat-config.ts).
+  chatBigBetUsd: num('CHAT_BIG_BET_USD', 500),
+  chatBigWinUsd: num('CHAT_BIG_WIN_USD', 100),
+
   // Funding: per-accrual rate = skewFactor * (skew / openInterest), bps (the heavy side pays)
   fundingSkewFactorBps: num('FUNDING_SKEW_FACTOR_BPS', 30), // skew-balancing component (max)
   fundingIntervalMs: num('FUNDING_INTERVAL_MS', 60 * 60 * 1000), // hourly

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { shortenPubkey } from '@pokex/pricing';
+import { shortenPubkey, formatUsd } from '@pokex/pricing';
 import { HttpError } from '../errors.ts';
 import type { Db } from '../db/client.ts';
 import { publish } from './bus.ts';
@@ -18,6 +18,8 @@ export interface ChatMessage {
   body: string;
   createdAt: string;
   replyTo: ReplyContext | null;
+  kind: string; // 'message' | 'event'
+  meta: Record<string, unknown> | null; // structured payload for 'event' rows; null for plain messages
 }
 
 // Display name = the user's chosen chat username; falls back to a truncated pubkey (like the leaderboard).
@@ -28,9 +30,10 @@ export async function listChat(db: Db, limit = 50): Promise<ChatMessage[]> {
   const n = Math.min(Math.max(limit, 1), 200);
   const r = await db.query<{
     id: string; user_id: string; body: string; created_at: string; dn: string | null; pk: string;
+    kind: string; meta: Record<string, unknown> | null;
     reply_to: string | null; p_body: string | null; p_dn: string | null; p_pk: string | null;
   }>(
-    `SELECT c.id, c.user_id, c.body, c.created_at, u.display_name AS dn, u.solana_pubkey AS pk,
+    `SELECT c.id, c.user_id, c.body, c.created_at, c.kind, c.meta, u.display_name AS dn, u.solana_pubkey AS pk,
             c.reply_to, p.body AS p_body, pu.display_name AS p_dn, pu.solana_pubkey AS p_pk
      FROM chat_messages c
      JOIN users u ON u.id = c.user_id
@@ -46,6 +49,8 @@ export async function listChat(db: Db, limit = 50): Promise<ChatMessage[]> {
     body: m.body,
     createdAt: m.created_at,
     replyTo: m.reply_to ? { id: m.reply_to, handle: handleFor(m.p_dn, m.p_pk ?? ''), body: m.p_body ?? '' } : null,
+    kind: m.kind,
+    meta: m.meta,
   }));
 }
 
@@ -92,9 +97,69 @@ export async function postChat(db: Db, userId: string, rawBody: string, replyToI
     body,
     createdAt: ins.rows[0].created_at,
     replyTo,
+    kind: 'message',
+    meta: null,
   };
   publish('chat', 'message', msg);
   return msg;
+}
+
+export type ChatEventVariant = 'big_bet' | 'big_win';
+export interface ChatEventInput {
+  userId: string;
+  marketId: string;
+  variant: ChatEventVariant;
+  side: 'long' | 'short';
+  notionalE6: bigint; // size placed (big_bet) / closed-leg notional (big_win)
+  pnlE6?: bigint; // realized profit on the closed leg (big_win only)
+  roeBps?: number; // return on the closed leg's margin, bps (big_win only)
+}
+
+/** Human-readable fallback text; the client renders the styled bar from `meta`, but a body keeps the row
+ *  legible anywhere a plain message would be (search, notifications, a client that doesn't know `event`). */
+function eventBody(handle: string, marketName: string, evt: ChatEventInput): string {
+  const side = evt.side.toUpperCase();
+  if (evt.variant === 'big_win') {
+    const roe = evt.roeBps != null ? ` (+${Math.round(evt.roeBps / 100)}%)` : '';
+    return `${handle} won ${formatUsd(evt.pnlE6 ?? 0n, { decimals: 0 })}${roe} ${side} on ${marketName}`;
+  }
+  return `${handle} opened ${formatUsd(evt.notionalE6, { decimals: 0 })} ${side} on ${marketName}`;
+}
+
+/**
+ * Persist + broadcast a chat action bar (BIG BET on a large open, BIG WIN on a large profitable close).
+ * MUST be called AFTER the trade tx commits — a chat failure can never roll back a trade, so callers in
+ * the engine swallow its errors. The bar persists (kind='event') so it shows in chat history too.
+ */
+export async function emitChatEvent(db: Db, evt: ChatEventInput): Promise<void> {
+  const r = await db.query<{ dn: string | null; pk: string; mkt: string }>(
+    `SELECT u.display_name AS dn, u.solana_pubkey AS pk, m.display_name AS mkt
+     FROM users u JOIN markets m ON m.id = $2 WHERE u.id = $1`,
+    [evt.userId, evt.marketId],
+  );
+  if (!r.rows[0]) return; // user or market vanished between commit and emit — nothing to announce
+  const handle = handleFor(r.rows[0].dn, r.rows[0].pk);
+  const marketName = r.rows[0].mkt;
+
+  const meta: Record<string, unknown> = {
+    variant: evt.variant,
+    side: evt.side,
+    marketId: evt.marketId,
+    marketName,
+    notionalE6: evt.notionalE6.toString(),
+    ...(evt.pnlE6 != null ? { pnlE6: evt.pnlE6.toString() } : {}),
+    ...(evt.roeBps != null ? { roeBps: evt.roeBps } : {}),
+  };
+  const body = eventBody(handle, marketName, evt);
+
+  const id = randomUUID();
+  const ins = await db.query<{ created_at: string }>(
+    `INSERT INTO chat_messages(id, user_id, body, kind, meta) VALUES($1, $2, $3, 'event', $4) RETURNING created_at`,
+    [id, evt.userId, body, JSON.stringify(meta)],
+  );
+  publish('chat', 'event', {
+    id, userId: evt.userId, handle, body, createdAt: ins.rows[0].created_at, replyTo: null, kind: 'event', meta,
+  } satisfies ChatMessage);
 }
 
 export interface Profile {
