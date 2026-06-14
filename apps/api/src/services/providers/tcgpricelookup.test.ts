@@ -129,8 +129,18 @@ test('fromTplCard: identity comes from the TRACKED market row, data from the pro
   assert.equal(oc.providerCardId, 'uuid-x');
   assert.equal(oc.rawE6, 100_000_000n);
   assert.equal(oc.gradedE6, 500_000_000n);
-  assert.equal(oc.observedAt?.toISOString(), '2026-06-10T12:00:00.000Z');
+  assert.equal(oc.observedAt?.toISOString(), '2026-06-10T12:00:00.000Z'); // no last_price_update -> falls back to updated_at
   assert.equal(oc.featured, true); // basket eligibility flows from the market row, not the provider
+});
+
+test('fromTplCard: observedAt is the PRICE-freshness timestamp, not the static record timestamp', () => {
+  // Regression: keying print dedup on updated_at (≈static) froze every mark at the first post-cutover
+  // print -> 0% 24h change forever. last_price_update advances per re-price, so it must win.
+  const mkt = { provider_card_id: 'x', symbol: 's', card_id: 's', game: 'pokemon', featured: false };
+  const fresh = fromTplCard(tplCard('x', prices({ market: 10 }), { last_price_update: '2026-06-13T18:00:00Z' }), mkt);
+  assert.equal(fresh.observedAt?.toISOString(), '2026-06-13T18:00:00.000Z', 'prefers last_price_update');
+  const stale = fromTplCard(tplCard('x', prices({ market: 10 }), { last_price_update: null }), mkt);
+  assert.equal(stale.observedAt?.toISOString(), '2026-06-10T12:00:00.000Z', 'falls back to updated_at when absent');
 });
 
 test('fetchTrackedCards + ingest: legacy + provider-native markets re-price IN PLACE (no twins)', async () => {
