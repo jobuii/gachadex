@@ -217,6 +217,8 @@ export const adminClosePosition = (userId, positionId, adminKey) =>
   adminReq(`/admin/customers/${userId}/positions/${positionId}/close`, adminKey);
 export const adminCloseUserPositions = (userId, adminKey) => adminReq(`/admin/customers/${userId}/positions/close-all`, adminKey);
 export const adminCloseAllPositions = (adminKey) => adminReq('/admin/positions/close-all', adminKey);
+// EMERGENCY: liquidate every underwater position now (close-all can't touch liquidatable ones).
+export const adminLiquidateAll = (adminKey) => adminReq('/admin/positions/liquidate', adminKey);
 // Per-asset trading stats + total net exposure -> { markets: [...], totals: { netCappedE6, netRawE6 } }.
 export const adminGetMarketStats = (adminKey) => adminGet('/admin/market-stats', adminKey);
 // Price-confidence gate: card markets restricted (reduce-only) now + the ones that flipped into restricted today.

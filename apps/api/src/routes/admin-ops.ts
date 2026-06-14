@@ -10,7 +10,7 @@ import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFa
 import { listCustomers } from '../services/customers.ts';
 import { marketStats } from '../services/admin-stats.ts';
 import { restrictionsReport } from '../services/restrictions.ts';
-import { getUserPositions } from '../services/engine.ts';
+import { getUserPositions, liquidateAllEligible } from '../services/engine.ts';
 import { adminClosePosition, adminCloseUserPositions, adminCloseAllPositions } from '../services/admin-close.ts';
 
 /**
@@ -116,6 +116,10 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   // EMERGENCY kill switch: close EVERY open position across ALL customers. Gated by the admin key +
   // a destructive-confirm in the UI; best-effort, returns closed/failed counts.
   app.post('/admin/positions/close-all', rl(config.routeRateLimits.admin), async () => adminCloseAllPositions(await getDb()));
+
+  // EMERGENCY: liquidate every UNDERWATER position now (the same sweep the background loop runs) instead
+  // of waiting for it. Complements close-all, which can't touch liquidatable positions. Returns counts.
+  app.post('/admin/positions/liquidate', rl(config.routeRateLimits.admin), async () => liquidateAllEligible(await getDb()));
 
   // Per-asset trading stats (volume 24h, locked margin, capped/raw net player P/L, long/short notional)
   // + the platform's total net payout exposure. Drives the main-view markets table + the exposure box.
