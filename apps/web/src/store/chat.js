@@ -24,6 +24,7 @@ export const persistChatOpen = (open) => {
 export const useChat = create((set, get) => ({
   messages: [],
   unread: 0,
+  modState: {}, // userId -> { mutedUntil, banned } — live mute/ban snapshots from the server
   _started: false,
 
   start() {
@@ -33,8 +34,19 @@ export const useChat = create((set, get) => ({
     subscribe(['chat']);
     api.getChat().then((r) => set({ messages: r.messages })).catch(() => {});
     onMessage((m) => {
+      if (m.ch !== 'chat' || !m.data) return;
+      // a moderator deleted a message — drop it everywhere, no unread bump
+      if (m.type === 'delete') {
+        set((s) => ({ messages: s.messages.filter((x) => x.id !== m.data.id) }));
+        return;
+      }
+      // a user's mute/ban changed — record the snapshot (drives the disabled input + mod toggle buttons)
+      if (m.type === 'modstate') {
+        set((s) => ({ modState: { ...s.modState, [m.data.userId]: { mutedUntil: m.data.mutedUntil, banned: m.data.banned } } }));
+        return;
+      }
       // 'message' = a user post; 'event' = a BIG BET / BIG WIN action bar (rendered inline in the rail)
-      if (m.ch !== 'chat' || (m.type !== 'message' && m.type !== 'event') || !m.data) return;
+      if (m.type !== 'message' && m.type !== 'event') return;
       set((s) =>
         s.messages.some((x) => x.id === m.data.id)
           ? s

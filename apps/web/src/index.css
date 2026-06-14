@@ -195,13 +195,44 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 }
 .chat-event.big-bet { border-color: var(--gold);    background: rgba(240, 192, 64, 0.10); }
 .chat-event.big-win { border-color: var(--success); background: rgba(63, 185, 80, 0.10); }
-.chat-event-tag { font-size: 0.42rem; letter-spacing: 0.04em; }
+.chat-event-tag { font-size: 0.42rem; letter-spacing: 0.04em; display: flex; align-items: center; }
 .chat-event.big-bet .chat-event-tag { color: var(--gold); }
 .chat-event.big-win .chat-event-tag { color: var(--success); }
 .chat-event-body { font-size: 0.5rem; color: var(--text); line-height: 1.6; word-break: break-word; }
 .chat-event-roe { color: var(--success); }
 .chat-event-side.long  { color: var(--success); }
 .chat-event-side.short { color: var(--accent-lit); }
+
+/* moderation: MOD chip + inline mod tools (delete / mute / ban) */
+.chat-mod-chip {
+  font-size: 0.46rem; color: var(--bg); background: var(--gold);
+  padding: 0.14rem 0.4rem; margin-left: 0.35rem; border-radius: 4px; letter-spacing: 0.06em;
+  font-weight: 700; vertical-align: middle;
+}
+.chat-mod-tools { display: inline-flex; gap: 0.3rem; margin-left: auto; align-items: center; }
+/* visible, clearly-tappable mod buttons (delete / mute / ban) — a bordered box so even a dim emoji reads */
+.chat-mod-btn {
+  background: var(--bg-3); border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+  font-size: 0.61rem; line-height: 1; padding: 0.12rem 0.26rem; opacity: 1;
+}
+.chat-mod-btn:hover { border-color: var(--gold); background: var(--bg-2); }
+/* delete is a recolorable glyph (the trash EMOJI can't take a CSS color) — bright red so it stands out */
+.chat-mod-del { color: var(--accent-lit); font-weight: 700; }
+.chat-mod-del:hover { color: #fff; border-color: var(--accent-lit); background: var(--accent); }
+.chat-event-del { margin-left: auto; }
+
+/* transient confirmation after a mod action (muted/banned/deleted ...) */
+.chat-modmsg {
+  flex-shrink: 0; padding: 0.4rem 0.7rem; text-align: center; font-size: 0.46rem; line-height: 1.4;
+  color: var(--success); border-top: 1px solid var(--border); background: rgba(63, 185, 80, 0.08);
+}
+/* the muted/banned viewer's input is replaced by a clear status line */
+.chat-blocked {
+  flex-shrink: 0; border-top: 1px solid var(--border); padding: 0.7rem; text-align: center;
+  font-size: 0.5rem; line-height: 1.5;
+}
+.chat-blocked.banned { color: var(--accent-lit); background: rgba(231, 76, 60, 0.08); }
+.chat-blocked.muted  { color: var(--gold); background: rgba(240, 192, 64, 0.08); }
 .chat-reply-btn { margin-left: auto; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.55rem; padding: 0 0.2rem; }
 .chat-reply-btn:hover { color: var(--gold); }
 

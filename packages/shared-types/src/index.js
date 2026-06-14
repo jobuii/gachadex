@@ -182,6 +182,18 @@ export const UsernameRequest = z.object({
   username: z.string().trim().min(3).max(20).regex(/^[A-Za-z0-9_-]+$/, 'letters, numbers, _ and - only'),
 });
 
+// --- chat moderation ---------------------------------------------------------
+
+// Mute a user for N minutes (1 min – 30 days); omitted -> server default.
+export const ChatMuteRequest = z.object({
+  minutes: z.number().int().min(1).max(43_200).optional(),
+});
+
+// Operator grant/revoke moderator status (admin-key route).
+export const ModGrantRequest = z.object({
+  action: z.enum(['grant', 'revoke']),
+});
+
 // --- auth (SIWS) -------------------------------------------------------------
 
 export const NonceRequest = z.object({ pubkey: z.string().min(32) });

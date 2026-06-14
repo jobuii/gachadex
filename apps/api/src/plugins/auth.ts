@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { verifyAccessToken, type Scope } from '../services/auth.ts';
+import { getDb } from '../db/client.ts';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -44,5 +45,22 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply): Pr
   if (required === 'full' && scope !== 'full') {
     await reply.code(403).send({ error: 'this action requires the master wallet, not a trading key', code: 'scope_denied' });
     return; // stop here — never fall through to the route handler after denying scope
+  }
+}
+
+/**
+ * preHandler for moderator-only chat actions. MUST be chained AFTER `authenticate` (it reads req.userId);
+ * 403s anyone whose user row isn't is_mod. The operator (admin key) uses the separate admin-key routes.
+ */
+export async function requireMod(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+  if (!req.userId) {
+    await reply.code(401).send({ error: 'unauthorized' });
+    return;
+  }
+  const db = await getDb();
+  const r = await db.query<{ is_mod: boolean }>(`SELECT is_mod FROM users WHERE id = $1`, [req.userId]);
+  if (!r.rows[0]?.is_mod) {
+    await reply.code(403).send({ error: 'moderator only', code: 'mod_only' });
+    return; // stop here — never fall through to the route handler after denying (else the mutation runs)
   }
 }

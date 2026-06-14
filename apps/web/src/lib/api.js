@@ -146,6 +146,13 @@ export const postChat = (body, replyTo) =>
 export const getProfile = () => req('/me/profile', { auth: true });
 export const setUsername = (username) => req('/me/username', { method: 'POST', auth: true, body: { username } });
 
+// Moderator actions (require a mod account; 403 otherwise).
+export const chatDelete = (id) => req(`/chat/messages/${id}/delete`, { method: 'POST', auth: true });
+export const chatMute = (userId, minutes) => req(`/chat/users/${userId}/mute`, { method: 'POST', auth: true, body: minutes ? { minutes } : {} });
+export const chatUnmute = (userId) => req(`/chat/users/${userId}/unmute`, { method: 'POST', auth: true });
+export const chatBan = (userId) => req(`/chat/users/${userId}/ban`, { method: 'POST', auth: true });
+export const chatUnban = (userId) => req(`/chat/users/${userId}/unban`, { method: 'POST', auth: true });
+
 // A ?ref=CODE link is captured on first load and held until the user signs in and redeems it.
 const REF_KEY = 'pokeX_ref';
 export function capturePendingReferral() {
@@ -188,6 +195,9 @@ async function adminGet(path, adminKey) {
 }
 export const adminSetPrice = (id, body, adminKey) => adminReq(`/admin/markets/${id}/price`, adminKey, body);
 export const adminUnpin = (id, adminKey) => adminReq(`/admin/markets/${id}/unpin`, adminKey);
+// Chat moderation (operator): list mods/muted/banned + audit; grant/revoke MOD per user.
+export const adminGetMods = (adminKey) => adminGet('/admin/chat/mods', adminKey);
+export const adminSetMod = (userId, action, adminKey) => adminReq(`/admin/chat/mods/${userId}`, adminKey, { action });
 // Treasury + insurance. /admin/treasury (full PoR view incl. insurance + allocatable surplus) is
 // real-funds-only; /admin/insurance (balance) + the fee-allocation moves work in play-money too.
 export const adminGetTreasury = (adminKey) => adminGet('/admin/treasury', adminKey);

@@ -6,7 +6,11 @@ process.env.PGLITE_DIR = 'memory://';
 process.env.DATABASE_URL = '';
 process.env.NODE_ENV = 'production';
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
-// thresholds left at defaults: BIG BET >= $500 notional, BIG WIN >= $100 realized profit; FEE_BPS default 0.
+// Pin thresholds + fee so the test is hermetic — a local apps/api/.env (loaded by dotenv) must not
+// change the numbers this test asserts. BIG BET >= $500 notional, BIG WIN > $100 realized profit, fee 0.
+process.env.CHAT_BIG_BET_USD = '500';
+process.env.CHAT_BIG_WIN_USD = '100';
+process.env.FEE_BPS = '0';
 
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
