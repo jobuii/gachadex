@@ -1,10 +1,10 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { formatUsd, formatSignedUsd, shortenPubkey } from '@pokex/pricing';
 import * as api from '../lib/api.js';
 
 // Operator "Customers" tab: one row per user, paginated + sortable, each expandable to its open
 // positions per market. Renders inside the AdminPanel (monospace data font + access gate); takes the
-// verified admin key as a prop.
+// verified admin key as a prop. `onGoToMarket(marketId)` jumps the exchange to a position's market.
 const PAGE = 50;
 const SORTS = [
   ['volume', 'Volume'],
@@ -15,12 +15,13 @@ const SORTS = [
   ['joined', 'Joined'],
 ];
 const COLS = 15; // table width (for the expand-row + empty-state colSpan)
+const KILL_PHRASE = 'CLOSE ALL';
 
 const short = (a) => shortenPubkey(a) || '—';
 const usd = (e6) => formatUsd(BigInt(e6 ?? 0)); // ?? 0 guards against an older API missing the new fields
 const signed = (e6) => ({ color: BigInt(e6 ?? 0) < 0n ? 'var(--danger)' : 'var(--success)' });
 
-export function CustomersView({ adminKey }) {
+export function CustomersView({ adminKey, onGoToMarket }) {
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -30,24 +31,30 @@ export function CustomersView({ adminKey }) {
   const [copied, setCopied] = useState(null);
   const [expanded, setExpanded] = useState(null); // userId currently expanded
   const [positions, setPositions] = useState({}); // userId -> positions[] | 'loading'
+  const [busy, setBusy] = useState(null); // positionId | 'user:<id>' | 'all' currently closing
+  const [note, setNote] = useState(null); // action feedback line
+  const [killOpen, setKillOpen] = useState(false); // global kill-switch confirmation modal
+  const [killText, setKillText] = useState('');
 
-  useEffect(() => {
-    let live = true;
+  const reqSeq = useRef(0); // ignore a slow response that resolves after a newer fetch (rapid sort/page)
+  const loadCustomers = useCallback(() => {
+    const seq = ++reqSeq.current;
     setLoading(true);
-    api
+    return api
       .adminGetCustomers({ limit: PAGE, offset, sort }, adminKey)
       .then((r) => {
-        if (!live) return;
+        if (seq !== reqSeq.current) return;
         setRows(r.customers || []);
         setTotal(r.total || 0);
         setErr(null);
       })
-      .catch((e) => live && setErr(e.message))
-      .finally(() => live && setLoading(false));
-    return () => {
-      live = false;
-    };
+      .catch((e) => seq === reqSeq.current && setErr(e.message))
+      .finally(() => seq === reqSeq.current && setLoading(false));
   }, [adminKey, offset, sort]);
+
+  useEffect(() => {
+    loadCustomers();
+  }, [loadCustomers]);
 
   const copy = (text) => {
     if (!text) return;
@@ -65,25 +72,94 @@ export function CustomersView({ adminKey }) {
     setExpanded(userId);
     if (positions[userId] === undefined) {
       setPositions((p) => ({ ...p, [userId]: 'loading' }));
-      api
-        .adminGetCustomerPositions(userId, adminKey)
-        .then((r) => setPositions((p) => ({ ...p, [userId]: r.positions || [] })))
-        .catch(() => setPositions((p) => ({ ...p, [userId]: [] })));
+      reloadUser(userId);
     }
   };
+
+  const reloadUser = (userId) =>
+    api
+      .adminGetCustomerPositions(userId, adminKey)
+      .then((r) => setPositions((p) => ({ ...p, [userId]: r.positions || [] })))
+      .catch(() => setPositions((p) => ({ ...p, [userId]: [] })));
+
+  // One busy/feedback skeleton for every close action; fn returns the note line to show.
+  const runAction = async (busyKey, fn) => {
+    setBusy(busyKey);
+    setNote(null);
+    try {
+      setNote(await fn());
+    } catch (e) {
+      setNote(`Failed: ${e.message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+  // Summarize a multi-close result, calling out liquidatable failures (the engine routes those through
+  // auto-liquidation rather than a voluntary close — they're not a real error).
+  const summarize = (r) => {
+    if (!r.failed) return `closed ${r.closed}`;
+    const liq = (r.errors || []).filter((e) => /liquidat/i.test(e.error)).length;
+    const liqHint = liq ? `, ${liq} liquidatable (will auto-liquidate)` : '';
+    return `closed ${r.closed}, failed ${r.failed}${liqHint}`;
+  };
+
+  // Close one position (full). Recorded server-side as a platform close.
+  const closeOne = (userId, p) => {
+    if (!window.confirm(`Close ${p.displayName || p.symbol} — ${p.side} ${p.leverage}x — for this customer?\nThis is recorded as a manual close by the platform.`)) return;
+    runAction(p.id, async () => {
+      await api.adminClosePosition(userId, p.id, adminKey);
+      await reloadUser(userId);
+      loadCustomers();
+      return `Closed ${p.displayName || p.symbol}.`;
+    });
+  };
+
+  // Close ALL of one customer's positions.
+  const closeUser = (userId, n) => {
+    if (!window.confirm(`Close ALL ${n} open position(s) for this customer?\nRecorded as manual closes by the platform.`)) return;
+    runAction('user:' + userId, async () => {
+      const r = await api.adminCloseUserPositions(userId, adminKey);
+      await reloadUser(userId);
+      loadCustomers();
+      return `Customer close-all: ${summarize(r)}.`;
+    });
+  };
+
+  // EMERGENCY: close every open position across all customers (gated by the typed-phrase modal).
+  const closeAllGlobal = () =>
+    runAction('all', async () => {
+      const r = await api.adminCloseAllPositions(adminKey);
+      setKillOpen(false);
+      setKillText('');
+      setExpanded(null);
+      setPositions({}); // drop cached expansions; they're stale now
+      loadCustomers();
+      return `Kill switch: ${summarize(r)}.`;
+    });
 
   const pages = Math.max(1, Math.ceil(total / PAGE));
   const page = Math.floor(offset / PAGE) + 1;
 
   return (
     <div>
-      <h3 style={{ marginTop: '1rem' }}>Customers ({total})</h3>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginTop: '1rem' }}>
+        <h3 style={{ margin: 0 }}>Customers ({total})</h3>
+        <button
+          className="btn-ghost sm"
+          style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}
+          disabled={busy === 'all'}
+          onClick={() => { setKillText(''); setKillOpen(true); }}
+        >
+          ⚠ Close ALL positions (all customers)
+        </button>
+      </div>
       <p className="ref-blurb">
         One row per user. Sort with the buttons; click a wallet/deposit address to copy it; click the ▸ to
-        expand a customer's open positions per market. <strong>P/L</strong> is realized (closed trades);{' '}
-        <strong>uP/L</strong> is unrealized (open positions).
+        expand a customer's open positions per market — from there you can jump to a market, close a single
+        position, or close all of that customer's positions. <strong>P/L</strong> is realized; <strong>uP/L</strong> is unrealized.
       </p>
       {err && <div className="order-error">{err}</div>}
+      {note && <div className="ref-blurb" style={{ color: 'var(--text)' }}>{note}</div>}
 
       <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', margin: '0.5rem 0' }}>
         {SORTS.map(([k, label]) => (
@@ -162,28 +238,53 @@ export function CustomersView({ adminKey }) {
                         {pos === 'loading' && <span className="muted">loading positions…</span>}
                         {Array.isArray(pos) && pos.length === 0 && <span className="muted">No open positions.</span>}
                         {Array.isArray(pos) && pos.length > 0 && (
-                          <table className="cust-subtable">
-                            <thead>
-                              <tr>
-                                <th>Market</th><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th>
-                                <th>uP/L</th><th>Margin</th><th>Liq</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {pos.map((p) => (
-                                <tr key={p.id}>
-                                  <td>{p.symbol}</td>
-                                  <td className={p.side === 'long' ? 'up' : 'down'}>{p.side.toUpperCase()} {p.leverage}x</td>
-                                  <td className="num">{(Number(p.qtyE6) / 1e6).toFixed(2)}</td>
-                                  <td className="num">{usd(p.avgEntryE6)}</td>
-                                  <td className="num">{usd(p.markE6)}</td>
-                                  <td className="num" style={signed(p.unrealizedPnlUusdc)}>{formatSignedUsd(p.unrealizedPnlUusdc)}</td>
-                                  <td className="num">{usd(p.marginUusdc)}</td>
-                                  <td className="num down">{usd(p.liqPriceE6)}</td>
+                          <>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.35rem' }}>
+                              <button
+                                className="btn-ghost sm"
+                                style={{ color: 'var(--danger)' }}
+                                disabled={busy != null}
+                                onClick={() => closeUser(c.userId, pos.length)}
+                              >
+                                {busy === 'user:' + c.userId ? 'closing…' : `Close all ${pos.length} positions`}
+                              </button>
+                            </div>
+                            <table className="cust-subtable">
+                              <thead>
+                                <tr>
+                                  <th>Market</th><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th>
+                                  <th>uP/L</th><th>Margin</th><th>Liq</th><th />
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                              </thead>
+                              <tbody>
+                                {pos.map((p) => (
+                                  <tr key={p.id}>
+                                    <td>
+                                      <button
+                                        className="link-btn"
+                                        title={`Go to ${p.displayName || p.symbol}`}
+                                        onClick={() => onGoToMarket?.(p.marketId)}
+                                      >
+                                        {p.displayName || p.symbol}
+                                      </button>
+                                    </td>
+                                    <td className={p.side === 'long' ? 'up' : 'down'}>{p.side.toUpperCase()} {p.leverage}x</td>
+                                    <td className="num">{(Number(p.qtyE6) / 1e6).toFixed(2)}</td>
+                                    <td className="num">{usd(p.avgEntryE6)}</td>
+                                    <td className="num">{usd(p.markE6)}</td>
+                                    <td className="num" style={signed(p.unrealizedPnlUusdc)}>{formatSignedUsd(p.unrealizedPnlUusdc)}</td>
+                                    <td className="num">{usd(p.marginUusdc)}</td>
+                                    <td className="num down">{usd(p.liqPriceE6)}</td>
+                                    <td>
+                                      <button className="btn-ghost sm" disabled={busy != null} onClick={() => closeOne(c.userId, p)}>
+                                        {busy === p.id ? '…' : 'Close'}
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </>
                         )}
                       </td>
                     </tr>
@@ -218,6 +319,43 @@ export function CustomersView({ adminKey }) {
           </span>
         )}
       </div>
+
+      {killOpen && (
+        <div className="modal-backdrop" onClick={() => busy !== 'all' && setKillOpen(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0, color: 'var(--danger)' }}>⚠ Emergency: close ALL positions</h3>
+            <p className="ref-blurb">
+              This force-closes <strong>every open position across ALL customers</strong> at the current mark,
+              recorded as platform closes. This cannot be undone. Use only in a genuine emergency. Positions
+              already underwater are flattened by the auto-liquidation sweep, not this button (they'll show as
+              "liquidatable" in the result).
+            </p>
+            <p className="ref-blurb">
+              Type <strong>{KILL_PHRASE}</strong> to confirm:
+            </p>
+            <input
+              className="wallet-input"
+              value={killText}
+              onChange={(e) => setKillText(e.target.value)}
+              placeholder={KILL_PHRASE}
+              style={{ width: '100%', marginBottom: '0.6rem' }}
+            />
+            <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'flex-end' }}>
+              <button className="btn-ghost sm" disabled={busy === 'all'} onClick={() => setKillOpen(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn-primary sm"
+                style={{ background: 'var(--danger)', borderColor: 'var(--danger)' }}
+                disabled={killText.trim() !== KILL_PHRASE || busy === 'all'}
+                onClick={closeAllGlobal}
+              >
+                {busy === 'all' ? 'closing…' : 'Close ALL positions'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

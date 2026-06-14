@@ -1332,4 +1332,13 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
   font-size: 0.66rem; letter-spacing: 0.03em; color: var(--text-muted);
 }
 .admin-panel .hist-table td { padding: 0.5rem 0.7rem; }
+/* Market name: cap the width so a few very long card names don't force a horizontal scrollbar on the
+   whole table. Most names fit; the rare long ones ellipsize (full name on hover via the title attr). */
+.admin-panel .hist-table td.mkt-name { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Inline text-button styled as a link (admin customer view: jump to a position's market). */
+.admin-panel .link-btn { background: none; border: none; padding: 0; font: inherit; cursor: pointer; color: var(--border-bright); text-decoration: underline; text-align: left; }
+.admin-panel .link-btn:hover { opacity: 0.85; }
+/* Confirmation modal (e.g. the close-all-positions kill switch). */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.66); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.modal-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.3rem; max-width: 460px; width: 92%; }
 .admin-panel .wallet-input { font-family: var(--ops-font); font-size: 0.82rem; }

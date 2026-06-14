@@ -11,6 +11,7 @@ import { listCustomers } from '../services/customers.ts';
 import { marketStats } from '../services/admin-stats.ts';
 import { restrictionsReport } from '../services/restrictions.ts';
 import { getUserPositions } from '../services/engine.ts';
+import { adminClosePosition, adminCloseUserPositions, adminCloseAllPositions } from '../services/admin-close.ts';
 
 /**
  * Non-custody operator endpoints (ROADMAP §2). Unlike the custody admin routes, these register
@@ -99,6 +100,22 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     return { positions: await getUserPositions(await getDb(), id) };
   });
+
+  // Operator close one of a customer's positions (recorded as a platform close via PLATFORM_ACTOR).
+  app.post('/admin/customers/:id/positions/:positionId/close', rl(config.routeRateLimits.admin), async (req) => {
+    const { id, positionId } = req.params as { id: string; positionId: string };
+    return adminClosePosition(await getDb(), id, positionId);
+  });
+
+  // Operator close ALL of one customer's open positions (best-effort; per-position failures reported).
+  app.post('/admin/customers/:id/positions/close-all', rl(config.routeRateLimits.admin), async (req) => {
+    const { id } = req.params as { id: string };
+    return adminCloseUserPositions(await getDb(), id);
+  });
+
+  // EMERGENCY kill switch: close EVERY open position across ALL customers. Gated by the admin key +
+  // a destructive-confirm in the UI; best-effort, returns closed/failed counts.
+  app.post('/admin/positions/close-all', rl(config.routeRateLimits.admin), async () => adminCloseAllPositions(await getDb()));
 
   // Per-asset trading stats (volume 24h, locked margin, capped/raw net player P/L, long/short notional)
   // + the platform's total net payout exposure. Drives the main-view markets table + the exposure box.

@@ -44,7 +44,7 @@ function PnlStat({ label, value }) {
   );
 }
 
-export function AdminPanel() {
+export function AdminPanel({ onGoToMarket } = {}) {
   const [adminKey, setAdminKey] = useState(() => localStorage.getItem(KEY_STORE) || '');
   // Access gate: nothing in the panel renders or fetches until the key is verified by the server.
   const [authed, setAuthed] = useState(false);
@@ -501,7 +501,7 @@ export function AdminPanel() {
         <button className={`admin-tab ${tab === 'customers' ? 'active' : ''}`} onClick={() => setTab('customers')}>Customers</button>
       </div>
 
-      {tab === 'customers' && <CustomersView adminKey={adminKey} />}
+      {tab === 'customers' && <CustomersView adminKey={adminKey} onGoToMarket={onGoToMarket} />}
 
       {tab === 'main' && (
         <>
@@ -518,6 +518,7 @@ export function AdminPanel() {
           <Stat label="Pending withdrawals" value={treasury.pendingE6} />
           <Stat label="Insurance fund" value={treasury.insuranceE6} />
           <Stat label="Fees earned (house cut)" value={treasury.feeRevenueE6} />
+          <Stat label="Funding earned (house cut)" value={treasury.fundingRevenueE6} />
           <PnlStat label="P/L (treasury − customer funds − pending payouts)" value={pnlE6.toString()} />
         </div>
       ) : (
@@ -780,7 +781,7 @@ export function AdminPanel() {
             return (
             <tr key={m.id}>
               <td>{m.symbol}</td>
-              <td>{m.displayName}</td>
+              <td className="mkt-name" title={m.displayName}>{m.displayName}</td>
               <td>{m.markE6 ? formatUsd(BigInt(m.markE6)) : '—'}</td>
               <td className="num">{s ? formatUsd(BigInt(s.volume24hE6)) : '—'}</td>
               <td className="num">{s ? formatUsd(BigInt(s.lockedE6)) : '—'}</td>

@@ -162,7 +162,7 @@ export function Exchange() {
       {activeView === 'portfolio' && <Portfolio markets={markets} onSelect={handleTradeMarket} />}
       {activeView === 'pool' && <PoolView />}
       {activeView === 'leaderboard' && <Leaderboard />}
-      {activeView === 'admin' && <AdminPanel />}
+      {activeView === 'admin' && <AdminPanel onGoToMarket={(id) => handleTradeMarket({ id })} />}
 
       <Toasts />
       </div>
