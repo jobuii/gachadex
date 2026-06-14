@@ -6,9 +6,13 @@ import { authenticate, requireMod } from '../plugins/auth.ts';
 import { rl } from './_ratelimit.ts';
 import { listChat, postChat, getProfile, setUsername } from '../services/chat.ts';
 import { deleteMessage, muteUser, unmuteUser, setBanned } from '../services/chat-mod.ts';
+import { rankMap } from '../services/leaderboard.ts';
 
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.get('/chat', async () => ({ messages: await listChat(await getDb()) })); // public read
+
+  // top-100 userId -> rank for chat rank badges (cached ~60s). Public, like the leaderboard itself.
+  app.get('/chat/ranks', async () => rankMap(await getDb()));
 
   app.post('/chat', rl(config.routeRateLimits.chatPost, { preHandler: authenticate, config: { scope: 'full' } }), async (req) => {
     const { body, replyTo } = ChatPostRequest.parse(req.body ?? {});

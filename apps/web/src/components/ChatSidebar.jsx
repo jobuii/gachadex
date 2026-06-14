@@ -19,8 +19,25 @@ function fmtTime(iso) {
 const snippet = (s) => (s.length > 48 ? `${s.slice(0, 48)}…` : s);
 const usd0 = (e6) => formatUsd(BigInt(e6 ?? 0), { decimals: 0 }); // tolerate a missing field rather than blank the rail
 
+// leaderboard rank -> badge tier (ascending cutoff; first the rank fits wins). Only the top 100 earn one.
+const RANK_TIERS = [
+  { max: 1, cls: 'r1', label: '👑 #1' },
+  { max: 2, cls: 'r2', label: '🥈 #2' },
+  { max: 3, cls: 'r3', label: '🥉 #3' },
+  { max: 10, cls: 'top10', label: 'TOP 10' },
+  { max: 100, cls: 'top100', label: 'TOP 100' },
+];
+function rankBadgeFor(rank) {
+  return rank ? (RANK_TIERS.find((t) => rank <= t.max) ?? null) : null;
+}
+function RankBadge({ rank }) {
+  const b = rankBadgeFor(rank);
+  if (!b) return null;
+  return <span className={`chat-rank ${b.cls}`} title={`Leaderboard rank #${rank}`}>{b.label}</span>;
+}
+
 // BIG BET (gold) / BIG WIN (green) action bar — a trade broadcast that persists inline in the rail.
-function ActionBar({ m, isMod, onDelete }) {
+function ActionBar({ m, rank, isMod, onDelete }) {
   const meta = m.meta || {};
   const win = meta.variant === 'big_win';
   const side = String(meta.side || '').toUpperCase();
@@ -32,7 +49,7 @@ function ActionBar({ m, isMod, onDelete }) {
         {isMod && <button className="chat-mod-btn chat-mod-del chat-event-del" title="Delete" onClick={onDelete}>✕</button>}
       </span>
       <span className="chat-event-body">
-        <b>{m.handle}</b>{m.isMod ? <span className="chat-mod-chip">MOD</span> : null}{' '}
+        <b>{m.handle}</b><RankBadge rank={rank} />{m.isMod ? <span className="chat-mod-chip">MOD</span> : null}{' '}
         {win ? (
           <>won <b>{usd0(meta.pnlE6)}</b>{roe && <b className="chat-event-roe"> {roe}</b>}</>
         ) : (
@@ -62,6 +79,7 @@ export function ChatSidebar({ open, onToggle }) {
   const send = useChat((s) => s.send);
   const relabel = useChat((s) => s.relabel);
   const modState = useChat((s) => s.modState); // live mute/ban snapshots (userId -> {mutedUntil, banned})
+  const ranks = useChat((s) => s.ranks); // userId -> leaderboard rank (top 100) for rank badges
 
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -186,7 +204,7 @@ export function ChatSidebar({ open, onToggle }) {
           <div className="chat-empty">No messages yet.<br />Say hi 👋</div>
         ) : (
           messages.map((m) => {
-            if (m.kind === 'event') return <ActionBar key={m.id} m={m} isMod={isMod} onDelete={() => modAct('Message deleted', () => api.chatDelete(m.id))} />;
+            if (m.kind === 'event') return <ActionBar key={m.id} m={m} rank={ranks[m.userId]} isMod={isMod} onDelete={() => modAct('Message deleted', () => api.chatDelete(m.id))} />;
             const mine = m.userId === user?.id;
             const hColor = colorFor(m.handle);
             const aState = effFor(m.userId, m.authorMutedUntil, m.authorBanned);
@@ -207,6 +225,7 @@ export function ChatSidebar({ open, onToggle }) {
                     <span className="chat-handle" style={{ color: hColor }} onClick={() => onIdentity(m)}>
                       {m.handle}
                     </span>
+                    <RankBadge rank={ranks[m.userId]} />
                     {m.isMod && <span className="chat-mod-chip" title="Moderator">MOD</span>}
                     <span className="chat-time">{fmtTime(m.createdAt)}</span>
                     {user && (

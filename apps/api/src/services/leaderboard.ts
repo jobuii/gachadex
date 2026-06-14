@@ -23,12 +23,17 @@ export interface LeaderboardRow {
  * LP_POOL system account, so without it a pure LP provider would look like a big trading loss.
  * Computed with a handful of set-based queries + in-memory aggregation (fine for the MVP's user count).
  */
-export async function getLeaderboard(
-  db: Db,
-  opts: { limit?: number; viewerUserId?: string } = {},
-): Promise<{ rows: LeaderboardRow[]; you: LeaderboardRow | null; total: number }> {
-  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+interface RankedEntry {
+  userId: string;
+  pubkey: string;
+  realized: bigint; // net booked PnL — the ranking key
+  equity: bigint;
+  volume: bigint;
+}
 
+/** The full field, ranked by net realized PnL (tie-broken by equity). The heavy part: a set of
+ *  set-based queries + in-memory aggregation. Shared by getLeaderboard (top-N + viewer) and rankMap. */
+async function computeRanked(db: Db): Promise<RankedEntry[]> {
   const [users, balances, deposits, volume, positions, marks, pool, lpShares] = await Promise.all([
     db.query<{ id: string; solana_pubkey: string }>(`SELECT id, solana_pubkey FROM users`),
     db.query<{ user_id: string; type: string; amt: string }>(
@@ -88,7 +93,7 @@ export async function getLeaderboard(
     uPnl.set(p.user_id, (uPnl.get(p.user_id) ?? 0n) + pnl);
   }
 
-  const ranked = users.rows
+  return users.rows
     .map((u) => {
       const c = (cash.get(u.id) ?? 0n) + (lpValue.get(u.id) ?? 0n); // total cash incl. LP position value
       const realized = c - (deposited.get(u.id) ?? 0n);
@@ -101,8 +106,16 @@ export async function getLeaderboard(
       };
     })
     .sort((a, b) => (b.realized === a.realized ? cmp(b.equity, a.equity) : cmp(b.realized, a.realized)));
+}
 
-  const toRow = (e: (typeof ranked)[number], i: number): LeaderboardRow => ({
+export async function getLeaderboard(
+  db: Db,
+  opts: { limit?: number; viewerUserId?: string } = {},
+): Promise<{ rows: LeaderboardRow[]; you: LeaderboardRow | null; total: number }> {
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+  const ranked = await computeRanked(db);
+
+  const toRow = (e: RankedEntry, i: number): LeaderboardRow => ({
     rank: i + 1,
     userId: e.userId,
     pubkey: e.pubkey,
@@ -118,6 +131,23 @@ export async function getLeaderboard(
     if (idx >= 0) you = toRow(ranked[idx], idx);
   }
   return { rows, you, total: ranked.length };
+}
+
+// --- rank badges (F4) -------------------------------------------------------------------------------
+const RANK_BADGE_CUTOFF = 100; // only the top 100 earn a badge, so the map only needs those entries
+const RANK_CACHE_MS = 60_000; // every chat client polls this; the full scan is heavy -> cache ~60s
+
+let rankCache: { at: number; ranks: Record<string, number>; total: number } | null = null;
+
+/** userId -> rank (1-based) for the top RANK_BADGE_CUTOFF traders, cached ~60s. Drives the chat rank
+ *  badges; users outside the top N are absent from the map (and get no badge). */
+export async function rankMap(db: Db): Promise<{ ranks: Record<string, number>; total: number }> {
+  if (rankCache && Date.now() - rankCache.at < RANK_CACHE_MS) return { ranks: rankCache.ranks, total: rankCache.total };
+  const ranked = await computeRanked(db);
+  const ranks: Record<string, number> = {};
+  for (let i = 0; i < Math.min(ranked.length, RANK_BADGE_CUTOFF); i++) ranks[ranked[i].userId] = i + 1;
+  rankCache = { at: Date.now(), ranks, total: ranked.length };
+  return { ranks, total: ranked.length };
 }
 
 function cmp(a: bigint, b: bigint): number {

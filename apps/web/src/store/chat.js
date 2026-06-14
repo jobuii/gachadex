@@ -25,6 +25,7 @@ export const useChat = create((set, get) => ({
   messages: [],
   unread: 0,
   modState: {}, // userId -> { mutedUntil, banned } — live mute/ban snapshots from the server
+  ranks: {}, // userId -> leaderboard rank (top 100 only) — drives chat rank badges
   _started: false,
 
   start() {
@@ -33,6 +34,10 @@ export const useChat = create((set, get) => ({
     ensureConnected();
     subscribe(['chat']);
     api.getChat().then((r) => set({ messages: r.messages })).catch(() => {});
+    // rank badges: poll the cached top-100 map on start, then refresh every 60s
+    const loadRanks = () => api.getChatRanks().then((r) => set({ ranks: r.ranks || {} })).catch(() => {});
+    loadRanks();
+    setInterval(loadRanks, 60_000);
     onMessage((m) => {
       if (m.ch !== 'chat' || !m.data) return;
       // a moderator deleted a message — drop it everywhere, no unread bump
