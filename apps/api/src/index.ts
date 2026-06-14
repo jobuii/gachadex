@@ -12,7 +12,7 @@ import { tryAcquireLease, releaseLease } from './services/lease.ts';
 import { getDefaultClient } from './services/providers/tcgpricelookup.ts';
 import { discoverGame, dueForRebalance, markRebalanced, retireDeadMarkets } from './services/providers/discovery.ts';
 import { countMissingHistory, seedMissingHistory } from './services/providers/history.ts';
-import { dueForSetWarm, warmSetCache } from './services/providers/sets.ts';
+import { seedSetYears } from './services/providers/sets.ts';
 import { GAMES } from '@pokex/shared-types';
 import { randomUUID } from 'node:crypto';
 import { solanaDepositChain, solanaWithdrawChain, solanaTreasuryChain } from './services/custody/solana.ts';
@@ -71,18 +71,6 @@ function startDiscoveryLoop(db: Db, log: FastifyBaseLogger) {
       // Dead long-tail retirement (P6): idempotent UPDATE, safe under N instances — no lease needed.
       const retired = await retireDeadMarkets(db);
       if (retired.length > 0) log.info({ retired: retired.length }, 'dead long-tail markets retired');
-      // Set-metadata cache (release years): a few paced calls per day, gated by a settings timestamp +
-      // a short lease so N instances don't all warm it at once.
-      if ((await dueForSetWarm(db, 24 * 60 * 60_000)) && (await tryAcquireLease(db, 'set-warm', INSTANCE_ID, 15 * 60_000))) {
-        try {
-          const r = await warmSetCache(db, client);
-          log.info(r, 'set-metadata cache warmed');
-        } catch (e) {
-          log.warn(e, 'set-cache warm failed (will retry next tick)');
-        } finally {
-          await releaseLease(db, 'set-warm', INSTANCE_ID).catch(() => {});
-        }
-      }
       if (!(await dueForRebalance(db, config.discoveryIntervalMs))) return;
       // TTL covers one full multi-game crawl (~30 min), NOT the weekly interval — a dead holder is
       // replaced within hours, and the settings timestamp (not the lease) enforces the cadence.
@@ -212,6 +200,12 @@ async function main() {
     app.log.info(`GachaDex api listening on :${config.port} (REAL_FUNDS=${config.realFunds})`);
     startOracleLoop(db, app.log);
     startDiscoveryLoop(db, app.log); // no-op until ORACLE_PRIMARY=tcgpricelookup
+    // Card release years: seed the committed static set→year table once on boot. No provider calls
+    // (the oracle has no release dates); idempotent + multi-instance safe. Non-fatal — a hiccup here
+    // just means no Release Year row, never a failed boot.
+    await seedSetYears(db)
+      .then((r) => app.log.info(r, 'set-year cache seeded'))
+      .catch((e) => app.log.warn(e, 'set-year seed failed (release years unavailable)'));
     startFundingLoop(db, app.log);
     startLiquidationLoop(db, app.log);
     // Live engine knobs — trading fee, liquidation penalty, funding factor (all work in play money too).

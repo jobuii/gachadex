@@ -496,14 +496,15 @@ CREATE TABLE IF NOT EXISTS provider_rate (
   used_today   INT  NOT NULL DEFAULT 0
 );
 
--- Set metadata cache (tcgpricelookup /sets). Warmed once a day in a handful of calls; every card maps
--- to its set's release year by slug (or game+name) — so card details show the year with no per-card
--- provider call. released_at can be NULL (some promo sets) → that card shows no year.
+-- Set release-year cache. Seeded on boot from the committed static table (services/providers/
+-- set-years.data.ts) — the price oracle carries no release dates, so there is nothing to fetch at
+-- runtime. Every card maps to its set's year by slug (or game+name) with no per-card provider call;
+-- a set with no known year is simply absent (or release_year NULL) → that card shows no year.
 CREATE TABLE IF NOT EXISTS tcg_sets (
   game         TEXT NOT NULL,
   slug         TEXT NOT NULL,
   name         TEXT,
-  release_year INT,  -- the only field the UI reads; storing the raw date would just risk a bad-date INSERT
+  release_year INT,  -- the only field the UI reads
   fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (game, slug)  -- slugs are per-game; (game, slug) avoids a cross-game collision clobbering a row
 );
