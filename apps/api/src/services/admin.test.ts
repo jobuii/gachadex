@@ -119,6 +119,11 @@ test('the treasury report is read-only — numbers come back, nothing is swept o
   assert.equal(r.hotE6, usdc(100_000).toString());
   assert.equal(r.coldE6, usdc(1_000_000).toString());
   assert.equal(typeof r.liabilityE6, 'string');
+  // every revenue figure must survive the route's field-by-field serialization (a missing field shows
+  // as "—" in the admin panel — exactly the funding-box regression this guards against).
+  for (const k of ['feeRevenueE6', 'fundingCollectedE6', 'fundingRevenueE6', 'insuranceE6', 'surplusE6']) {
+    assert.equal(typeof r[k], 'string', `${k} present in the treasury response`);
+  }
   assert.equal(r.breached, false);
   assert.equal(tchain.sweeps.length, before); // GET swept nothing
   assert.equal(await withdrawalsFrozen(db), null); // and froze nothing
