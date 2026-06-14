@@ -9,6 +9,7 @@ import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from
 import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFactor } from '../services/fees.ts';
 import { listCustomers } from '../services/customers.ts';
 import { marketStats } from '../services/admin-stats.ts';
+import { restrictionsReport } from '../services/restrictions.ts';
 import { getUserPositions } from '../services/engine.ts';
 
 /**
@@ -102,4 +103,8 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   // Per-asset trading stats (volume 24h, locked margin, capped/raw net player P/L, long/short notional)
   // + the platform's total net payout exposure. Drives the main-view markets table + the exposure box.
   app.get('/admin/market-stats', rl(config.routeRateLimits.admin), async () => marketStats(await getDb()));
+
+  // Price-confidence gate (oracle): which card markets are restricted (reduce-only) right now, and which
+  // flipped INTO restricted today. Drives the admin "Restricted" badges + the daily transitions panel.
+  app.get('/admin/restrictions', rl(config.routeRateLimits.admin), async () => restrictionsReport(await getDb()));
 }

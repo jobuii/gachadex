@@ -169,10 +169,6 @@ export class TcgPriceLookupClient {
 // OracleCard fetcher (P3) — re-prices the tracked market universe
 // ---------------------------------------------------------------------------
 
-/** Below this raw NM market price a card is "thin": one relisting can move the TCGplayer spot, so the
- *  oracle uses the smoothed eBay 7-day average instead (operator decision, plan "Decisions & defaults"). */
-export const LIQUID_THRESHOLD_USD = 25;
-
 // Condition preference for the raw price (plan section E fallback chain).
 const CONDITION_ORDER = ['near_mint', 'lightly_played'];
 
@@ -191,19 +187,54 @@ export function isListable(c: TplCard): boolean {
   return spot >= MIN_LIST_PRICE_USD && smooth > 0 && Math.abs(smooth / spot - 1) <= PRICE_AGREEMENT_TOLERANCE;
 }
 
-/** The raw spot in USD per the plan's fallback chain + thin-market smoothing. 0 = ineligible.
- *  Takes just the prices envelope so the history seeder can price past days through the SAME chain. */
-export function rawPriceUsd(card: Pick<TplCard, 'prices'>): number {
+// Live-price methodology (one definition of "the raw price"; full rationale in README "The oracle pipeline"):
+//  1. ANCHOR = median(TCGplayer market, eBay 7d avg, eBay 30d avg) — outlier-proof fair value; one bad
+//     source is outvoted by the other two.
+//  2. AGREEMENT GATE = a volume proxy (the provider gives no sale counts): the anchor needs >=2 signals
+//     that agree within AGREEMENT_MAX_RATIO. If not, the card is LOW-CONFIDENCE → price = the anchor and
+//     the market is restricted to reduce-only (no new positions against a price we don't trust).
+//  3. LIVE = the eBay 1-day avg (moves daily) CLAMPED to anchor ±PRICE_BAND, so it tracks real sales but
+//     no single sale/listing can swing the market beyond the band.
+export const PRICE_BAND = 0.25; // live 1d price is clamped to median ±25%
+export const AGREEMENT_MAX_RATIO = 3; // anchor signals must agree within 3x, else low-confidence
+
+const median = (xs: number[]): number => {
+  const s = [...xs].sort((a, b) => a - b);
+  const n = s.length;
+  return n === 0 ? 0 : n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+};
+const cents = (x: number): number => Math.round(x * 100) / 100; // prices live on a $0.01 tick
+
+export interface CardPrice {
+  usd: number; // 0 = ineligible (no usable signal)
+  confident: boolean; // false => restrict the market (reduce-only): price can't be trusted/cross-checked
+}
+
+/** Price a card from its provider signals. See the methodology note above. Takes just the prices
+ *  envelope so the history seeder prices past days through the SAME chain. */
+export function priceCard(card: Pick<TplCard, 'prices'>): CardPrice {
   for (const cond of CONDITION_ORDER) {
     const c = card.prices?.raw?.[cond];
     if (!c) continue;
     const spot = c.tcgplayer?.market ?? 0;
-    const smooth = c.ebay?.avg_7d ?? 0;
-    if (spot >= LIQUID_THRESHOLD_USD) return spot; // liquid: the TCGplayer market price
-    if (smooth > 0) return smooth; // thin: a 7d average a single relisting can't move
-    if (spot > 0) return spot; // thin with no eBay data: take the spot
+    const a1 = c.ebay?.avg_1d ?? 0;
+    const a7 = c.ebay?.avg_7d ?? 0;
+    const a30 = c.ebay?.avg_30d ?? 0;
+    const anchorSigs = [spot, a7, a30].filter((v) => v > 0); // the 1d avg is the LIVE input, never the anchor
+    if (anchorSigs.length === 0 && a1 <= 0) continue; // nothing usable in this condition — try the next
+    const anchor = anchorSigs.length ? median(anchorSigs) : a1;
+    const agree = anchorSigs.length >= 2 && Math.max(...anchorSigs) <= AGREEMENT_MAX_RATIO * Math.min(...anchorSigs);
+    if (!agree) return { usd: cents(anchor), confident: false }; // thin/disagreeing -> anchor price, restricted
+    const live = a1 > 0 ? a1 : anchor;
+    const clamped = Math.min(Math.max(live, anchor * (1 - PRICE_BAND)), anchor * (1 + PRICE_BAND));
+    return { usd: cents(clamped), confident: true };
   }
-  return 0;
+  return { usd: 0, confident: false };
+}
+
+/** The price in USD only (0 = ineligible) — the shared definition every non-oracle caller uses. */
+export function rawPriceUsd(card: Pick<TplCard, 'prices'>): number {
+  return priceCard(card).usd;
 }
 
 /** The provider serializes tcgplayer_id as a STRING (verified live) — normalize in ONE place. */
@@ -277,6 +308,7 @@ function priceFreshnessAt(c: TplCard): Date | null {
 /** Join one provider card onto its tracked market identity and emit the OracleCard. */
 export function fromTplCard(c: TplCard, t: TrackedMarket): OracleCard {
   const graded = gradedPsa10Usd(c);
+  const price = priceCard(c);
   return {
     game: t.game,
     symbol: t.symbol,
@@ -288,7 +320,8 @@ export function fromTplCard(c: TplCard, t: TrackedMarket): OracleCard {
     imageSmall: c.image_url,
     imageLarge: c.image_url, // the provider serves one asset; both slots point at it
     metadata: { setName: c.set?.name ?? null, setSlug: c.set?.slug ?? null, rarity: c.rarity ?? null }, // setSlug keys the release-year cache
-    rawE6: toE6(rawPriceUsd(c)),
+    rawE6: toE6(price.usd),
+    confident: price.confident,
     gradedE6: graded != null ? toE6(graded) : null,
     // Price-freshness, NOT record-update: `updated_at` is ~static, so keying print dedup on it froze
     // every market at the first post-cutover print (no new marks -> 0% 24h forever). `last_price_update`

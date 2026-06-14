@@ -79,15 +79,68 @@ real is a data decision (a licensed graded/sealed feed, or a TCGFish data partne
 
 ### The oracle pipeline
 
-`oracle.ts` runs on a timer (`ORACLE_REFRESH_MS`, default 6h since the source updates ~daily):
+`oracle.ts` re-prices the tracked universe on a timer (`ORACLE_REFRESH_MS`, default 6h; the upstream
+re-prices each card every few days). Each pass:
 
-1. **Fetch** the top cards (above).
-2. **Normalize** each price to integer micro-USD (`*_e6`) and drop anything with no price.
-3. **Outlier guard** — reject a print that jumps > 60% from the last accepted value (manipulation /
-   bad-data protection), with an escape hatch for sustained genuine moves.
-4. **Record** the accepted print to `oracle_prices`, then **recompute the synthetic mark** and
-   publish it on the `mark:{id}` channel.
-5. **Staleness halt** — if a market gets no fresh print within `ORACLE_STALE_MS` (36h), it's halted.
+1. **Fetch** the per-card signals from the price feed (tcgpricelookup live; the pokemontcg path is the
+   legacy fallback): the TCGplayer **market** price plus eBay **1-day / 7-day / 30-day** average sale
+   prices, per condition (Near Mint preferred, Lightly Played fallback).
+2. **Price** each card with `priceCard` — one definition of "the price"
+   (`services/providers/tcgpricelookup.ts`):
+   - **Anchor = `median(TCGplayer market, eBay 7d, eBay 30d)`** — an outlier-proof fair value; any one
+     source printing garbage is outvoted by the other two.
+   - **Confidence gate** (a stand-in for volume — the provider gives no sale counts): the anchor needs
+     **≥2 signals that agree within 3×**. If not, the card is **low-confidence** → priced at the anchor
+     and the market is **restricted to reduce-only** (no new positions against a price we can't trust).
+   - **Live price = the eBay 1-day average (moves daily) clamped to anchor ±25%** — so it tracks real
+     sales, but no single sale or listing can swing the market beyond the band. Rounds to the $0.01 tick.
+3. **Outlier guard** — still reject a print that jumps > 60% from the last accepted value (with an
+   escape hatch for a sustained genuine move).
+4. **Record** the accepted print to `oracle_prices`, **recompute the synthetic mark**, and publish on
+   the `mark:{id}` channel.
+5. **Apply the gate** — set `markets.low_confidence`, and on a *transition* append a
+   `market_restriction_events` row (powers the admin "restricted now" + "flipped today" views).
+6. **Staleness halt** — a market with no fresh print within `ORACLE_STALE_MS` (36h) goes reduce-only.
+
+Worked examples (anchor = median of the three; live = the 1-day avg clamped to ±25%):
+
+| Signals — spot / 7d / 30d / 1d | Anchor | Price | Tradeable? |
+|---|---|---|---|
+| 9.80 / 10.10 / 9.96 / 10.80 | 9.96 | **10.80** (1d inside the band) | ✅ |
+| 10 / 10 / 10 / 13 | 10 | **12.50** (1d clamped to +25%) | ✅ |
+| 4699 / 7.75 / 9.96 / — | 9.96 | **9.96** | ❌ restricted — spot is garbage, outvoted |
+| 1.05 / 6449 / 1.79 / — | 1.79 | **1.79** | ❌ restricted — eBay 7d is garbage, outvoted |
+| 50 / — / — / — | 50 | **50** | ❌ restricted — one signal, can't cross-check |
+
+A restricted market is **close-only** until its signals recover — or until an operator sets a manual
+price, which is treated as trusted and clears the gate. Indices aggregate many cards, so they're robust
+by construction and never gated.
+
+### How a card's price is calculated (the customer explanation)
+
+> Every market settles against a **fair value** we compute for each card from multiple real markets —
+> never a single listing.
+>
+> **A cross-checked anchor.** We start from the median of three independent reads: TCGplayer's market
+> price, eBay's 7-day average sale price, and eBay's 30-day average. Taking the *median* means if any one
+> source prints a nonsense number, it's automatically outvoted and ignored.
+>
+> **It moves with the market.** The live price then tracks the most recent real sales — eBay's latest
+> daily data — so your chart moves day to day instead of sitting still.
+>
+> **On a leash.** That daily price can't stray more than ~25% from the cross-checked anchor. Genuine
+> moves come through; no freak sale or listing can yank your market.
+>
+> **Thin cards are limited.** Some cards trade too rarely to price safely. Where our sources disagree,
+> we hold the card at its stable fair value and make it close-only (no new positions). Our **indices** —
+> baskets of many cards — are the most robust markets and a great default.
+>
+> **What you actually trade.** Your mark price is this fair value plus a small premium reflecting live
+> buying vs. selling pressure on the venue (standard for perpetuals). With no open positions, it's
+> exactly the fair value.
+>
+> **Why it may differ from a price you see elsewhere.** We won't quote a lone $4,699 listing on a card
+> that sells for $10 — our number is the corroborated, bounded consensus.
 
 ---
 
