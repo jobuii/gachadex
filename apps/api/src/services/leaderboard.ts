@@ -133,21 +133,65 @@ export async function getLeaderboard(
   return { rows, you, total: ranked.length };
 }
 
-// --- rank badges (F4) -------------------------------------------------------------------------------
-const RANK_BADGE_CUTOFF = 100; // only the top 100 earn a badge, so the map only needs those entries
-const RANK_CACHE_MS = 60_000; // every chat client polls this; the full scan is heavy -> cache ~60s
+// --- rank badges (F4) + standing/level for hover cards (F3) -----------------------------------------
+const RANK_BADGE_CUTOFF = 100; // only the top 100 earn a rank badge
+const RANK_CACHE_MS = 60_000; // the full scan is heavy and every chat client polls -> cache ~60s
 
-let rankCache: { at: number; ranks: Record<string, number>; total: number } | null = null;
+// the full ranked field + a userId->index lookup, cached ~60s. Drives rankMap (top-100 badges) AND
+// userStanding (any user's rank/level/figures for a hover card), so the heavy scan runs once per minute.
+let snapCache: { at: number; ranked: RankedEntry[]; index: Map<string, number> } | null = null;
 
-/** userId -> rank (1-based) for the top RANK_BADGE_CUTOFF traders, cached ~60s. Drives the chat rank
- *  badges; users outside the top N are absent from the map (and get no badge). */
-export async function rankMap(db: Db): Promise<{ ranks: Record<string, number>; total: number }> {
-  if (rankCache && Date.now() - rankCache.at < RANK_CACHE_MS) return { ranks: rankCache.ranks, total: rankCache.total };
+async function rankedSnapshot(db: Db): Promise<{ ranked: RankedEntry[]; index: Map<string, number> }> {
+  if (snapCache && Date.now() - snapCache.at < RANK_CACHE_MS) return snapCache;
   const ranked = await computeRanked(db);
+  const index = new Map<string, number>();
+  ranked.forEach((e, i) => index.set(e.userId, i));
+  snapCache = { at: Date.now(), ranked, index };
+  return snapCache;
+}
+
+/** userId -> rank (1-based) for the top RANK_BADGE_CUTOFF traders. Users outside the top N are absent
+ *  (no badge). A fresh object each call (derived from the cached snapshot). */
+export async function rankMap(db: Db): Promise<{ ranks: Record<string, number>; total: number }> {
+  const { ranked } = await rankedSnapshot(db);
   const ranks: Record<string, number> = {};
   for (let i = 0; i < Math.min(ranked.length, RANK_BADGE_CUTOFF); i++) ranks[ranked[i].userId] = i + 1;
-  rankCache = { at: Date.now(), ranks, total: ranked.length };
   return { ranks, total: ranked.length };
+}
+
+/** Volume tier (L1..L6) from cumulative traded volume (micro-USDC): L1 <$1k, L2 $1k, L3 $10k, L4 $50k,
+ *  L5 $250k, L6 $1M+. Pure. */
+export function userLevel(volumeUusdc: bigint): number {
+  const usd = volumeUusdc / 1_000_000n;
+  if (usd >= 1_000_000n) return 6;
+  if (usd >= 250_000n) return 5;
+  if (usd >= 50_000n) return 4;
+  if (usd >= 10_000n) return 3;
+  if (usd >= 1_000n) return 2;
+  return 1;
+}
+
+export interface UserStanding {
+  rank: number | null; // 1-based leaderboard rank; null if the user has no standing
+  total: number; // size of the ranked field
+  level: number; // volume tier L1..L6
+  volumeUusdc: string;
+  pnlUusdc: string; // net realized PnL
+}
+
+/** A single user's leaderboard standing — rank, volume level, and figures — for the profile hover card. */
+export async function userStanding(db: Db, userId: string): Promise<UserStanding> {
+  const { ranked, index } = await rankedSnapshot(db);
+  const idx = index.get(userId);
+  const e = idx != null ? ranked[idx] : null;
+  const volume = e?.volume ?? 0n;
+  return {
+    rank: idx != null ? idx + 1 : null,
+    total: ranked.length,
+    level: userLevel(volume),
+    volumeUusdc: volume.toString(),
+    pnlUusdc: (e?.realized ?? 0n).toString(),
+  };
 }
 
 function cmp(a: bigint, b: bigint): number {

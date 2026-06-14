@@ -4,6 +4,7 @@ import { HttpError } from '../errors.ts';
 import type { Db } from '../db/client.ts';
 import { publish } from './bus.ts';
 import { handleFor } from './handles.ts';
+import { userStanding } from './leaderboard.ts';
 
 const MAX_BODY = 280;
 
@@ -202,6 +203,29 @@ export async function getProfile(db: Db, userId: string): Promise<Profile> {
     mutedUntil: r.rows[0].mu,
     banned: r.rows[0].banned,
   };
+}
+
+export interface ProfileCard {
+  userId: string;
+  handle: string;
+  isMod: boolean;
+  rank: number | null; // leaderboard rank (null if no standing)
+  total: number; // size of the ranked field
+  level: number; // volume tier L1..L6 (coarse — intended public, like a veteran badge)
+  // NB: exact P/L + volume are intentionally NOT exposed here. This endpoint is public + enumerable, and
+  // the leaderboard only publishes figures for the top-N — returning them per-user would widen that to
+  // everyone. Re-add (with scoping) only when the hover UI is meant to show them.
+}
+
+/** Public profile card for the chat hover popover: identity + leaderboard standing (rank + level). */
+export async function getProfileCard(db: Db, userId: string): Promise<ProfileCard> {
+  const u = await db.query<{ dn: string | null; pk: string; is_mod: boolean }>(
+    `SELECT display_name AS dn, solana_pubkey AS pk, is_mod FROM users WHERE id = $1`,
+    [userId],
+  );
+  if (!u.rows[0]) throw new HttpError(404, 'user not found');
+  const s = await userStanding(db, userId);
+  return { userId, handle: handleFor(u.rows[0].dn, u.rows[0].pk), isMod: u.rows[0].is_mod, rank: s.rank, total: s.total, level: s.level };
 }
 
 /**

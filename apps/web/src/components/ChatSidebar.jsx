@@ -36,6 +36,43 @@ function RankBadge({ rank }) {
   return <span className={`chat-rank ${b.cls}`} title={`Leaderboard rank #${rank}`}>{b.label}</span>;
 }
 
+// Profile hover popover: identity + rank badge + volume level. (P/L + volume are returned but hidden for now.)
+const cardCache = new Map(); // userId -> profile card (session cache; fine for an ephemeral popover)
+function ProfileHoverCard({ hover, onEnter, onLeave }) {
+  const [card, setCard] = useState(null);
+  useEffect(() => {
+    if (!hover) return undefined;
+    const cached = cardCache.get(hover.userId);
+    if (cached) { setCard(cached); return undefined; }
+    setCard(null);
+    let alive = true;
+    api.getProfileCard(hover.userId)
+      .then((c) => { cardCache.set(hover.userId, c); if (alive) setCard(c); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [hover]);
+  if (!hover) return null;
+  return (
+    <div className="chat-profile-card" style={{ top: hover.top, left: hover.left }} onMouseEnter={onEnter} onMouseLeave={onLeave}>
+      {card ? (
+        <>
+          <div className="chat-profile-head">
+            <span className="chat-avatar" style={{ background: colorFor(card.handle) }}>{card.handle?.[0]?.toUpperCase()}</span>
+            <span className="chat-profile-handle">{card.handle}</span>
+            {card.isMod && <span className="chat-mod-chip">MOD</span>}
+          </div>
+          <div className="chat-profile-meta">
+            <RankBadge rank={card.rank} />
+            <span className="chat-profile-level" title={`Volume level ${card.level} of 6`}>LEVEL {card.level}</span>
+          </div>
+        </>
+      ) : (
+        <div className="chat-profile-loading">…</div>
+      )}
+    </div>
+  );
+}
+
 // BIG BET (gold) / BIG WIN (green) action bar — a trade broadcast that persists inline in the rail.
 function ActionBar({ m, rank, isMod, onDelete }) {
   const meta = m.meta || {};
@@ -91,9 +128,11 @@ export function ChatSidebar({ open, onToggle }) {
   const [nameBusy, setNameBusy] = useState(false);
   const [modMsg, setModMsg] = useState(null); // transient confirmation banner for mod actions
   const [now, setNow] = useState(() => Date.now()); // ticks so the "muted — N min left" countdown stays live
+  const [hover, setHover] = useState(null); // profile hover card anchor: { userId, top, left }
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const modMsgTimer = useRef(null);
+  const hoverTimer = useRef(null);
 
   // load my chat profile (username + handle) when signed in
   useEffect(() => {
@@ -122,6 +161,12 @@ export function ChatSidebar({ open, onToggle }) {
     return () => clearInterval(t);
   }, []);
 
+  // clear any pending toast / hover-close timers when the rail unmounts
+  useEffect(() => () => {
+    if (modMsgTimer.current) clearTimeout(modMsgTimer.current);
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+  }, []);
+
   const tag = (handle) => {
     if (!/^[A-Za-z0-9_-]+$/.test(handle)) return; // only username handles are taggable (a truncated pubkey isn't)
     setText((t) => `${t}${t && !t.endsWith(' ') ? ' ' : ''}@${handle} `);
@@ -136,6 +181,16 @@ export function ChatSidebar({ open, onToggle }) {
 
   // clicking your own icon edits your username; clicking someone else's tags them
   const onIdentity = (m) => (m.userId === user?.id ? openNameEditor() : tag(m.handle));
+
+  // profile hover card: open anchored below the hovered handle; a small close delay lets the cursor
+  // travel onto the card without dismissing it.
+  const openCard = (userId, e) => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    const r = e.currentTarget.getBoundingClientRect();
+    setHover({ userId, top: Math.round(r.bottom + 4), left: Math.round(r.left) });
+  };
+  const closeCardSoon = () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); hoverTimer.current = setTimeout(() => setHover(null), 150); };
+  const cancelClose = () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); };
 
   const onSend = async () => {
     const body = text.trim();
@@ -222,7 +277,13 @@ export function ChatSidebar({ open, onToggle }) {
                 </span>
                 <div className="chat-msg-main">
                   <div className="chat-msg-head">
-                    <span className="chat-handle" style={{ color: hColor }} onClick={() => onIdentity(m)}>
+                    <span
+                      className="chat-handle"
+                      style={{ color: hColor }}
+                      onClick={() => onIdentity(m)}
+                      onMouseEnter={(e) => openCard(m.userId, e)}
+                      onMouseLeave={closeCardSoon}
+                    >
                       {m.handle}
                     </span>
                     <RankBadge rank={ranks[m.userId]} />
@@ -316,6 +377,8 @@ export function ChatSidebar({ open, onToggle }) {
           <button className="btn-primary sm" disabled={busy || !text.trim()} onClick={onSend}>{busy ? '…' : 'Send'}</button>
         </div>
       )}
+
+      <ProfileHoverCard hover={hover} onEnter={cancelClose} onLeave={closeCardSoon} />
     </aside>
   );
 }

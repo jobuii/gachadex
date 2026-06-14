@@ -220,6 +220,22 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 .chat-rank.r3     { color: var(--bg); background: #cd7f32; font-weight: 700; }
 .chat-rank.top10  { color: var(--gold); border-color: var(--gold); }
 .chat-rank.top100 { color: var(--text-muted); border-color: var(--border); }
+
+/* profile hover card (popover; position set inline from the hovered handle's rect) */
+.chat-profile-card {
+  position: fixed; z-index: 60; min-width: 130px; max-width: 230px;
+  background: var(--bg-2); border: 2px solid var(--accent); border-radius: 6px;
+  padding: 0.55rem 0.65rem; display: flex; flex-direction: column; gap: 0.45rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+.chat-profile-head { display: flex; align-items: center; gap: 0.4rem; }
+.chat-profile-handle { font-size: 0.5rem; color: var(--text); word-break: break-word; }
+.chat-profile-meta { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.chat-profile-level {
+  font-size: 0.42rem; color: var(--gold); border: 1px solid var(--gold);
+  padding: 0.05rem 0.3rem; border-radius: 3px; letter-spacing: 0.03em;
+}
+.chat-profile-loading { font-size: 0.7rem; color: var(--text-muted); text-align: center; }
 .chat-mod-tools { display: inline-flex; gap: 0.3rem; margin-left: auto; align-items: center; }
 /* visible, clearly-tappable mod buttons (delete / mute / ban) — a bordered box so even a dim emoji reads */
 .chat-mod-btn {

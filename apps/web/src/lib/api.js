@@ -142,6 +142,7 @@ export const setReferralCode = (code) => req('/referral/code', { method: 'POST',
 // --- global chat ---
 export const getChat = () => req('/chat');
 export const getChatRanks = () => req('/chat/ranks'); // { ranks: { userId: rank }, total } — top 100
+export const getProfileCard = (userId) => req(`/chat/profile/${userId}`); // hover card: identity + rank + level
 export const postChat = (body, replyTo) =>
   req('/chat', { method: 'POST', auth: true, body: { body, ...(replyTo ? { replyTo } : {}) } });
 export const getProfile = () => req('/me/profile', { auth: true });

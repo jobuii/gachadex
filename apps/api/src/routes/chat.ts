@@ -4,7 +4,7 @@ import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { authenticate, requireMod } from '../plugins/auth.ts';
 import { rl } from './_ratelimit.ts';
-import { listChat, postChat, getProfile, setUsername } from '../services/chat.ts';
+import { listChat, postChat, getProfile, setUsername, getProfileCard } from '../services/chat.ts';
 import { deleteMessage, muteUser, unmuteUser, setBanned } from '../services/chat-mod.ts';
 import { rankMap } from '../services/leaderboard.ts';
 
@@ -13,6 +13,12 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
   // top-100 userId -> rank for chat rank badges (cached ~60s). Public, like the leaderboard itself.
   app.get('/chat/ranks', async () => rankMap(await getDb()));
+
+  // public profile card for the hover popover: identity + rank + level.
+  app.get('/chat/profile/:userId', async (req) => {
+    const { userId } = req.params as { userId: string };
+    return getProfileCard(await getDb(), userId);
+  });
 
   app.post('/chat', rl(config.routeRateLimits.chatPost, { preHandler: authenticate, config: { scope: 'full' } }), async (req) => {
     const { body, replyTo } = ChatPostRequest.parse(req.body ?? {});
