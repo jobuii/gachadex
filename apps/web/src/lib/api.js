@@ -212,6 +212,11 @@ export const adminGetCustomers = ({ limit = 50, offset = 0, sort = 'volume' } = 
   adminGet(`/admin/customers?limit=${limit}&offset=${offset}&sort=${encodeURIComponent(sort)}`, adminKey);
 // One customer's open positions per market (expand-row drill-down) -> { positions: [...] }.
 export const adminGetCustomerPositions = (userId, adminKey) => adminGet(`/admin/customers/${userId}/positions`, adminKey);
+// Operator position closes (recorded as platform closes). Scopes: one position, one customer, ALL customers.
+export const adminClosePosition = (userId, positionId, adminKey) =>
+  adminReq(`/admin/customers/${userId}/positions/${positionId}/close`, adminKey);
+export const adminCloseUserPositions = (userId, adminKey) => adminReq(`/admin/customers/${userId}/positions/close-all`, adminKey);
+export const adminCloseAllPositions = (adminKey) => adminReq('/admin/positions/close-all', adminKey);
 // Per-asset trading stats + total net exposure -> { markets: [...], totals: { netCappedE6, netRawE6 } }.
 export const adminGetMarketStats = (adminKey) => adminGet('/admin/market-stats', adminKey);
 // Price-confidence gate: card markets restricted (reduce-only) now + the ones that flipped into restricted today.
