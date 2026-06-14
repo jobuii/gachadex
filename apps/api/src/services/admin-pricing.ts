@@ -2,6 +2,7 @@ import { advisoryXactLock, type Db } from '../db/client.ts';
 import { HttpError } from '../errors.ts';
 import { getMarketById } from './markets.ts';
 import { refreshMark } from './engine.ts';
+import { applyConfidence } from './oracle.ts';
 
 /**
  * Operator manual price override (see ROADMAP §2). The automated oracle only covers pokemontcg.io
@@ -58,6 +59,9 @@ export async function setManualPrice(
 
     const pinned = opts.pin !== false; // pin by default
     await q.query(`UPDATE markets SET price_pinned=$2 WHERE id=$1`, [marketId, pinned]);
+    // A manual price is an operator-trusted price: clear the confidence gate so the market is tradeable
+    // again (the auto-oracle's thin/disagreeing-signal restriction no longer applies to a pinned price).
+    await applyConfidence(q, marketId, true, 'manual price set by operator');
 
     // recompute mark from current skew + depth, like a trade; refreshMark returns the new mark
     const markE6 = await refreshMark(q, market, priceE6);

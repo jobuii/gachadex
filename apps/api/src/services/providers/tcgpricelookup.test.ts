@@ -8,7 +8,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 
 const { getDb, closeDb } = await import('../../db/client.ts');
 const { initDb } = await import('../../db/init.ts');
-const { TcgPriceLookupClient, TPL_BATCH_SIZE, rawPriceUsd, gradedPsa10Usd, fromTplCard, fetchTrackedCards } =
+const { TcgPriceLookupClient, TPL_BATCH_SIZE, rawPriceUsd, priceCard, gradedPsa10Usd, fromTplCard, fetchTrackedCards } =
   await import('./tcgpricelookup.ts');
 const { ProviderLimiter } = await import('./limiter.ts');
 const { upsertCardMarket, cardSymbol } = await import('../markets.ts');
@@ -103,12 +103,30 @@ const tplCard = (id: string, p: TplCardT['prices'], extra: Partial<TplCardT> = {
   game: { slug: 'pokemon', name: 'Pokemon' }, prices: p, ...extra,
 });
 
-test('rawPriceUsd: liquid spot wins; thin markets smooth to the eBay 7d avg; conditions fall back', () => {
-  assert.equal(rawPriceUsd(tplCard('a', prices({ market: 30, avg_7d: 28 }))), 30); // liquid: spot
-  assert.equal(rawPriceUsd(tplCard('b', prices({ market: 10, avg_7d: 12 }))), 12); // thin: smoothed
-  assert.equal(rawPriceUsd(tplCard('c', prices({ market: 10 }))), 10); // thin, no eBay: spot
-  assert.equal(rawPriceUsd(tplCard('d', prices({}, { market: 40 }))), 40); // NM empty -> lightly_played
-  assert.equal(rawPriceUsd(tplCard('e', { raw: {} })), 0); // nothing priced -> ineligible
+// A card with a NM price envelope carrying the full signal set (omit a field to leave it absent).
+const env = (s: { spot?: number; a1?: number; a7?: number; a30?: number }): Pick<TplCardT, 'prices'> => ({
+  prices: { raw: { near_mint: { tcgplayer: { market: s.spot }, ebay: { avg_1d: s.a1, avg_7d: s.a7, avg_30d: s.a30 } } } },
+});
+
+test('priceCard: median anchor, clamps the 1d avg to ±25%, and gates thin/disagreeing signals', () => {
+  // normal: signals agree -> live 1d avg used (moves daily), inside the band
+  assert.deepEqual(priceCard(env({ spot: 9.8, a7: 10.1, a30: 9.96, a1: 10.8 })), { usd: 10.8, confident: true });
+  // hot 1d avg clamped to median ±25%: median([10,10,10])=10 -> ceiling 12.5
+  assert.deepEqual(priceCard(env({ spot: 10, a7: 10, a30: 10, a1: 13 })), { usd: 12.5, confident: true });
+  // garbage HIGH spot -> outvoted by the median, gated low-confidence
+  assert.deepEqual(priceCard(env({ spot: 4699, a7: 7.75, a30: 9.96 })), { usd: 9.96, confident: false });
+  // garbage HIGH eBay 7d -> median ignores it, gated
+  assert.deepEqual(priceCard(env({ spot: 1.05, a7: 6449.95, a30: 1.79 })), { usd: 1.79, confident: false });
+  // a single uncrossable signal can't be corroborated -> priced but low-confidence
+  assert.deepEqual(priceCard(env({ spot: 50 })), { usd: 50, confident: false });
+  // nothing priced -> ineligible
+  assert.deepEqual(priceCard({ prices: { raw: {} } }), { usd: 0, confident: false });
+});
+
+test('rawPriceUsd delegates to priceCard().usd (one price definition)', () => {
+  const e = env({ spot: 9.8, a7: 10.1, a30: 9.96, a1: 10.8 });
+  assert.equal(rawPriceUsd(e), priceCard(e).usd);
+  assert.equal(rawPriceUsd(tplCard('d', prices({}, { market: 40 }))), 40); // NM empty -> lightly_played fallback
 });
 
 test('gradedPsa10Usd: avg_7d -> avg_1d -> avg_30d -> null', () => {

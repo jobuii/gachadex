@@ -190,6 +190,7 @@ CREATE TABLE IF NOT EXISTS markets (
   qty_step_e6        BIGINT NOT NULL DEFAULT 10000,
   price_tick_e6      BIGINT NOT NULL DEFAULT 10000,   -- $0.01
   price_pinned       BOOLEAN NOT NULL DEFAULT false,  -- operator manual-price override; auto-oracle skips pinned markets
+  low_confidence     BOOLEAN NOT NULL DEFAULT false,  -- oracle price-quality gate: thin/disagreeing signals -> reduce-only (see priceCard)
   cumulative_volume_uusdc BIGINT NOT NULL DEFAULT 0,   -- Σ traded notional; drives B' adaptive mark depth
   -- Stable cross-provider identity (tcgpricelookup migration P0): symbol/card_id are provider DISPLAY
   -- ids (pokemontcg today, tcgpricelookup UUIDs later) and differ per provider, so a feed cutover must
@@ -220,6 +221,19 @@ ALTER TABLE markets ADD COLUMN IF NOT EXISTS provider_card_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_provider_card ON markets(provider_card_id) WHERE provider_card_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_tcgplayer ON markets(tcgplayer_id) WHERE tcgplayer_id IS NOT NULL;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS featured BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS low_confidence BOOLEAN NOT NULL DEFAULT false;
+
+-- Append-only audit of the oracle's price-confidence gate flipping a card market between tradeable and
+-- restricted (reduce-only). Powers the admin "restricted now" + "flipped today" views; one row per flip.
+CREATE TABLE IF NOT EXISTS market_restriction_events (
+  id          BIGSERIAL PRIMARY KEY,
+  market_id   TEXT NOT NULL REFERENCES markets(id),
+  restricted  BOOLEAN NOT NULL,  -- true = became low-confidence/reduce-only; false = recovered to tradeable
+  reason      TEXT,
+  at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_restriction_events_at ON market_restriction_events(at DESC);
+CREATE INDEX IF NOT EXISTS idx_restriction_events_market ON market_restriction_events(market_id, at DESC);
 
 CREATE TABLE IF NOT EXISTS index_constituents (
   id        TEXT PRIMARY KEY,

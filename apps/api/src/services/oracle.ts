@@ -26,6 +26,7 @@ export interface OracleCard {
   setLogo?: string | null;
   metadata?: unknown; // provider-extracted detail-panel JSON (markets.metadata column)
   rawE6: bigint; // raw spot in micro-USD; 0n = unpriced (skipped by ingest)
+  confident?: boolean; // false => low price confidence (thin/disagreeing signals): restrict the card to reduce-only
   gradedE6?: bigint | null; // PSA-10 in micro-USD when the provider supplies it inline (P3); else the gradedFetcher fallback runs
   observedAt?: Date | null; // provider freshness timestamp; null/absent -> the ingest pass wall-clock (legacy behavior)
   payload?: unknown; // audit payload stored on the oracle print
@@ -152,7 +153,27 @@ export async function ingestCard(
     const market = await getMarketById(db, marketId);
     if (market) await db.tx((q) => recomputeMark(q, market, c.rawE6, 0n, 0n));
   }
+  // tx-wrap so the flag flip and its audit row commit atomically (matches the manual-price path).
+  if (c.confident !== undefined) await db.tx((q) => applyConfidence(q, marketId, c.confident!));
   return marketId;
+}
+
+/** Set a card market's price-confidence gate (low_confidence => engine blocks new positions). Appends a
+ *  market_restriction_events row ONLY when the flag flips, so the admin views show genuine transitions.
+ *  Takes a Queryer so it composes inside a transaction (e.g. the manual-price pin). */
+export async function applyConfidence(q: Queryer, marketId: string, confident: boolean, reason?: string): Promise<void> {
+  const low = !confident;
+  const flip = await q.query<{ id: string }>(
+    `UPDATE markets SET low_confidence = $1 WHERE id = $2 AND low_confidence IS DISTINCT FROM $1 RETURNING id`,
+    [low, marketId],
+  );
+  if (flip.rows.length > 0) {
+    await q.query(`INSERT INTO market_restriction_events(market_id, restricted, reason) VALUES($1, $2, $3)`, [
+      marketId,
+      low,
+      reason ?? (low ? 'low price confidence (thin or disagreeing signals)' : 'price confidence restored'),
+    ]);
+  }
 }
 
 export async function ingest(

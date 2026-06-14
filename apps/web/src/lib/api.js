@@ -214,6 +214,8 @@ export const adminGetCustomers = ({ limit = 50, offset = 0, sort = 'volume' } = 
 export const adminGetCustomerPositions = (userId, adminKey) => adminGet(`/admin/customers/${userId}/positions`, adminKey);
 // Per-asset trading stats + total net exposure -> { markets: [...], totals: { netCappedE6, netRawE6 } }.
 export const adminGetMarketStats = (adminKey) => adminGet('/admin/market-stats', adminKey);
+// Price-confidence gate: card markets restricted (reduce-only) now + the ones that flipped into restricted today.
+export const adminGetRestrictions = (adminKey) => adminGet('/admin/restrictions', adminKey);
 // Withdrawal queue (real-funds). GET by status; approve = sign+broadcast; reverse = re-credit an unpaid row.
 export const adminGetWithdrawals = (status, adminKey) => adminGet(`/admin/withdrawals?status=${encodeURIComponent(status)}`, adminKey);
 export const adminApproveWithdrawal = (id, adminKey) => adminReq(`/admin/withdrawals/${id}/approve`, adminKey);

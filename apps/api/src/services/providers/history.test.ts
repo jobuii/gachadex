@@ -37,18 +37,18 @@ function historyClient(byCard: Record<string, PointT[]>, calls: string[] = []) {
   } as unknown as ClientT & { calls: string[] };
 }
 
-test('dailySeedPoints mirrors the live raw chain: liquid spot, thin -> ebay 7d avg, thin no-ebay -> spot', () => {
+test('dailySeedPoints mirrors the live priceCard chain: median of anchor signals, single-signal -> itself, LP fallback', () => {
   const points: PointT[] = [
-    { date: '2026-01-01', prices: [row({ price_market: 48.97 })] }, // liquid: spot wins
-    { date: '2026-01-02', prices: [row({ price_market: 3.1 }), row({ source: 'ebay', avg_7d: 4.2 })] }, // thin: smoothed
-    { date: '2026-01-03', prices: [row({ price_market: 2.5 })] }, // thin, no ebay: spot
+    { date: '2026-01-01', prices: [row({ price_market: 48.97 })] }, // one signal -> itself
+    { date: '2026-01-02', prices: [row({ price_market: 3.1 }), row({ source: 'ebay', avg_7d: 4.2 })] }, // median(3.1, 4.2) = 3.65
+    { date: '2026-01-03', prices: [row({ price_market: 2.5 })] }, // one signal -> itself
     { date: '2026-01-04', prices: [row({ condition: 'lightly_played', price_market: 17.96 })] }, // NM absent: LP fallback
     { date: '2026-01-05', prices: [row({ source: 'ebay', grader: 'psa', grade: '10', condition: null, avg_7d: 900 })] }, // graded-only day: no raw point
     { date: 'not-a-date', prices: [row({ price_market: 10 })] },
   ];
   assert.deepEqual(dailySeedPoints(points), [
     { day: '2026-01-01', priceUsd: 48.97 },
-    { day: '2026-01-02', priceUsd: 4.2 },
+    { day: '2026-01-02', priceUsd: 3.65 },
     { day: '2026-01-03', priceUsd: 2.5 },
     { day: '2026-01-04', priceUsd: 17.96 },
   ]);

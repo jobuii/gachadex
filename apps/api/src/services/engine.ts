@@ -298,6 +298,9 @@ async function validateMarketAndOrder(q: Queryer, input: OpenInput): Promise<Mar
   const market = await getMarketById(q, input.marketId);
   if (!market) throw new HttpError(404, 'market not found');
   if (!market.tradeable || market.status !== 'active') throw new HttpError(400, 'market not tradeable', 'market_halted');
+  // Price-confidence gate: a card whose oracle signals are thin/disagreeing is reduce-only — no NEW
+  // positions against a price we can't trust (closes go through a separate path and stay allowed).
+  if (market.low_confidence) throw new HttpError(400, 'market restricted: low price confidence', 'market_restricted');
   const leverageE2 = input.leverage * 100;
   if (input.leverage < 1 || leverageE2 > market.max_leverage_e2) throw new HttpError(400, 'leverage out of range', 'leverage_out_of_range');
   if (input.qtyE6 < BigInt(market.min_qty_e6)) throw new HttpError(400, 'quantity below market minimum', 'quantity_below_min');

@@ -128,8 +128,8 @@ test('ensureMarketFromCard: creates once (idempotent), with first print, mark, a
     `SELECT index_price_e6::text AS v FROM oracle_prices WHERE market_id = $1 AND is_accepted`,
     [first.marketId],
   );
-  // $20 NM spot is under the $25 liquidity threshold -> the eBay 7d average ($21) prices the print
-  assert.equal(print.rows[0]?.v, '21000000', 'first print uses the smoothed-chain price');
+  // first print = the median of the anchor signals (spot $20, eBay 7d $21) = $20.50
+  assert.equal(print.rows[0]?.v, '20500000', 'first print uses the median-anchor price');
   const mark = await db.query(`SELECT 1 FROM marks WHERE market_id = $1`, [first.marketId]);
   assert.equal(mark.rows.length, 1, 'tradeable immediately — mark exists');
 

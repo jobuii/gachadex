@@ -70,6 +70,7 @@ export function AdminPanel() {
   const [fundingFactor, setFundingFactorState] = useState(null); // { bps, default } | null — max hourly funding rate
   const [fundingDraft, setFundingDraft] = useState(''); // operator enters a PERCENT (0.30 = 0.30%/hour)
   const [stats, setStats] = useState(null); // { markets: [...], totals } | null — per-asset trading stats
+  const [restrictions, setRestrictions] = useState(null); // { restricted:[...], flippedToday:[...] } | null — price-confidence gate
   const [tab, setTab] = useState('main'); // 'main' (the operator tools) | 'customers'
   const [withdrawals, setWithdrawals] = useState([]); // requested withdrawal queue (real-funds)
   const [wbusy, setWbusy] = useState(null); // withdrawal id being approved/reversed
@@ -170,6 +171,13 @@ export function AdminPanel() {
       })(),
       (async () => {
         try {
+          setRestrictions(await api.adminGetRestrictions(key)); // price-confidence gate: restricted now + flipped today
+        } catch {
+          setRestrictions(null);
+        }
+      })(),
+      (async () => {
+        try {
           setWithdrawals((await api.adminGetWithdrawals('requested', key)).withdrawals || []); // real-funds-only
         } catch {
           setWithdrawals([]);
@@ -217,6 +225,7 @@ export function AdminPanel() {
     setLiqFeeState(null);
     setFundingFactorState(null);
     setStats(null);
+    setRestrictions(null);
     setTab('main');
     setWithdrawals([]);
     setMsg(null);
@@ -715,6 +724,38 @@ export function AdminPanel() {
         the automated feed won't overwrite it until you unpin.
       </p>
 
+      {restrictions && (
+        <div
+          className="admin-restrictions"
+          style={{ margin: '0.6rem 0', padding: '0.6rem 0.8rem', border: '1px solid var(--border)', borderRadius: 8 }}
+        >
+          <div>
+            <strong>Price-confidence gate</strong>{' '}
+            <span className="muted">— restricted markets are reduce-only (no new positions) until the oracle trusts their price again.</span>
+          </div>
+          <div style={{ marginTop: '0.35rem' }}>
+            <span className="muted">Restricted now: </span>
+            <strong>{restrictions.restricted.length}</strong>
+            <span className="muted"> · Flipped to restricted today: </span>
+            <strong style={{ color: restrictions.flippedToday.length ? 'var(--danger)' : undefined }}>
+              {restrictions.flippedToday.length}
+            </strong>
+          </div>
+          {restrictions.flippedToday.length > 0 && (
+            <ul style={{ margin: '0.4rem 0 0', paddingLeft: '1.1rem', maxHeight: 160, overflowY: 'auto' }}>
+              {restrictions.flippedToday.map((r) => (
+                <li key={`${r.marketId}-${r.at}`}>
+                  <span style={{ color: 'var(--danger)' }}>{r.displayName}</span>{' '}
+                  <span className="muted">
+                    ({r.game}) — {new Date(r.at).toLocaleTimeString()} · {r.reason}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       <input
         className="wallet-input"
         placeholder="Filter by symbol or name"
@@ -728,11 +769,11 @@ export function AdminPanel() {
           <tr>
             <th>Symbol</th><th>Name</th><th>Mark</th>
             <th>Vol 24h</th><th>Locked</th><th>Net P/L</th><th>L/S</th>
-            <th>Pinned</th><th>Set price (USD)</th><th />
+            <th>Status</th><th>Pinned</th><th>Set price (USD)</th><th />
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 && <tr><td colSpan={10} className="hist-empty">No markets.</td></tr>}
+          {rows.length === 0 && <tr><td colSpan={11} className="hist-empty">No markets.</td></tr>}
           {rows.map((m) => {
             const s = statsById.get(m.id);
             const ls = lsRatio(s);
@@ -748,6 +789,9 @@ export function AdminPanel() {
               </td>
               <td className="num">
                 {ls ? <>{ls.ratio}<br /><span className="muted" style={{ fontSize: '0.8em' }}>{ls.pct}</span></> : '—'}
+              </td>
+              <td style={{ color: m.restricted ? 'var(--danger)' : undefined }} className={m.restricted ? '' : 'muted'}>
+                {m.restricted ? 'RESTRICTED' : 'active'}
               </td>
               <td className={m.pricePinned ? 'up' : 'muted'}>{m.pricePinned ? 'PINNED' : '—'}</td>
               <td>
