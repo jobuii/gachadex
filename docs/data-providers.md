@@ -96,7 +96,7 @@ Base URL `https://api.tcgpricelookup.com/v1`. Auth: **`X-API-Key`** header (env:
 | **Market display metadata** | `name`, `number`, `rarity`, `set.name`, `image_url`, `game.slug` |
 | **Smoothing / cross-check** | `prices.raw.near_mint.ebay.avg_7d` — less jumpy than the TCGplayer spot if daily ticks are noisy |
 | **Chart backfill (optional)** | `/cards/:id/history?period=` — we already build candles from our own ticks; this can seed history on day one |
-| **Freshness gate** | `updated_at` |
+| **Freshness gate** | `last_price_update` (advances per re-price; `updated_at` is the record's ~static metadata timestamp and must NOT be used — keying print dedup on it freezes the price) |
 
 ### Integration notes
 

@@ -20,7 +20,8 @@ export interface TplCard {
   rarity: string | null;
   variant: string | null;
   image_url: string | null;
-  updated_at: string | null;
+  last_price_update?: string | null; // when the PRICE last changed — advances per refresh (unlike updated_at)
+  updated_at: string | null; // the card RECORD's metadata timestamp — effectively static; NOT a price freshness signal
   set: { slug: string; name: string } | null;
   game: { slug: string; name: string } | null;
   prices: {
@@ -264,6 +265,15 @@ export interface TrackedMarket {
   featured: boolean; // index-constituent eligibility — owned by the discovery job, read-only here
 }
 
+/** When the card's PRICE last changed (the print-dedup key + staleness signal). Prefers
+ *  `last_price_update`; falls back to the record timestamp only if the price one is absent. */
+function priceFreshnessAt(c: TplCard): Date | null {
+  const ts = c.last_price_update ?? c.updated_at;
+  if (!ts) return null;
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? null : d; // a malformed timestamp falls back to wall-clock, never aborts the pass
+}
+
 /** Join one provider card onto its tracked market identity and emit the OracleCard. */
 export function fromTplCard(c: TplCard, t: TrackedMarket): OracleCard {
   const graded = gradedPsa10Usd(c);
@@ -280,8 +290,11 @@ export function fromTplCard(c: TplCard, t: TrackedMarket): OracleCard {
     metadata: { setName: c.set?.name ?? null, setSlug: c.set?.slug ?? null, rarity: c.rarity ?? null }, // setSlug keys the release-year cache
     rawE6: toE6(rawPriceUsd(c)),
     gradedE6: graded != null ? toE6(graded) : null,
-    observedAt: c.updated_at ? new Date(c.updated_at) : null, // provider freshness -> print dedup + staleness gate
-    payload: { tcgpricelookup: { prices: c.prices ?? null, updated_at: c.updated_at ?? null } },
+    // Price-freshness, NOT record-update: `updated_at` is ~static, so keying print dedup on it froze
+    // every market at the first post-cutover print (no new marks -> 0% 24h forever). `last_price_update`
+    // advances whenever the provider re-prices, so a new print + mark lands each time the price moves.
+    observedAt: priceFreshnessAt(c),
+    payload: { tcgpricelookup: { prices: c.prices ?? null, last_price_update: c.last_price_update ?? null, updated_at: c.updated_at ?? null } },
     featured: t.featured,
   };
 }
