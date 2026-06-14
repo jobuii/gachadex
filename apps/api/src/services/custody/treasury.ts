@@ -69,7 +69,8 @@ export interface TreasuryState {
   shortfallE6: bigint; // pending the hot wallet can't cover (operator: top up from cold)
   insuranceE6: bigint; // current insurance-buffer balance (a house claim, not user-owed)
   feeRevenueE6: bigint; // accumulated platform trading-fee earnings (the house's cut, net of insurance moves)
-  fundingRevenueE6: bigint; // net funding the house has collected from customers (LP_POOL funding inflow − outflow)
+  fundingCollectedE6: bigint; // GROSS funding customers paid in to the house (inbound LP_POOL funding legs only)
+  fundingRevenueE6: bigint; // NET funding the house kept (LP_POOL funding inflow − outflow); = collected − paid out
   surplusE6: bigint; // onchain − liabilities: unrecorded house funds the operator can allocate to insurance
   breached: boolean; // proof of reserves failing RIGHT NOW (the frozen flag outlives a breach)
   frozen: string | null; // current freeze reason, if any
@@ -82,7 +83,7 @@ export interface TreasuryReport extends TreasuryState {
 /** Gather the treasury/PoR numbers without acting on them. */
 export async function treasuryState(db: Db, chain: TreasuryChain): Promise<TreasuryState> {
   // The reads are mutually independent — gather them concurrently (the chain RPCs dominate).
-  const [ledgerBal, [hot, cold], unswept, pendingRes, frozen, insuranceE6, feeRevenueE6, fundingRevenueE6] = await Promise.all([
+  const [ledgerBal, [hot, cold], unswept, pendingRes, frozen, insuranceE6, feeRevenueE6, funding] = await Promise.all([
     getOrCreateSystemAccount(db, 'TREASURY_USDC').then((acct) => getBalance(db, acct)),
     Promise.all([chain.hotBalance(), chain.coldBalance()]),
     // Credited-but-unswept deposits still sit on their (ours, HD-derived) deposit addresses —
@@ -99,15 +100,17 @@ export async function treasuryState(db: Db, chain: TreasuryChain): Promise<Treas
     withdrawalsFrozen(db),
     getOrCreateSystemAccount(db, 'INSURANCE_FUND').then((acct) => getBalance(db, acct)),
     getOrCreateSystemAccount(db, 'FEE_REVENUE').then((acct) => getBalance(db, acct)),
-    // Net funding the house has collected: sum of FUNDING ledger legs hitting LP_POOL (the funding
-    // counterparty). Positive = customers paid the house net; negative = the house paid customers net.
+    // Funding from FUNDING ledger legs hitting LP_POOL (the funding counterparty): GROSS = inbound
+    // (customers paying in, positive legs); NET = gross minus outbound (funding the house paid back out).
     getOrCreateSystemAccount(db, 'LP_POOL').then((acct) =>
       db
-        .query<{ total: string }>(
-          `SELECT COALESCE(SUM(amount_uusdc), 0)::text AS total FROM ledger_entries WHERE account_id = $1 AND reason = 'FUNDING'`,
+        .query<{ net: string; gross: string }>(
+          `SELECT COALESCE(SUM(amount_uusdc), 0)::text AS net,
+                  COALESCE(SUM(CASE WHEN amount_uusdc > 0 THEN amount_uusdc ELSE 0 END), 0)::text AS gross
+           FROM ledger_entries WHERE account_id = $1 AND reason = 'FUNDING'`,
           [acct],
         )
-        .then((r) => BigInt(r.rows[0].total)),
+        .then((r) => ({ net: BigInt(r.rows[0].net), gross: BigInt(r.rows[0].gross) })),
     ),
   ]);
 
@@ -125,7 +128,8 @@ export async function treasuryState(db: Db, chain: TreasuryChain): Promise<Treas
     shortfallE6: pendingE6 > hot ? pendingE6 - hot : 0n,
     insuranceE6,
     feeRevenueE6,
-    fundingRevenueE6,
+    fundingCollectedE6: funding.gross,
+    fundingRevenueE6: funding.net,
     surplusE6: onchainE6 - liabilityE6,
     breached: onchainE6 < liabilityE6,
     frozen,

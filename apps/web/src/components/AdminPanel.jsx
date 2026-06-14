@@ -518,7 +518,8 @@ export function AdminPanel({ onGoToMarket } = {}) {
           <Stat label="Pending withdrawals" value={treasury.pendingE6} />
           <Stat label="Insurance fund" value={treasury.insuranceE6} />
           <Stat label="Fees earned (house cut)" value={treasury.feeRevenueE6} />
-          <Stat label="Funding earned (house cut)" value={treasury.fundingRevenueE6} />
+          <Stat label="Funding collected (customers paid in)" value={treasury.fundingCollectedE6} />
+          <Stat label="Funding earned (house net kept)" value={treasury.fundingRevenueE6} />
           <PnlStat label="P/L (treasury − customer funds − pending payouts)" value={pnlE6.toString()} />
         </div>
       ) : (
