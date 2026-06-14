@@ -106,6 +106,8 @@ export function adminRoutes(chains: AdminChains) {
         shortfallE6: s.shortfallE6.toString(),
         insuranceE6: s.insuranceE6.toString(),
         feeRevenueE6: s.feeRevenueE6.toString(), // accumulated platform trading-fee earnings
+        fundingCollectedE6: s.fundingCollectedE6.toString(), // gross funding customers paid in
+        fundingRevenueE6: s.fundingRevenueE6.toString(), // net funding the house kept
         surplusE6: s.surplusE6.toString(), // allocatable to insurance (onchain − liabilities)
         freeE6: cust.freeE6.toString(), // total customer free collateral
         lockedE6: cust.lockedE6.toString(), // total customer margin locked in open positions
