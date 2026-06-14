@@ -1341,4 +1341,12 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 /* Confirmation modal (e.g. the close-all-positions kill switch). */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.66); z-index: 1000; display: flex; align-items: center; justify-content: center; }
 .modal-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.3rem; max-width: 460px; width: 92%; }
+/* House P/L breakdown card (admin Overview): the components that sum to the P/L. */
+.admin-panel .pnl-breakdown { margin: 0.8rem 0; padding: 0.7rem 0.9rem; border: 1px solid var(--border); border-radius: 8px; max-width: 460px; }
+.admin-panel .pnl-breakdown-title { font-size: 0.72rem; color: var(--text-muted); letter-spacing: 0.03em; margin-bottom: 0.4rem; }
+.admin-panel .pnl-breakdown-table { width: 100%; font-family: var(--ops-font); font-size: 0.82rem; border-collapse: collapse; }
+.admin-panel .pnl-breakdown-table td { padding: 0.22rem 0; }
+.admin-panel .pnl-breakdown-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.admin-panel .pnl-breakdown-table .muted { font-size: 0.92em; }
+.admin-panel .pnl-breakdown-total td { border-top: 1px solid var(--border); padding-top: 0.4rem; font-weight: 600; color: var(--text); }
 .admin-panel .wallet-input { font-family: var(--ops-font); font-size: 0.82rem; }
