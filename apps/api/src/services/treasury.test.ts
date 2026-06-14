@@ -166,6 +166,30 @@ test('treasuryState surfaces accumulated platform fee revenue (FEE_REVENUE), del
   assert.equal(after.feeRevenueE6 - before.feeRevenueE6, usdc(3)); // exactly the fee that hit FEE_REVENUE
 });
 
+test('treasuryState surfaces NET funding the house collected (LP_POOL FUNDING legs, net of payouts)', async () => {
+  const chain = fakeTreasury({ hot: usdc(1_000_000_000) });
+  const before = await treasuryState(db, chain);
+  await db.tx(async (q) => {
+    const lp = await getOrCreateSystemAccount(q, 'LP_POOL');
+    const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC'); // stand-in counterparty for the test
+    // a customer pays $4 funding -> LP up $4
+    await postTxn(q, { reason: 'FUNDING', refType: 'position', refId: 'fr1', entries: [
+      { accountId: treasury, amount: -usdc(4) }, { accountId: lp, amount: usdc(4) },
+    ] });
+    // the house pays $1 funding back out -> LP down $1 (net $3 kept)
+    await postTxn(q, { reason: 'FUNDING', refType: 'position', refId: 'fr2', entries: [
+      { accountId: lp, amount: -usdc(1) }, { accountId: treasury, amount: usdc(1) },
+    ] });
+    // a NON-funding LP leg (e.g. trader PnL) must NOT count toward funding revenue
+    await postTxn(q, { reason: 'REALIZED_PNL', refType: 'position', refId: 'pnl1', entries: [
+      { accountId: treasury, amount: -usdc(50) }, { accountId: lp, amount: usdc(50) },
+    ] });
+  });
+  const after = await treasuryState(db, chain);
+  assert.equal(after.fundingRevenueE6 - before.fundingRevenueE6, usdc(3), 'net = $4 collected − $1 paid out; PnL leg excluded');
+  assert.equal(after.fundingCollectedE6 - before.fundingCollectedE6, usdc(4), 'gross collected = only the inbound funding leg ($4)');
+});
+
 test('pending payouts are reserved in the float target, and a shortfall is reported', async () => {
   const SAFE_COLD = usdc(1_000_000_000);
   const u = await newUser();
