@@ -441,6 +441,9 @@ export function AdminPanel({ onGoToMarket } = {}) {
   // customer collateral and are queued to pay out — still customer money in flight, NOT house profit —
   // so subtract them too (else P/L inflates by the pending amount until the payout lands).
   const pnlE6 = treasury ? BigInt(treasury.onchainE6) - customerE6 - BigInt(treasury.pendingE6) : 0n;
+  const bd = treasury?.pnlBreakdown ?? null; // house P/L breakdown (string-e6 fields); null on an older API
+  // Net trader P/L from the CUSTOMER's perspective (+ = customers up vs the house) = −(house's realized trader P/L).
+  const traderCustomerPnlE6 = bd ? (-BigInt(bd.traderPnlE6)).toString() : null;
 
   // Verifying a saved key on mount — render nothing operational until we know it's valid.
   if (checking) {
@@ -513,17 +516,53 @@ export function AdminPanel({ onGoToMarket } = {}) {
           <Stat label="Hot balance" value={treasury.hotE6} />
           <Stat label="Cold treasury" value={treasury.coldE6} />
           <Stat label="Total customer balance" value={customerE6.toString()} />
+          <div className="admin-stat">
+            <div className="lbl">Net trader P/L (+ = customers up)</div>
+            <div className="val">{traderCustomerPnlE6 != null ? formatSignedUsd(traderCustomerPnlE6) : '—'}</div>
+          </div>
           <Stat label="…free" value={treasury.freeE6} />
           <Stat label="…locked in trades" value={treasury.lockedE6} />
           <Stat label="Pending withdrawals" value={treasury.pendingE6} />
           <Stat label="Insurance fund" value={treasury.insuranceE6} />
           <Stat label="Fees earned (house cut)" value={treasury.feeRevenueE6} />
+          <Stat label="LP's share of fees" value={bd?.feesLpE6} />
           <Stat label="Funding collected (customers paid in)" value={treasury.fundingCollectedE6} />
           <Stat label="Funding earned (house net kept)" value={treasury.fundingRevenueE6} />
           <PnlStat label="P/L (treasury − customer funds − pending payouts)" value={pnlE6.toString()} />
         </div>
       ) : (
         <p className="ref-blurb">Live treasury balances appear in real-funds mode (this deployment is play money).</p>
+      )}
+
+      {treasury && bd && (
+        <div className="pnl-breakdown">
+          <div className="pnl-breakdown-title">House P/L breakdown — where the P/L comes from</div>
+          <table className="pnl-breakdown-table">
+            <tbody>
+              <tr><td>Trading fees — house cut</td><td className="num">{formatSignedUsd(bd.feesHouseE6)}</td></tr>
+              <tr><td>Trading fees — LP share</td><td className="num">{formatSignedUsd(bd.feesLpE6)}</td></tr>
+              <tr><td>Funding — net kept</td><td className="num">{formatSignedUsd(bd.fundingNetE6)}</td></tr>
+              <tr>
+                <td>Net trader P/L <span className="muted">(house side; +ve = house gained)</span></td>
+                <td className="num">{formatSignedUsd(bd.traderPnlE6)}</td>
+              </tr>
+              <tr>
+                <td>Insurance fund <span className="muted">(incl. liq penalties {formatSignedUsd(bd.liqPenaltiesE6)})</span></td>
+                <td className="num">{formatSignedUsd(bd.insuranceE6)}</td>
+              </tr>
+              {BigInt(bd.lpOtherE6) !== 0n && (
+                <tr><td>LP pool — other <span className="muted">(LP capital / insurance draws)</span></td><td className="num">{formatSignedUsd(bd.lpOtherE6)}</td></tr>
+              )}
+              <tr className="pnl-breakdown-total"><td>Total (house equity)</td><td className="num">{formatSignedUsd(bd.totalE6)}</td></tr>
+            </tbody>
+          </table>
+          {bd.totalE6 !== pnlE6.toString() && (
+            <p className="ref-blurb" style={{ marginTop: '0.4rem' }}>
+              Custody P/L (treasury − customer − pending) is {formatSignedUsd(pnlE6.toString())} — an unreconciled
+              difference of {formatSignedUsd((pnlE6 - BigInt(bd.totalE6)).toString())} (settles as deposits sweep).
+            </p>
+          )}
+        </div>
       )}
 
       {/* ---- Withdrawals queue ---- */}
