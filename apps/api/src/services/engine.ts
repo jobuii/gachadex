@@ -738,6 +738,16 @@ export async function liquidateEligible(db: Db, marketId: string): Promise<numbe
   return count;
 }
 
+/** Liquidate every eligible (underwater) position across all live markets — the per-market sweep over
+ *  the tradeable active/reduce-only universe. Shared by the background liquidation loop and the operator
+ *  "liquidate now" admin action, so both flatten the underwater book identically. */
+export async function liquidateAllEligible(db: Db): Promise<{ liquidated: number; markets: number }> {
+  const r = await db.query<{ id: string }>(`SELECT id FROM markets WHERE tradeable AND status IN ('active','reduce_only')`);
+  let liquidated = 0;
+  for (const m of r.rows) liquidated += await liquidateEligible(db, m.id);
+  return { liquidated, markets: r.rows.length };
+}
+
 /** Hard cap on force-closes per sweep — a runaway-loop backstop; real convergence is the break below. */
 const ADL_MAX_PER_SWEEP = 1000;
 

@@ -14,7 +14,7 @@ const { ingest } = await import('./oracle.ts');
 const { fromPokemontcg } = await import('./providers/pokemontcg.ts');
 const { listMarketsWithData } = await import('./markets.ts');
 const { creditFaucet, getUserBalances } = await import('./faucet.ts');
-const { openPosition, closePosition, liquidateEligible, getUserPositions } = await import('./engine.ts');
+const { openPosition, closePosition, liquidateEligible, liquidateAllEligible, getUserPositions } = await import('./engine.ts');
 const { reconcile } = await import('./reconcile.ts');
 const { usdc } = await import('../money.ts');
 
@@ -99,6 +99,17 @@ test('a liquidatable position cannot be closed manually (must be liquidated)', a
     /liquidatable/,
   );
   await liquidateEligible(db, market.id); // cleanup: it goes through liquidation instead
+});
+
+test('liquidateAllEligible (admin "liquidate now") sweeps underwater positions across markets', async () => {
+  const trader = await newUser();
+  await openPosition(db, trader, { marketId: market.id, side: 'long', qtyE6: 5_000_000n, leverage: 20, idempotencyKey: randomUUID() });
+  await setMark(900); // well below the ~$975 liq price
+  const r = await liquidateAllEligible(db);
+  assert.ok(r.liquidated >= 1, 'liquidated the underwater position');
+  assert.ok(r.markets >= 1, 'scanned the live markets');
+  assert.equal(await posStatus(trader), 'liquidated');
+  await setMark(1000); // reset for the reconciler test
 });
 
 test('reconciler stays balanced after liquidations and bad debt', async () => {

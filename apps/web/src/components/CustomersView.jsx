@@ -31,7 +31,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
   const [copied, setCopied] = useState(null);
   const [expanded, setExpanded] = useState(null); // userId currently expanded
   const [positions, setPositions] = useState({}); // userId -> positions[] | 'loading'
-  const [busy, setBusy] = useState(null); // positionId | 'user:<id>' | 'all' currently closing
+  const [busy, setBusy] = useState(null); // positionId | 'user:<id>' | 'all' | 'liquidate' — action in flight
   const [note, setNote] = useState(null); // action feedback line
   const [killOpen, setKillOpen] = useState(false); // global kill-switch confirmation modal
   const [killText, setKillText] = useState('');
@@ -125,6 +125,20 @@ export function CustomersView({ adminKey, onGoToMarket }) {
     });
   };
 
+  // EMERGENCY: liquidate every underwater position now (what the auto-sweep would do, on demand).
+  // Complements close-all, which skips liquidatable positions. Confirm-gated (less catastrophic than
+  // the kill switch — these positions are already underwater and would auto-liquidate anyway).
+  const liquidateNow = () => {
+    if (!window.confirm('Liquidate ALL underwater positions across every market NOW?\nThese are positions already past their liquidation price — this just does it immediately instead of waiting for the auto-sweep (loss-capped + penalized exactly the same).')) return;
+    return runAction('liquidate', async () => {
+      const r = await api.adminLiquidateAll(adminKey);
+      setExpanded(null);
+      setPositions({});
+      loadCustomers();
+      return `Liquidated ${r.liquidated} underwater position(s) across ${r.markets} markets.`;
+    });
+  };
+
   // EMERGENCY: close every open position across all customers (gated by the typed-phrase modal).
   const closeAllGlobal = () =>
     runAction('all', async () => {
@@ -144,14 +158,24 @@ export function CustomersView({ adminKey, onGoToMarket }) {
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginTop: '1rem' }}>
         <h3 style={{ margin: 0 }}>Customers ({total})</h3>
-        <button
-          className="btn-ghost sm"
-          style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}
-          disabled={busy === 'all'}
-          onClick={() => { setKillText(''); setKillOpen(true); }}
-        >
-          ⚠ Close ALL positions (all customers)
-        </button>
+        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+          <button
+            className="btn-ghost sm"
+            style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}
+            disabled={busy != null}
+            onClick={liquidateNow}
+          >
+            {busy === 'liquidate' ? 'liquidating…' : '⚠ Liquidate underwater now'}
+          </button>
+          <button
+            className="btn-ghost sm"
+            style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}
+            disabled={busy != null}
+            onClick={() => { setKillText(''); setKillOpen(true); }}
+          >
+            ⚠ Close ALL positions (all customers)
+          </button>
+        </div>
       </div>
       <p className="ref-blurb">
         One row per user. Sort with the buttons; click a wallet/deposit address to copy it; click the ▸ to
