@@ -125,6 +125,18 @@ function renderBody(body, myName) {
   });
 }
 
+// Faint GachaDex "G" marks raining behind the DROP banner — varied column/size/speed/delay/opacity so the
+// fall looks organic. Kept low-opacity so it never competes with the headline (see .drop-gfall in index.css).
+const DROP_GS = [
+  { left: '4%', size: 13, dur: '3.4s', delay: '0s', op: 0.12 },
+  { left: '17%', size: 20, dur: '5.2s', delay: '1.4s', op: 0.08 },
+  { left: '31%', size: 11, dur: '4.0s', delay: '0.6s', op: 0.14 },
+  { left: '45%', size: 16, dur: '4.8s', delay: '2.1s', op: 0.1 },
+  { left: '59%', size: 12, dur: '3.7s', delay: '0.9s', op: 0.12 },
+  { left: '73%', size: 22, dur: '6.0s', delay: '0.2s', op: 0.07 },
+  { left: '87%', size: 14, dur: '4.4s', delay: '1.8s', op: 0.11 },
+];
+
 export function ChatSidebar({ open, onToggle }) {
   const { user } = useAuth();
   const messages = useChat((s) => s.messages);
@@ -369,6 +381,17 @@ export function ChatSidebar({ open, onToggle }) {
 
       {/* DROP teaser bar — pinned under the header. Phase 1: opens a "coming soon" modal (F6). */}
       <button type="button" className="chat-drop-bar" onClick={() => setDropOpen(true)} title="DROP — timed giveaway">
+        <span className="drop-gfall" aria-hidden="true">
+          {DROP_GS.map((g, i) => (
+            <img
+              key={i}
+              className="drop-g"
+              src="/favicon.svg"
+              alt=""
+              style={{ left: g.left, width: `${g.size}px`, opacity: g.op, animationDuration: g.dur, animationDelay: g.delay }}
+            />
+          ))}
+        </span>
         <span className="drop-headline">
           <span className="drop-pre">It's about to</span>
           <span className="drop-word">DROP</span>
