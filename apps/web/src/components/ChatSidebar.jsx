@@ -598,7 +598,7 @@ export function ChatSidebar({ open, onToggle }) {
           <div className="modal-content drop-modal" onClick={(e) => e.stopPropagation()}>
             <div className="drop-modal-word">DROP</div>
             <p className="drop-modal-copy">
-              Every DROP, the house opens a <strong>TCG pack</strong> (bigger when the pot grows) — cards up to{' '}
+              Every DROP, the house opens a <strong>TCG GACHA pack</strong> (bigger when the pot grows) — cards up to{' '}
               <strong>$20,000 USDC</strong>. One eligible wallet wins the card drawn. Eligible = you've deposited
               (or hold 500K+ $GDEX).
             </p>
