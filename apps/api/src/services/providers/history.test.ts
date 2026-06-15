@@ -37,7 +37,7 @@ function historyClient(byCard: Record<string, PointT[]>, calls: string[] = []) {
   } as unknown as ClientT & { calls: string[] };
 }
 
-test('dailySeedPoints mirrors the live priceCard chain: median of anchor signals, single-signal -> itself, LP fallback', () => {
+test('dailySeedPoints mirrors the live priceCard chain: median of the signals, single-signal -> itself, LP fallback', () => {
   const points: PointT[] = [
     { date: '2026-01-01', prices: [row({ price_market: 48.97 })] }, // one signal -> itself
     { date: '2026-01-02', prices: [row({ price_market: 3.1 }), row({ source: 'ebay', avg_7d: 4.2 })] }, // median(3.1, 4.2) = 3.65

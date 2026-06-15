@@ -164,7 +164,9 @@ test('freshness gate: a reactivated market cannot be OPENED against a mark preda
     'opening on a pre-activation mark is refused',
   );
 
-  // A fresh print (mark computed_at >= created_at) reopens the market for new positions.
+  // A fresh print (mark computed_at >= created_at) reopens the market for new positions. The pokemontcg
+  // path stamps a wall-clock observedAt, so re-ingesting lands a new source_observed_at -> a fresh print
+  // + mark even at the same price (dedup keys on the timestamp, not the value).
   await ingest(db, async () => fromPokemontcg([
     { id: 'card-x', name: 'Test', number: '1', images: { small: 'x' }, tcgplayer: { prices: { holofoil: { market: 1000 } } } },
   ]));

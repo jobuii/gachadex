@@ -141,11 +141,12 @@ async function reviveWithFreshPrice(db: Db, client: TcgPriceLookupClient, market
     game: c.game?.slug ?? '',
     featured: false,
   });
-  // Stamp the revival print with wall-clock time, NOT the provider updated_at: a market dead for 30+
-  // days may share its timestamp with the stale pre-retirement print, which would dedup away and
-  // leave no fresh mark. This is a deliberate "reprice now" event (the pokemontcg-path behavior).
+  // Stamp the revival print with wall-clock time, NOT the provider last_price_update: a market dead for
+  // 30+ days may carry a timestamp that collides with the stale pre-retirement print, which would dedup
+  // away (ON CONFLICT) and leave no fresh mark to clear the freshness gate. Wall-clock guarantees a new
+  // source_observed_at, so a fresh print + mark always lands. This is a deliberate "reprice now" event.
   card.observedAt = null;
-  if (card.rawE6 > 0n) await ingestCard(db, card, new Date()); // a rejected (outlier) print just leaves it awaiting the next pass
+  if (card.rawE6 > 0n) await ingestCard(db, card, new Date());
 }
 
 /** Create (or return) the market for a provider card — `markets/ensure`. Same card or a printing

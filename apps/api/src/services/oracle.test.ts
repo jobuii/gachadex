@@ -75,13 +75,36 @@ test('candles endpoint returns REAL marks (no fabrication), newest = current mar
   assert.equal(a[a.length - 1].value, 1200); // ends at the current mark
 });
 
-test('outlier guard rejects an implausible price jump', async () => {
+test('no outlier reject: a large move is accepted (manipulation handled by the median, gap risk by the engine)', async () => {
   const spiked = cards.map((c) => (c.id === 'sv-1' ? card('sv-1', 'Charizard ex', '223', 99_999) : c));
   await ingest(db, async () => fromPokemontcg(spiked));
   const markets = await listMarketsWithData(db);
   const chari = markets.find((m) => m.symbol === 'sv-1')!;
-  // jump was rejected -> mark unchanged
-  assert.equal(Number(chari.markE6) / 1_000_000, 1200);
+  // the old ±60% outlier gate is gone — the mark tracks the new oracle value (mark == index at skew 0)
+  assert.equal(Number(chari.markE6) / 1_000_000, 99_999);
+});
+
+test('timestamp-dedup: re-serving the SAME provider timestamp is a no-op; a new timestamp writes even at an unchanged price', async () => {
+  // flat $42 throughout — dedup keys on the provider's freshness timestamp, NOT the price value
+  const oc = (observedAt: Date) => ({
+    game: 'mtg', symbol: 'mtg:dedupe-1', cardId: 'dedupe-1', displayName: 'Dedupe', variant: null,
+    imageSmall: null, providerCardId: 'dedupe-1', rawE6: 42_000_000n, observedAt,
+  });
+  const count = async () =>
+    Number(
+      (
+        await db.query<{ n: string }>(
+          `SELECT count(*)::text AS n FROM oracle_prices op JOIN markets m ON m.id = op.market_id WHERE m.symbol = 'mtg:dedupe-1'`,
+        )
+      ).rows[0].n,
+    );
+  const t1 = new Date('2026-06-15T06:00:00Z');
+  await ingest(db, async () => [oc(t1)]);
+  assert.equal(await count(), 1, 'first print recorded');
+  await ingest(db, async () => [oc(t1)]); // SAME last_price_update re-served -> genuine duplicate -> skipped
+  assert.equal(await count(), 1, 'same provider timestamp -> no new print (the feed has not re-priced)');
+  await ingest(db, async () => [oc(new Date('2026-06-15T12:00:00Z'))]); // new timestamp, still $42
+  assert.equal(await count(), 2, 'a new timestamp at an unchanged price still records a fresh print');
 });
 
 test('card metadata is stored; JustTCG graded data activates the Graded index', async () => {
