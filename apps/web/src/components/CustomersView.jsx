@@ -12,9 +12,10 @@ const SORTS = [
   ['free', 'Balance'],
   ['locked', 'In trades'],
   ['pnl', 'Realized P/L'],
+  ['tips', 'Tips'],
   ['joined', 'Joined'],
 ];
-const COLS = 16; // table width (for the expand-row + empty-state colSpan)
+const COLS = 17; // table width (for the expand-row + empty-state colSpan)
 const KILL_PHRASE = 'CLOSE ALL';
 
 const short = (a) => shortenPubkey(a) || '—';
@@ -217,6 +218,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
               <th>P/L (realized)</th>
               <th>uP/L (unreal.)</th>
               <th>Deposits</th>
+              <th>Tips</th>
               <th>Withdrawals</th>
               <th>Pending</th>
               <th>Open</th>
@@ -252,6 +254,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
                     <td className="num" style={signed(c.pnlE6)}>{formatSignedUsd(c.pnlE6)}</td>
                     <td className="num" style={signed(c.upnlE6)}>{formatSignedUsd(c.upnlE6)}</td>
                     <td className="num">{usd(c.depositsE6)}</td>
+                    <td className="num">{usd(c.tippedE6)}</td>
                     <td className="num">{usd(c.withdrawalsE6)}</td>
                     <td className="num">{usd(c.pendingWithdrawalsE6)}</td>
                     <td className="num">{c.openPositions}</td>

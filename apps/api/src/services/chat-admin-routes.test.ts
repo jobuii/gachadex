@@ -70,6 +70,8 @@ test('drop-config round-trip + the pot bucket reads 0 in Phase 1', async () => {
   assert.equal(drop.statusCode, 200);
   assert.equal(drop.json().bucketE6, '0');
   assert.deepEqual(drop.json().recentRounds, []);
+  assert.equal(drop.json().totalTippedE6, '0'); // no tips yet
+  assert.deepEqual(drop.json().recentTips, []);
 });
 
 test('invalid config is rejected with 400 (Zod)', async () => {

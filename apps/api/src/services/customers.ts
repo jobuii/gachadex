@@ -22,6 +22,7 @@ export interface CustomerRow {
   pnlE6: string; // lifetime REALIZED P/L from closed fills (can be negative)
   upnlE6: string; // current UNREALIZED P/L on open positions (marked to the latest mark)
   depositsE6: string; // lifetime credited deposits (real USDC)
+  tippedE6: string; // lifetime real-USDC tipped into the DROP pot
   withdrawalsE6: string; // lifetime confirmed withdrawals
   pendingWithdrawalsE6: string; // withdrawals in flight (requested/signed/broadcast)
   openPositions: number;
@@ -35,6 +36,7 @@ const SORT_EXPR: Record<string, string> = {
   free: 'COALESCE(coll.amount_uusdc, 0)',
   locked: 'COALESCE(marg.amount_uusdc, 0)',
   pnl: 'COALESCE(vol.pnl_e6, 0)',
+  tips: 'COALESCE(tip.tipped_e6, 0)',
   joined: 'u.created_at',
 };
 
@@ -60,6 +62,7 @@ export async function listCustomers(
     pnl_e6: string;
     upnl_e6: string;
     deposits_e6: string;
+    tipped_e6: string;
     withdrawals_e6: string;
     pending_e6: string;
     open_positions: number;
@@ -106,6 +109,9 @@ export async function listCustomers(
      -- current LP stake (shares); valued to pool NAV in JS via lpShareValue (keeps the share math in one place)
      lp AS (
        SELECT user_id, shares FROM lp_positions WHERE shares > 0
+     ),
+     tip AS (
+       SELECT user_id, SUM(amount_uusdc) AS tipped_e6 FROM drop_tips GROUP BY user_id
      )
      SELECT u.id, u.solana_pubkey, u.display_name, u.status,
             u.created_at::text AS joined_at,
@@ -119,6 +125,7 @@ export async function listCustomers(
             COALESCE(vol.pnl_e6, 0)::text AS pnl_e6,
             COALESCE(op.upnl_e6, 0)::bigint::text AS upnl_e6,
             COALESCE(dep.deposits_e6, 0)::text AS deposits_e6,
+            COALESCE(tip.tipped_e6, 0)::text AS tipped_e6,
             COALESCE(wd.withdrawals_e6, 0)::text AS withdrawals_e6,
             COALESCE(wd.pending_e6, 0)::text AS pending_e6,
             COALESCE(op.open_positions, 0)::int AS open_positions
@@ -131,6 +138,7 @@ export async function listCustomers(
      LEFT JOIN vol ON vol.user_id = u.id
      LEFT JOIN op ON op.user_id = u.id
      LEFT JOIN dep ON dep.user_id = u.id
+     LEFT JOIN tip ON tip.user_id = u.id
      LEFT JOIN wd ON wd.user_id = u.id
      LEFT JOIN fund ON fund.user_id = u.id
      LEFT JOIN lp ON lp.user_id = u.id
@@ -160,6 +168,7 @@ export async function listCustomers(
       pnlE6: x.pnl_e6,
       upnlE6: x.upnl_e6,
       depositsE6: x.deposits_e6,
+      tippedE6: x.tipped_e6,
       withdrawalsE6: x.withdrawals_e6,
       pendingWithdrawalsE6: x.pending_e6,
       openPositions: x.open_positions,

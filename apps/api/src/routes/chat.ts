@@ -1,12 +1,14 @@
 import type { FastifyInstance } from 'fastify';
-import { ChatPostRequest, UsernameRequest, ChatMuteRequest, ReactRequest } from '@pokex/shared-types';
+import { ChatPostRequest, UsernameRequest, ChatMuteRequest, ReactRequest, ChatTipRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
+import { usdc } from '../money.ts';
 import { getDb } from '../db/client.ts';
 import { authenticate, requireMod, optionalViewerId } from '../plugins/auth.ts';
 import { rl } from './_ratelimit.ts';
 import { listChat, postChat, getProfile, setUsername, getProfileCard } from '../services/chat.ts';
 import { deleteMessage, muteUser, unmuteUser, setBanned } from '../services/chat-mod.ts';
 import { toggleReaction } from '../services/chat-reactions.ts';
+import { tipDrop } from '../services/drop.ts';
 import { rankMap } from '../services/leaderboard.ts';
 
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
@@ -20,6 +22,20 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.get('/chat/profile/:userId', async (req) => {
     const { userId } = req.params as { userId: string };
     return getProfileCard(await getDb(), userId);
+  });
+
+  // public DROP tip settings: whether tipping is open + the bounds (drives the tip input). The pot amount
+  // itself is deliberately NOT exposed to customers — only the admin sees it.
+  app.get('/chat/drop/pot', async () => ({
+    tipsEnabled: config.dropTipsEnabled,
+    minUsd: config.dropTipMinUsd,
+    maxUsd: config.dropTipMaxUsd,
+  }));
+
+  // tip real USDC into the DROP pot (authed; full scope — it moves collateral). Gated by DROP_TIPS_ENABLED.
+  app.post('/chat/drop/tip', rl(config.routeRateLimits.chatPost, { preHandler: authenticate, config: { scope: 'full' } }), async (req) => {
+    const { amountUsd } = ChatTipRequest.parse(req.body ?? {});
+    return tipDrop(await getDb(), req.userId!, usdc(amountUsd));
   });
 
   app.post('/chat', rl(config.routeRateLimits.chatPost, { preHandler: authenticate, config: { scope: 'full' } }), async (req) => {

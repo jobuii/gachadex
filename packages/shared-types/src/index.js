@@ -215,6 +215,12 @@ export const DropConfigRequest = z
   })
   .strict();
 
+// Player tips real USDC into the DROP pot. A whole/fractional dollar amount; the server re-checks it
+// against the DROP_TIP_MIN/MAX config + the tipper's available balance, and converts to micro-USDC.
+export const ChatTipRequest = z.object({
+  amountUsd: z.coerce.number().positive().max(10_000_000),
+});
+
 // The allowed chat reaction emojis — shared by the server (validation) and the client (picker).
 export const CHAT_REACTIONS = ['👍', '❤️', '😂', '🔥', '🚀', '💯', '😮', '😢'];
 

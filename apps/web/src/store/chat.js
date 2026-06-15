@@ -27,6 +27,9 @@ export const useChat = create((set, get) => ({
   online: 0, // live count of connected viewers (from the WS presence event)
   modState: {}, // userId -> { mutedUntil, banned } — live mute/ban snapshots from the server
   ranks: {}, // userId -> leaderboard rank (top 100 only) — drives chat rank badges
+  tipsEnabled: false, // whether tipping into the pot is open (DROP_TIPS_ENABLED on the server)
+  tipMinUsd: 1,
+  tipMaxUsd: 10_000,
   _started: false,
 
   start() {
@@ -39,6 +42,11 @@ export const useChat = create((set, get) => ({
     const loadRanks = () => api.getChatRanks().then((r) => set({ ranks: r.ranks || {} })).catch(() => {});
     loadRanks();
     setInterval(loadRanks, 60_000);
+    // DROP tip settings (whether tips are open + the bounds). The pot amount is admin-only, not shown to customers.
+    api
+      .getDropPot()
+      .then((r) => set({ tipsEnabled: !!r.tipsEnabled, tipMinUsd: r.minUsd ?? 1, tipMaxUsd: r.maxUsd ?? 10_000 }))
+      .catch(() => {});
     onMessage((m) => {
       if (m.ch !== 'chat' || !m.data) return;
       // a moderator deleted a message — drop it everywhere, no unread bump

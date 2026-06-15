@@ -147,6 +147,19 @@ CREATE TABLE IF NOT EXISTS chat_mod_actions (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_mod_actions_created ON chat_mod_actions(created_at DESC);
 
+-- DROP pot tips (docs/chat-social-spec.md F6). A player contributes real USDC to the giveaway pot
+-- (USER_COLLATERAL -> DROP_POOL ledger account). round_id stays NULL until the round worker (Phase 2b)
+-- associates tips with an open round.
+CREATE TABLE IF NOT EXISTS drop_tips (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id),
+  amount_uusdc BIGINT NOT NULL,
+  round_id     TEXT,
+  txn_id       TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_drop_tips_created ON drop_tips(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS auth_nonces (
   nonce      TEXT PRIMARY KEY,
   pubkey     TEXT NOT NULL,

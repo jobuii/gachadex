@@ -143,6 +143,8 @@ export const setReferralCode = (code) => req('/referral/code', { method: 'POST',
 export const getChat = () => req('/chat', { auth: true }); // auth optional: returns the viewer's own reactions
 export const getChatRanks = () => req('/chat/ranks'); // { ranks: { userId: rank }, total } — top 100
 export const getProfileCard = (userId) => req(`/chat/profile/${userId}`); // hover card: identity + rank + level
+export const getDropPot = () => req('/chat/drop/pot'); // { tipsEnabled, minUsd, maxUsd } — public (pot amount is admin-only)
+export const dropTip = (amountUsd) => req('/chat/drop/tip', { method: 'POST', auth: true, body: { amountUsd } });
 export const reactChat = (messageId, emoji) => req(`/chat/messages/${messageId}/react`, { method: 'POST', auth: true, body: { emoji } });
 export const postChat = (body, replyTo) =>
   req('/chat', { method: 'POST', auth: true, body: { body, ...(replyTo ? { replyTo } : {}) } });
