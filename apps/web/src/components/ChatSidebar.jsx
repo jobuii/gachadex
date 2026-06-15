@@ -128,6 +128,7 @@ export function ChatSidebar({ open, onToggle }) {
   const modState = useChat((s) => s.modState); // live mute/ban snapshots (userId -> {mutedUntil, banned})
   const ranks = useChat((s) => s.ranks); // userId -> leaderboard rank (top 100) for rank badges
   const reactMine = useChat((s) => s.reactMine);
+  const online = useChat((s) => s.online); // live connected-viewer count
 
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -324,7 +325,10 @@ export function ChatSidebar({ open, onToggle }) {
   return (
     <aside className="chat-sidebar">
       <div className="chat-header">
-        <span className="chat-title">▣ Live Chat</span>
+        <span className="chat-header-left">
+          <span className="chat-title">▣ Live Chat</span>
+          {online > 0 && <span className="chat-online" title={`${online} online`}>{online}</span>}
+        </span>
         <button className="chat-collapse" onClick={onToggle} title="Hide chat" aria-label="Hide chat">◀</button>
       </div>
 

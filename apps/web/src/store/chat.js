@@ -24,6 +24,7 @@ export const persistChatOpen = (open) => {
 export const useChat = create((set, get) => ({
   messages: [],
   unread: 0,
+  online: 0, // live count of connected viewers (from the WS presence event)
   modState: {}, // userId -> { mutedUntil, banned } — live mute/ban snapshots from the server
   ranks: {}, // userId -> leaderboard rank (top 100 only) — drives chat rank badges
   _started: false,
@@ -43,6 +44,11 @@ export const useChat = create((set, get) => ({
       // a moderator deleted a message — drop it everywhere, no unread bump
       if (m.type === 'delete') {
         set((s) => ({ messages: s.messages.filter((x) => x.id !== m.data.id) }));
+        return;
+      }
+      // live online count (connected viewers)
+      if (m.type === 'presence') {
+        set({ online: m.data?.online ?? 0 });
         return;
       }
       // a user's mute/ban changed — record the snapshot (drives the disabled input + mod toggle buttons)
