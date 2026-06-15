@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, ModGrantRequest } from '@pokex/shared-types';
+import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { rl } from './_ratelimit.ts';
@@ -10,7 +10,9 @@ import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFa
 import { listCustomers } from '../services/customers.ts';
 import { marketStats } from '../services/admin-stats.ts';
 import { restrictionsReport } from '../services/restrictions.ts';
-import { setMod, listModState } from '../services/chat-mod.ts';
+import { setMod, listModState, unmuteUser, setBanned, resolveChatUserId } from '../services/chat-mod.ts';
+import { chatConfigView, setChatThresholds } from '../services/chat-config.ts';
+import { dropConfigView, setDropConfig, getDropView } from '../services/drop-config.ts';
 import { getUserPositions, liquidateAllEligible } from '../services/engine.ts';
 import { adminClosePosition, adminCloseUserPositions, adminCloseAllPositions } from '../services/admin-close.ts';
 
@@ -130,12 +132,46 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   // flipped INTO restricted today. Drives the admin "Restricted" badges + the daily transitions panel.
   app.get('/admin/restrictions', rl(config.routeRateLimits.admin), async () => restrictionsReport(await getDb()));
 
-  // Chat moderation (operator path; the full CHAT admin view consumes these). GET current mods/muted/
-  // banned + recent audit; POST grants/revokes MOD per user. In-chat mod actions live on /chat/* (mod-auth).
+  // --- CHAT admin view (docs/chat-social-spec.md). Three panels: action-bar thresholds, DROP config +
+  // pot bucket, and moderation. All under the same admin-key hook; registers in both fund modes.
+
+  // Panel 1 — live action-bar thresholds (whole USD). GET -> values + defaults; POST a partial -> the new
+  // values. Reuses the chat-config live knobs (same settings-backed mechanism as the fee knobs).
+  app.get('/admin/chat/thresholds', rl(config.routeRateLimits.admin), async () => chatConfigView());
+  app.post('/admin/chat/thresholds', rl(config.routeRateLimits.admin), async (req) => {
+    return setChatThresholds(await getDb(), ChatThresholdsRequest.parse(req.body));
+  });
+
+  // Panel 2 — DROP config (interval/house floor/pack tiers/GDEX min + the read-only eligibility mint) and
+  // the pot bucket. Phase 1 persists the knobs + reads the DROP_POOL balance; the round worker is Phase 2.
+  app.get('/admin/chat/drop-config', rl(config.routeRateLimits.admin), async () => dropConfigView());
+  app.post('/admin/chat/drop-config', rl(config.routeRateLimits.admin), async (req) => {
+    const b = DropConfigRequest.parse(req.body);
+    return setDropConfig(await getDb(), b);
+  });
+  app.get('/admin/chat/drop', rl(config.routeRateLimits.admin), async () => getDropView(await getDb()));
+
+  // Panel 3 — moderation. GET current mods/muted/banned + recent audit; POST an action on a user (the
+  // path segment may be an internal id OR a wallet pubkey, resolved server-side). grant/revoke toggle MOD;
+  // unmute/unban clear a mute/ban. In-chat mod actions live on /chat/* (mod-auth).
   app.get('/admin/chat/mods', rl(config.routeRateLimits.admin), async () => listModState(await getDb()));
-  app.post('/admin/chat/mods/:userId', rl(config.routeRateLimits.admin), async (req) => {
+  app.post('/admin/chat/mods/:userId', rl(config.routeRateLimits.admin), async (req, reply) => {
     const { userId } = req.params as { userId: string };
-    const { action } = ModGrantRequest.parse(req.body);
-    return setMod(await getDb(), userId, action === 'grant', null); // null acting-mod = operator (admin key)
+    const { action } = ChatModActionRequest.parse(req.body);
+    const db = await getDb();
+    const id = await resolveChatUserId(db, userId);
+    if (!id) return reply.code(404).send({ error: 'user not found' });
+    switch (action) {
+      case 'grant':
+        return setMod(db, id, true, null); // null acting-mod = operator (admin key)
+      case 'revoke':
+        return setMod(db, id, false, null);
+      case 'unmute':
+        return unmuteUser(db, null, id);
+      case 'unban':
+        return setBanned(db, null, id, false);
+      default:
+        return reply.code(400).send({ error: 'unsupported action' }); // unreachable (Zod-validated) — defensive
+    }
   });
 }

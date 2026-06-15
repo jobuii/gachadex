@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { formatUsd, formatSignedUsd, toE6, shortenPubkey } from '@pokex/pricing';
 import * as api from '../lib/api.js';
 import { CustomersView } from './CustomersView.jsx';
+import { ChatAdminView } from './ChatAdminView.jsx';
+import { Stat, PnlStat } from './adminStats.jsx';
 
 /**
  * Operator manual-pricing panel (ROADMAP §2). Reached at #admin — not in the public nav.
@@ -23,26 +25,6 @@ const LIMIT_FIELDS = [
   ['swapSlippageBps', 'Swap slippage', 'bps'],
 ];
 
-function Stat({ label, value }) {
-  return (
-    <div className="admin-stat">
-      <div className="lbl">{label}</div>
-      <div className="val">{value != null ? formatUsd(BigInt(value)) : '—'}</div>
-    </div>
-  );
-}
-
-// Profit/loss stat — green when the house is up, red when down (handles negative bigints explicitly).
-function PnlStat({ label, value }) {
-  const v = BigInt(value);
-  const neg = v < 0n;
-  return (
-    <div className={`admin-stat ${neg ? 'pnl-down' : 'pnl-up'}`}>
-      <div className="lbl">{label}</div>
-      <div className="val">{neg ? '-' : ''}{formatUsd(neg ? -v : v)}</div>
-    </div>
-  );
-}
 
 export function AdminPanel({ onGoToMarket } = {}) {
   const [adminKey, setAdminKey] = useState(() => localStorage.getItem(KEY_STORE) || '');
@@ -71,7 +53,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
   const [fundingDraft, setFundingDraft] = useState(''); // operator enters a PERCENT (0.30 = 0.30%/hour)
   const [stats, setStats] = useState(null); // { markets: [...], totals } | null — per-asset trading stats
   const [restrictions, setRestrictions] = useState(null); // { restricted:[...], flippedToday:[...] } | null — price-confidence gate
-  const [tab, setTab] = useState('main'); // 'main' (the operator tools) | 'customers'
+  const [tab, setTab] = useState('main'); // 'main' (the operator tools) | 'customers' | 'chat'
   const [withdrawals, setWithdrawals] = useState([]); // requested withdrawal queue (real-funds)
   const [wbusy, setWbusy] = useState(null); // withdrawal id being approved/reversed
 
@@ -502,9 +484,12 @@ export function AdminPanel({ onGoToMarket } = {}) {
       <div className="admin-tabs">
         <button className={`admin-tab ${tab === 'main' ? 'active' : ''}`} onClick={() => setTab('main')}>Main</button>
         <button className={`admin-tab ${tab === 'customers' ? 'active' : ''}`} onClick={() => setTab('customers')}>Customers</button>
+        <button className={`admin-tab ${tab === 'chat' ? 'active' : ''}`} onClick={() => setTab('chat')}>Chat</button>
       </div>
 
       {tab === 'customers' && <CustomersView adminKey={adminKey} onGoToMarket={onGoToMarket} />}
+
+      {tab === 'chat' && <ChatAdminView adminKey={adminKey} />}
 
       {tab === 'main' && (
         <>

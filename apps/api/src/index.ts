@@ -9,6 +9,7 @@ import { treasuryPass } from './services/custody/treasury.ts';
 import { loadLimits } from './services/custody/limits.ts';
 import { loadFee, loadLiqFee, loadFundingFactor } from './services/fees.ts';
 import { loadChatConfig } from './services/chat-config.ts';
+import { loadDropConfig } from './services/drop-config.ts';
 import { tryAcquireLease, releaseLease } from './services/lease.ts';
 import { getDefaultClient } from './services/providers/tcgpricelookup.ts';
 import { discoverGame, dueForRebalance, markRebalanced, retireDeadMarkets } from './services/providers/discovery.ts';
@@ -208,9 +209,9 @@ async function main() {
       .catch((e) => app.log.warn(e, 'set-year seed failed (release years unavailable)'));
     startFundingLoop(db, app.log);
     startLiquidationLoop(db, app.log);
-    // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds.
-    // Loaded on boot, then refreshed for multi-instance convergence + to pick up admin edits within ~30s.
-    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d)]);
+    // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
+    // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.
+    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d), loadDropConfig(d)]);
     await loadLiveKnobs(db);
     setInterval(() => void loadLiveKnobs(db).catch((e) => app.log.warn(e, 'live-knob refresh failed')), 30_000);
     if (config.realFunds) {

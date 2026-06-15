@@ -198,9 +198,16 @@ async function adminGet(path, adminKey) {
 }
 export const adminSetPrice = (id, body, adminKey) => adminReq(`/admin/markets/${id}/price`, adminKey, body);
 export const adminUnpin = (id, adminKey) => adminReq(`/admin/markets/${id}/unpin`, adminKey);
-// Chat moderation (operator): list mods/muted/banned + audit; grant/revoke MOD per user.
+// Chat moderation (operator): list mods/muted/banned + audit; act on a user (id OR wallet pubkey) —
+// action is grant | revoke | unmute | unban.
 export const adminGetMods = (adminKey) => adminGet('/admin/chat/mods', adminKey);
 export const adminSetMod = (userId, action, adminKey) => adminReq(`/admin/chat/mods/${userId}`, adminKey, { action });
+// Chat admin view: live action-bar thresholds + DROP config/pot bucket.
+export const adminGetChatThresholds = (adminKey) => adminGet('/admin/chat/thresholds', adminKey);
+export const adminSetChatThresholds = (body, adminKey) => adminReq('/admin/chat/thresholds', adminKey, body);
+export const adminGetDropConfig = (adminKey) => adminGet('/admin/chat/drop-config', adminKey);
+export const adminSetDropConfig = (body, adminKey) => adminReq('/admin/chat/drop-config', adminKey, body);
+export const adminGetDrop = (adminKey) => adminGet('/admin/chat/drop', adminKey);
 // Treasury + insurance. /admin/treasury (full PoR view incl. insurance + allocatable surplus) is
 // real-funds-only; /admin/insurance (balance) + the fee-allocation moves work in play-money too.
 export const adminGetTreasury = (adminKey) => adminGet('/admin/treasury', adminKey);

@@ -118,6 +118,13 @@ export const config = {
   chatBigBetUsd: num('CHAT_BIG_BET_USD', 500),
   chatBigWinUsd: num('CHAT_BIG_WIN_USD', 100),
 
+  // DROP timed giveaway (docs/chat-social-spec.md F6). Defaults; live-tunable via the admin CHAT view
+  // (see drop-config.ts). Phase 1 only persists these knobs + shows the pot bucket — the round worker
+  // that consumes them is Phase 2.
+  dropIntervalMin: num('DROP_INTERVAL_MIN', 60), // minutes between drops
+  dropHouseFloorUsd: num('DROP_HOUSE_FLOOR_USD', 250), // house contribution floor per round (USD)
+  dropGdexMin: num('DROP_GDEX_MIN', 500_000), // $GDEX held that grants eligibility (token units)
+
   // Funding: per-accrual rate = skewFactor * (skew / openInterest), bps (the heavy side pays)
   fundingSkewFactorBps: num('FUNDING_SKEW_FACTOR_BPS', 30), // skew-balancing component (max)
   fundingIntervalMs: num('FUNDING_INTERVAL_MS', 60 * 60 * 1000), // hourly

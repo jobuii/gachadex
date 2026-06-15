@@ -151,6 +151,7 @@ export function ChatSidebar({ open, onToggle }) {
   const [composePicker, setComposePicker] = useState(false); // the compose-box emoji popup
   const [mention, setMention] = useState(null); // @mention autocomplete: { query, start, items, active } | null
   const [hasNew, setHasNew] = useState(false); // unseen messages while scrolled up -> "new messages" pill
+  const [dropOpen, setDropOpen] = useState(false); // the DROP teaser modal (F6 Phase 1: coming soon)
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const modMsgTimer = useRef(null);
@@ -366,6 +367,18 @@ export function ChatSidebar({ open, onToggle }) {
         <button className="chat-collapse" onClick={onToggle} title="Hide chat" aria-label="Hide chat">◀</button>
       </div>
 
+      {/* DROP teaser bar — pinned under the header. Phase 1: opens a "coming soon" modal (F6). */}
+      <button type="button" className="chat-drop-bar" onClick={() => setDropOpen(true)} title="DROP — timed giveaway">
+        <span className="drop-headline">
+          <span className="drop-pre">It's about to</span>
+          <span className="drop-word">DROP</span>
+        </span>
+        <span className="drop-pill">
+          <img src="/GachaDexPFP2.png" alt="" />
+          <span>SOON</span>
+        </span>
+      </button>
+
       <div className="chat-scroll-wrap">
       <div className="chat-messages" ref={listRef} onScroll={onScroll}>
         {messages.length === 0 ? (
@@ -556,6 +569,28 @@ export function ChatSidebar({ open, onToggle }) {
       )}
 
       <ProfileHoverCard hover={hover} onEnter={cancelClose} onLeave={closeCardSoon} />
+
+      {dropOpen && (
+        <div className="modal" onClick={() => setDropOpen(false)}>
+          <div className="modal-content drop-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="drop-modal-word">DROP</div>
+            <p className="drop-modal-copy">
+              Every DROP, the house opens a <strong>TCG pack</strong> (bigger when the pot grows) — cards up to{' '}
+              <strong>$20,000 USDC</strong>. One eligible wallet wins the card drawn. Eligible = you've deposited
+              (or hold 500K+ $GDEX).
+            </p>
+            <label className="drop-tip-label">
+              Add to the pot:
+              <span className="drop-tip-row">
+                <input className="wallet-input" type="number" placeholder="USDC" disabled />
+                <button className="btn-primary sm" disabled>Tip</button>
+              </span>
+            </label>
+            <div className="drop-soon">🎁 Coming soon!</div>
+            <button className="btn-secondary sm" onClick={() => setDropOpen(false)}>Close</button>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }
