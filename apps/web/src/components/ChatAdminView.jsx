@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { formatUsd } from '@pokex/pricing';
+import { formatUsd, shortenPubkey } from '@pokex/pricing';
 import * as api from '../lib/api.js';
 import { Stat } from './adminStats.jsx';
 
@@ -29,6 +29,7 @@ export function ChatAdminView({ adminKey }) {
   const [dropCfg, setDropCfg] = useState(null); // { intervalMin, houseFloorUsd, packTiers, gdexMin, gdexMint, defaults }
   const [drop, setDrop] = useState(null); // { bucketE6, recentRounds, totalTippedE6, recentTips }
   const [mods, setMods] = useState(null); // { mods, muted, banned, recentActions }
+  const [chatUsers, setChatUsers] = useState(null); // [{ userId, handle, pubkey, messages, lastAt, isMod }]
   const [err, setErr] = useState(null);
   const [note, setNote] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -50,13 +51,15 @@ export function ChatAdminView({ adminKey }) {
       api.adminGetDropConfig(adminKey),
       api.adminGetDrop(adminKey),
       api.adminGetMods(adminKey),
+      api.adminGetChatUsers(adminKey),
     ])
-      .then(([t, c, d, m]) => {
+      .then(([t, c, d, m, u]) => {
         if (seq !== reqSeq.current) return;
         setThresholds(t);
         setDropCfg(c);
         setDrop(d);
         setMods(m);
+        setChatUsers(u.users || []);
         setErr(null);
       })
       .catch((e) => seq === reqSeq.current && setErr(e.message));
@@ -147,6 +150,28 @@ export function ChatAdminView({ adminKey }) {
     <div className="chatadmin">
       {note && <div className="ref-msg up">{note}</div>}
       {err && <div className="order-error">{err}</div>}
+
+      {/* ---- Active chat users ---- */}
+      <h3 style={{ marginTop: '1rem' }}>Chat users{chatUsers ? ` (${chatUsers.length})` : ''}</h3>
+      <p className="ref-blurb">Everyone who has posted at least one message, with their connected wallet — most active first.</p>
+      <table className="hist-table">
+        <thead>
+          <tr><th>User</th><th>Wallet</th><th>Messages</th><th>Last active</th></tr>
+        </thead>
+        <tbody>
+          {(!chatUsers || chatUsers.length === 0) && (
+            <tr><td colSpan={4} className="hist-empty">No chat activity yet.</td></tr>
+          )}
+          {chatUsers?.map((u) => (
+            <tr key={u.userId}>
+              <td>{u.handle}{u.isMod && <span className="chat-mod-chip">MOD</span>}</td>
+              <td className="muted" title={u.pubkey}>{shortenPubkey(u.pubkey)}</td>
+              <td>{u.messages}</td>
+              <td className="muted">{fmtWhen(u.lastAt)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
 
       {/* ---- Panel 1: action-bar thresholds ---- */}
       <h3 style={{ marginTop: '1rem' }}>Action-bar thresholds</h3>

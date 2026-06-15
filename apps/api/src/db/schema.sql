@@ -119,6 +119,7 @@ ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS meta JSONB;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS deleted_by TEXT;
 CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_messages(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_user ON chat_messages(user_id, kind); -- listChatUsers (admin) groups posters by user
 
 -- Emoji reactions: one row per (message, user, emoji). Toggling deletes/inserts the row.
 CREATE TABLE IF NOT EXISTS chat_reactions (
