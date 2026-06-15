@@ -40,6 +40,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
   const [msg, setMsg] = useState(null);
   const [err, setErr] = useState(null);
   const [treasury, setTreasury] = useState(null); // full PoR view (real-funds); null in play-money
+  const [economics, setEconomics] = useState(null); // ledger-derived house economics (both fund modes)
   const [insuranceE6, setInsuranceE6] = useState(null); // insurance balance (works in both modes)
   const [feesDraft, setFeesDraft] = useState('');
   const [treasDraft, setTreasDraft] = useState('');
@@ -101,19 +102,22 @@ export function AdminPanel({ onGoToMarket } = {}) {
     // The four groups are independent — fetch them concurrently. Each self-guards, so one failing
     // endpoint (e.g. the real-funds-only ones in play money) never aborts the others.
     await Promise.all([
-      // Treasury (real-funds, chain-backed) with a bare-insurance fallback for play money.
+      // House economics (ledger-derived) — works in BOTH modes; drives the Overview boxes + insurance balance.
       (async () => {
         try {
-          const t = await api.adminGetTreasury(key);
-          setTreasury(t);
-          setInsuranceE6(t.insuranceE6);
+          const e = await api.adminGetEconomics(key);
+          setEconomics(e);
+          setInsuranceE6(e.insuranceE6);
+        } catch {
+          setEconomics(null);
+        }
+      })(),
+      // Treasury / proof-of-reserves (real-funds only) — layers the on-chain custody boxes on top.
+      (async () => {
+        try {
+          setTreasury(await api.adminGetTreasury(key));
         } catch {
           setTreasury(null);
-          try {
-            setInsuranceE6((await api.adminGetInsurance(key)).insuranceUusdc);
-          } catch {
-            /* endpoint unavailable in this mode */
-          }
         }
       })(),
       (async () => {
@@ -201,6 +205,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
     setAuthed(false);
     setMarkets([]);
     setTreasury(null);
+    setEconomics(null);
     setInsuranceE6(null);
     setCustodyLimits(null);
     setFeeState(null);
@@ -417,15 +422,15 @@ export function AdminPanel({ onGoToMarket } = {}) {
       pct: `${Math.round((long / (long + short)) * 100)}%/${Math.round((short / (long + short)) * 100)}%`,
     };
   };
-  // Dashboard figures derived once (only meaningful when treasury is loaded).
-  const customerE6 = treasury ? BigInt(treasury.freeE6) + BigInt(treasury.lockedE6) : 0n;
-  // P/L = on-chain treasury minus everything owed to customers. Pending withdrawals were debited from
-  // customer collateral and are queued to pay out — still customer money in flight, NOT house profit —
-  // so subtract them too (else P/L inflates by the pending amount until the payout lands).
-  const pnlE6 = treasury ? BigInt(treasury.onchainE6) - customerE6 - BigInt(treasury.pendingE6) : 0n;
-  const bd = treasury?.pnlBreakdown ?? null; // house P/L breakdown (string-e6 fields); null on an older API
+  // Overview figures. Economics (ledger-derived) render in BOTH fund modes; the custody P/L needs the
+  // on-chain treasury, so it's only computed when the real-funds treasury view is present.
+  const customerE6 = economics ? BigInt(economics.freeE6) + BigInt(economics.lockedE6) : 0n;
+  const bd = economics?.pnlBreakdown ?? null; // house P/L breakdown (string-e6 fields)
   // Net trader P/L from the CUSTOMER's perspective (+ = customers up vs the house) = −(house's realized trader P/L).
   const traderCustomerPnlE6 = bd ? (-BigInt(bd.traderPnlE6)).toString() : null;
+  // Custody P/L = on-chain treasury − customer funds − pending payouts (real-funds only; null otherwise).
+  // Pending withdrawals were already debited from collateral but the cash hasn't left, so subtract them.
+  const pnlE6 = treasury ? BigInt(treasury.onchainE6) - customerE6 - BigInt(treasury.pendingE6) : null;
 
   // Verifying a saved key on mount — render nothing operational until we know it's valid.
   if (checking) {
@@ -495,32 +500,37 @@ export function AdminPanel({ onGoToMarket } = {}) {
         <>
       {/* ---- Overview dashboard ---- */}
       <h3 style={{ marginTop: '1rem' }}>Overview</h3>
-      {treasury ? (
+      {economics ? (
         <div className="admin-stats">
-          <Stat label="Total treasury (hot + cold)" value={treasury.onchainE6} />
-          <Stat label="Hot balance" value={treasury.hotE6} />
-          <Stat label="Cold treasury" value={treasury.coldE6} />
+          {/* on-chain custody — real-funds only (needs the chain RPC) */}
+          {treasury && <Stat label="Total treasury (hot + cold)" value={treasury.onchainE6} />}
+          {treasury && <Stat label="Hot balance" value={treasury.hotE6} />}
+          {treasury && <Stat label="Cold treasury" value={treasury.coldE6} />}
+          {/* house economics — ledger-derived, shown in both fund modes */}
           <Stat label="Total customer balance" value={customerE6.toString()} />
           <div className="admin-stat">
             <div className="lbl">Net trader P/L (+ = customers up)</div>
             <div className="val">{traderCustomerPnlE6 != null ? formatSignedUsd(traderCustomerPnlE6) : '—'}</div>
           </div>
-          <Stat label="…free" value={treasury.freeE6} />
-          <Stat label="…locked in trades" value={treasury.lockedE6} />
-          <Stat label="Pending withdrawals" value={treasury.pendingE6} />
-          <Stat label="Insurance fund" value={treasury.insuranceE6} />
-          <Stat label="Fees earned (house cut)" value={treasury.feeRevenueE6} />
+          <Stat label="…free" value={economics.freeE6} />
+          <Stat label="…locked in trades" value={economics.lockedE6} />
+          {treasury && <Stat label="Pending withdrawals" value={treasury.pendingE6} />}
+          <Stat label="Insurance fund" value={economics.insuranceE6} />
+          <Stat label="Fees earned (house cut)" value={economics.feeRevenueE6} />
           <Stat label="LP's share of fees" value={bd?.feesLpE6} />
-          <Stat label="Funding collected (customers paid in)" value={treasury.fundingCollectedE6} />
-          <Stat label="Funding earned (house net kept)" value={treasury.fundingRevenueE6} />
-          <Stat label="Customer LP in pool" value={treasury.customerLpE6} />
-          <PnlStat label="P/L (treasury − customer funds − pending payouts)" value={pnlE6.toString()} />
+          <Stat label="Funding collected (customers paid in)" value={economics.fundingCollectedE6} />
+          <Stat label="Funding earned (house net kept)" value={economics.fundingRevenueE6} />
+          <Stat label="Customer LP in pool" value={economics.customerLpE6} />
+          {treasury && <PnlStat label="P/L (treasury − customer funds − pending payouts)" value={pnlE6.toString()} />}
         </div>
       ) : (
-        <p className="ref-blurb">Live treasury balances appear in real-funds mode (this deployment is play money).</p>
+        <p className="ref-blurb">Operator metrics load once your admin key is verified.</p>
+      )}
+      {economics && !treasury && (
+        <p className="ref-blurb">On-chain custody (hot / cold balances, proof-of-reserves) appears in real-funds mode.</p>
       )}
 
-      {treasury && bd && (
+      {bd && (
         <div className="pnl-breakdown">
           <div className="pnl-breakdown-title">House P/L breakdown — where the P/L comes from</div>
           <table className="pnl-breakdown-table">
@@ -542,7 +552,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
               <tr className="pnl-breakdown-total"><td>Total (house equity)</td><td className="num">{formatSignedUsd(bd.totalE6)}</td></tr>
             </tbody>
           </table>
-          {bd.totalE6 !== pnlE6.toString() && (
+          {treasury && pnlE6 != null && bd.totalE6 !== pnlE6.toString() && (
             <p className="ref-blurb" style={{ marginTop: '0.4rem' }}>
               Custody P/L (treasury − customer − pending) is {formatSignedUsd(pnlE6.toString())} — an unreconciled
               difference of {formatSignedUsd((pnlE6 - BigInt(bd.totalE6)).toString())} (settles as deposits sweep).
