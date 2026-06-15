@@ -3,7 +3,8 @@
 A **leveraged perpetual-futures exchange on Pokémon-card prices**, settled in USDC. Trade
 perps on individual cards **and** on basket **indices** (Top 100 / Top 250, with Graded and
 Sealed planned), with an index-anchored synthetic mark, a pooled-LP counterparty, funding,
-and liquidations — plus a leaderboard and a referral system.
+and liquidations — plus a leaderboard, referrals, and a **live chat & social layer** (reactions,
+rank badges, presence, moderation, and a **DROP** giveaway pot).
 
 > **Two run modes.** The same engine runs on **play money** (a faucet, for demo/testing) or on **real
 > funds** — USDC custody with on-chain deposits/withdrawals on **Solana mainnet** — selected by the
@@ -28,6 +29,11 @@ and liquidations — plus a leaderboard and a referral system.
 - **Provide liquidity** to the LP pool (the counterparty to all trades) and earn fees + trader PnL.
 - **Leaderboard** — traders ranked by net realized PnL (with equity + volume).
 - **Referrals** — every account gets a shareable code; redeeming one pays both sides a play-USDC bonus.
+- **Chat & socialize** — a live chat rail with emoji reactions, leaderboard **rank badges**, an
+  online-presence count, and **BIG BET / BIG WIN** action bars that broadcast notable trades; moderated
+  (mods + operator can delete / mute / ban).
+- **DROP** — a timed TCG-pack giveaway: tip USDC into the pot. (Teaser shipped; the draw/prize mechanic
+  is in progress — see [Chat, social & DROP](#chat-social--drop).)
 - Everything is **server-authoritative** and streamed live over WebSocket; the browser is a renderer.
 
 ---
@@ -183,7 +189,8 @@ by construction and never gated.
 - **Idempotency.** Every order/close carries a client key; replays (even concurrent ones) return the
   prior result instead of double-executing.
 - **Chart of accounts.** `USER_COLLATERAL`, `USER_POSITION_MARGIN`, `LP_POOL`, `INSURANCE_FUND`,
-  `FEE_REVENUE`, `FUNDING_POOL`, `PNL_CLEARING`, `FAUCET_SOURCE`.
+  `FEE_REVENUE`, `FUNDING_POOL`, `PNL_CLEARING`, `FAUCET_SOURCE`, `TREASURY_USDC` (real-funds custody
+  mirror), `DROP_POOL` (the DROP giveaway pot).
 
 ---
 
@@ -241,6 +248,57 @@ Deep dives: **[docs/real-funds-custody-plan.md](docs/real-funds-custody-plan.md)
 
 ---
 
+## Chat, social & DROP
+
+A real-time **chat rail** runs alongside the exchange — server-authoritative like everything else,
+streamed over the public `chat` WebSocket channel; the browser only renders. Built feature by feature
+(spec: [docs/chat-social-spec.md](docs/chat-social-spec.md)):
+
+- **Live chat** — post + read messages, with @-mention autocomplete and an emoji picker. History is
+  persisted (`chat_messages`); the rail re-hydrates over REST and stays live over WS.
+- **Action bars (BIG BET / BIG WIN).** The trading engine, *after* a trade commits (non-fatal to the
+  trade), broadcasts a chat event when an open's notional clears `CHAT_BIG_BET_USD` (gold) or a close's
+  realized profit clears `CHAT_BIG_WIN_USD` (green). Both are live-editable operator knobs.
+- **Reactions.** Emoji reactions on messages (`chat_reactions`), broadcast as authoritative counts.
+- **Identity.** A leaderboard **rank badge** (👑#1 / 🥈 / 🥉 / TOP 10 / TOP 100) sits next to each handle,
+  from a ~60s-cached rank map; cumulative-volume **levels** back it (L1–L6).
+- **Presence.** A live "● N online" count (connected sockets, including anonymous viewers).
+- **Moderation.** Mods (and the operator via the admin key) soft-delete messages and mute/ban users;
+  every action is an append-only audit row (`chat_mod_actions`). Mods act in-chat; the operator manages
+  everything from the admin **CHAT** view. Mute/ban enforcement lives in the post path.
+- **Readability.** The arcade skin renders chat text in a legible companion font (Pixelify Sans) while
+  keeping Press Start 2P for brand/headers; messages group by consecutive author, with a hover toolbar
+  (reply / react / mod) and a "new messages ↓" jump-to-bottom pill.
+
+### DROP — the timed-giveaway pot
+
+**DROP** is a flip.gg-style giveaway, built as a teaser first. A slim **DROP bar** pins to the top of the
+chat (animated falling-`G` brand marks, "It's about to DROP") and opens a modal explaining the mechanic:
+*the house opens a TCG GACHA pack — one eligible wallet wins the card drawn.* The **pot** is the
+`DROP_POOL` ledger account:
+
+- **Player tips.** Signed-in users tip **real USDC** into the pot (`USER_COLLATERAL → DROP_POOL`,
+  validated against their available balance under a row lock, recorded in `drop_tips`). Gated by
+  `DROP_TIPS_ENABLED` — **off by default**, so the pot never takes real money until an operator opts in.
+- **Pot is operator-only.** The running pot total is shown in the admin CHAT view (plus a per-customer
+  **Tips** column in the Customers view) but is **not** exposed to customers (UI, public API, or WS).
+- **Deferred (Phase 2):** the round worker (single-leader via a `worker_leases` lease, scheduled by
+  `DROP_INTERVAL`), the on-chain draw of a random eligible wallet (deposited **or** holding ≥ `DROP_GDEX_MIN`
+  $GDEX), buying/opening the pack via the **rare.win** API, and the NFT prize (sell-back for USDC or keep).
+  These need rare.win API access and are not built yet.
+
+### Admin **CHAT** view (3rd operator tab)
+
+A dedicated operator tab alongside Main + Customers, all under the admin key:
+
+- **Thresholds** — the BIG BET / BIG WIN knobs (live `settings`).
+- **DROP config + pot** — interval / house-floor / pack-tier / GDEX-min knobs, the read-only eligibility
+  mint, the live `DROP_POOL` pot balance, total tipped, and recent tips.
+- **Moderation** — grant/revoke MOD (by wallet **or** user id), the muted/banned lists with unmute/unban,
+  and the mod-action audit log.
+
+---
+
 ## Architecture
 
 ```
@@ -292,9 +350,10 @@ the web app, so the liquidation price / fees the user previews are exactly what 
 `users · sessions · auth_nonces` · `accounts · ledger_entries · balances` (double-entry core) ·
 `markets · oracle_prices · marks · index_constituents · index_divisors` (pricing) ·
 `orders · fills · positions · funding_rates · liquidations` (trading) ·
-`lp_pool · lp_positions` (liquidity) · `deposit_addresses · withdrawals · system_flags · settings`
-(real-funds custody + operator config). The same `schema.sql` runs on PGlite locally and on managed
-Postgres in prod; it's idempotent and applied on boot (`db/migrate.ts`).
+`lp_pool · lp_positions` (liquidity) · `deposit_addresses · withdrawals · system_flags · settings ·
+worker_leases` (real-funds custody + operator config) · `chat_messages · chat_reactions ·
+chat_mod_actions · drop_tips` + mod flags on `users` (chat & social). The same `schema.sql` runs on
+PGlite locally and on managed Postgres in prod; it's idempotent and applied on boot (`db/migrate.ts`).
 
 ---
 
@@ -311,11 +370,13 @@ Postgres in prod; it's idempotent and applied on boot (`db/migrate.ts`).
 | `GET /lp/pool` · `GET /lp/position` · `POST /lp/deposit` · `POST /lp/withdraw` | mixed | LP pool state + provide/withdraw liquidity |
 | `GET /leaderboard` · `GET /referral/me` · `POST /referral/redeem` | mixed | Leaderboard (public, optional viewer); referral code + redeem |
 | `GET /wallet/deposit-address` · `POST /wallet/withdraw/nonce` · `POST /wallet/withdraw` · `GET /wallet/transactions` | yes | Real-funds custody: deposit address, withdraw (wallet step-up), wallet history |
-| `/admin/markets/:id/price` · `/admin/treasury` · `/admin/insurance/*` · `/admin/custody-limits` · `/admin/withdrawals/*` · `/admin/freeze` | admin key | Operator ops (manual pricing always; custody ops under real funds) — see [docs/ops-runbook.md](docs/ops-runbook.md) |
+| `/admin/markets/:id/price` · `/admin/treasury` · `/admin/insurance/*` · `/admin/custody-limits` · `/admin/withdrawals/*` · `/admin/freeze` · `/admin/customers` · `/admin/chat/*` | admin key | Operator ops (manual pricing always; custody ops under real funds) + Customers & CHAT view — see [docs/ops-runbook.md](docs/ops-runbook.md) |
+| `GET /chat` · `POST /chat` · `/chat/messages/:id/react` · `/chat/ranks` · `/chat/profile/:id` · `GET /chat/drop/pot` · `POST /chat/drop/tip` · mod routes | mixed | Live chat: read/post, reactions, rank map, profile card, DROP pot tips (real USDC), mod actions |
 | `GET /health` | public | Health check |
 
-**WebSocket** `GET /ws` — subscribe to `mark:{id}`, `stats:{id}`, `oi:{id}`, `funding:{id}` (public)
-and `positions:{userId}`, `orders:{userId}`, `balance:{userId}`, `liquidations:{userId}`, `lp:{userId}`
+**WebSocket** `GET /ws` — subscribe to `mark:{id}`, `stats:{id}`, `oi:{id}`, `funding:{id}` and the
+`chat` channel (messages, action bars, reactions, deletes, presence) — all public — and
+`positions:{userId}`, `orders:{userId}`, `balance:{userId}`, `liquidations:{userId}`, `lp:{userId}`
 (after sending `{op:'auth', token}`).
 
 ---
@@ -348,6 +409,10 @@ to the browser). Copy `apps/api/.env.example` → `apps/api/.env`; every key has
 | `OPEN_FEE_BPS` / `CLOSE_FEE_BPS` / `FEE_LP_SHARE_PCT` | `10` / `10` / `50` | Trading fees + LP share |
 | `FUNDING_SKEW_FACTOR_BPS` / `FUNDING_INTERVAL_MS` | `30` / `1h` | Funding rate cap + cadence |
 | `LIQ_FEE_BPS` / `LIQUIDATION_SWEEP_MS` / `ORACLE_STALE_MS` | `100` / `5s` / `36h` | Liquidation penalty, sweep, staleness halt |
+| `CHAT_BIG_BET_USD` / `CHAT_BIG_WIN_USD` | `500` / `100` | Chat action-bar thresholds (USD; live-editable in the admin CHAT view) |
+| `DROP_TIPS_ENABLED` | `false` | Opens **real-USDC** player tipping into the DROP pot — keep off until the draw/payout ships |
+| `DROP_TIP_MIN_USD` / `DROP_TIP_MAX_USD` | `1` / `10000` | Per-tip bounds (USD) |
+| `DROP_INTERVAL_MIN` / `DROP_HOUSE_FLOOR_USD` / `DROP_GDEX_MIN` | `60` / `250` / `500000` | DROP round knobs (Phase 2 mechanic) |
 
 ---
 
@@ -409,11 +474,15 @@ The engine is complete end to end — ledger → SIWS auth → oracle/marks → 
 per-user deposit addresses + sweeps, hot/cold treasury with proof-of-reserves + auto-freeze,
 withdrawals (manual + capped auto-approve), the insurance fund, and live-editable custody limits. The
 pool-protection engine (adaptive depth, NAV-relative OI caps, pool-health gate, ADL) ships too, and a
-marketing landing page is the public entry point.
+marketing landing page is the public entry point. A **chat & social layer** ships alongside — live chat
+with reactions, leaderboard rank badges, presence, and moderation, plus the **DROP** giveaway-pot teaser
+with real-USDC player tipping (flag-gated, **off by default**).
 
 **Operator responsibility before real money on mainnet:** the security audit, KYC/AML, and geofencing
 are yours to put in place — the code only gates on `ALLOW_MAINNET_FUNDS=true`, it does not verify them.
 
-Still deferred: a real **Graded / Sealed** price feed (needs a licensed source), **multi-game** markets
-(One Piece / MTG), **limit / stop** orders, a Go engine rewrite, and the **KMS-held deposit seed**
-(`DEPOSIT_SEED_KMS_REF` is recognized but not yet implemented — use `DEPOSIT_MASTER_SEED` for now).
+Still deferred: the full **DROP** round mechanic (the scheduled draw, the rare.win pack-open, and the
+on-chain NFT prize — needs rare.win API access), a real **Graded / Sealed** price feed (needs a licensed
+source), **multi-game** markets (One Piece / MTG), **limit / stop** orders, a Go engine rewrite, and the
+**KMS-held deposit seed** (`DEPOSIT_SEED_KMS_REF` is recognized but not yet implemented — use
+`DEPOSIT_MASTER_SEED` for now).
