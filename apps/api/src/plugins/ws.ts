@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import websocket from '@fastify/websocket';
-import { onMessage } from '../services/bus.ts';
+import { onMessage, publish } from '../services/bus.ts';
 import { verifyAccessToken } from '../services/auth.ts';
 import { WS_PRIVATE_CHANNELS } from '@pokex/shared-types';
 
@@ -14,6 +14,21 @@ interface Sock {
 // Per-user channels are private; a client may only subscribe to its OWN.
 const isPrivate = (ch: string) => WS_PRIVATE_CHANNELS.some((p) => ch.startsWith(p + ':'));
 
+/** Frame + send to a socket, swallowing the throw if the client has gone. */
+function send(socket: Sock, ch: string, type: string, data: unknown, seq = 0): void {
+  try { socket.send(JSON.stringify({ ch, type, seq, data })); } catch { /* client gone */ }
+}
+
+// Presence: count of live WS connections on THIS instance (incl. anonymous viewers), broadcast on the
+// public `chat` channel as a `presence` event. Bursts of connect/disconnect coalesce into one broadcast.
+// Multi-instance shows each instance's own count, not an aggregate — acceptable for now.
+let onlineCount = 0;
+let presenceTimer: ReturnType<typeof setTimeout> | null = null;
+function broadcastPresence(): void {
+  if (presenceTimer) return;
+  presenceTimer = setTimeout(() => { presenceTimer = null; publish('chat', 'presence', { online: onlineCount }); }, 250);
+}
+
 /**
  * WebSocket hub at /ws. Public channels (mark/stats/oi/funding) are open. Private per-user
  * channels require authentication: the client sends an {op:'auth', token} message and may only
@@ -26,6 +41,8 @@ export async function registerWs(app: FastifyInstance): Promise<void> {
   app.get('/ws', { websocket: true }, (socket: Sock) => {
     const channels = new Set<string>();
     const seq = new Map<string, number>();
+    onlineCount += 1;
+    broadcastPresence();
     let userId: string | null = null;
     let authExpMs = 0; // when the auth'd token expires (ms); 0 = not authed
     let authReady: Promise<void> = Promise.resolve();
@@ -42,11 +59,7 @@ export async function registerWs(app: FastifyInstance): Promise<void> {
       }
       const n = (seq.get(m.channel) ?? 0) + 1;
       seq.set(m.channel, n);
-      try {
-        socket.send(JSON.stringify({ ch: m.channel, type: m.type, seq: n, data: m.data }));
-      } catch {
-        /* client gone */
-      }
+      send(socket, m.channel, m.type, m.data, n);
     });
 
     socket.on('message', async (buf: Buffer) => {
@@ -62,11 +75,7 @@ export async function registerWs(app: FastifyInstance): Promise<void> {
           .then((r) => { userId = r.userId; authExpMs = r.exp * 1000; })
           .catch(() => { userId = null; authExpMs = 0; });
         await authReady;
-        try {
-          socket.send(JSON.stringify({ ch: '_', type: 'authed', seq: 0, data: { ok: authed() } }));
-        } catch {
-          /* noop */
-        }
+        send(socket, '_', 'authed', { ok: authed() });
       } else if (msg.op === 'sub' && Array.isArray(msg.channels)) {
         await authReady;
         for (const c of msg.channels) {
@@ -76,18 +85,25 @@ export async function registerWs(app: FastifyInstance): Promise<void> {
             channels.add(c);
           }
         }
+        // a chat subscriber gets the current online count immediately (the broadcast only reaches existing subs)
+        if (channels.has('chat')) send(socket, 'chat', 'presence', { online: onlineCount });
       } else if (msg.op === 'unsub' && Array.isArray(msg.channels)) {
         for (const c of msg.channels) channels.delete(c);
       } else if (msg.op === 'ping') {
-        try {
-          socket.send(JSON.stringify({ ch: '_', type: 'pong', seq: 0, data: { ts: Date.now() } }));
-        } catch {
-          /* noop */
-        }
+        send(socket, '_', 'pong', { ts: Date.now() });
       }
     });
 
-    socket.on('close', () => unsub());
-    socket.on('error', () => unsub());
+    // close + error can both fire — guard so a socket is only counted out once
+    let closed = false;
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      unsub();
+      onlineCount -= 1;
+      broadcastPresence();
+    };
+    socket.on('close', cleanup);
+    socket.on('error', cleanup);
   });
 }

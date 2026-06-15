@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest } from '@pokex/shared-types';
+import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, ModGrantRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { rl } from './_ratelimit.ts';
@@ -10,6 +10,7 @@ import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFa
 import { listCustomers } from '../services/customers.ts';
 import { marketStats } from '../services/admin-stats.ts';
 import { restrictionsReport } from '../services/restrictions.ts';
+import { setMod, listModState } from '../services/chat-mod.ts';
 import { getUserPositions, liquidateAllEligible } from '../services/engine.ts';
 import { adminClosePosition, adminCloseUserPositions, adminCloseAllPositions } from '../services/admin-close.ts';
 
@@ -128,4 +129,13 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   // Price-confidence gate (oracle): which card markets are restricted (reduce-only) right now, and which
   // flipped INTO restricted today. Drives the admin "Restricted" badges + the daily transitions panel.
   app.get('/admin/restrictions', rl(config.routeRateLimits.admin), async () => restrictionsReport(await getDb()));
+
+  // Chat moderation (operator path; the full CHAT admin view consumes these). GET current mods/muted/
+  // banned + recent audit; POST grants/revokes MOD per user. In-chat mod actions live on /chat/* (mod-auth).
+  app.get('/admin/chat/mods', rl(config.routeRateLimits.admin), async () => listModState(await getDb()));
+  app.post('/admin/chat/mods/:userId', rl(config.routeRateLimits.admin), async (req) => {
+    const { userId } = req.params as { userId: string };
+    const { action } = ModGrantRequest.parse(req.body);
+    return setMod(await getDb(), userId, action === 'grant', null); // null acting-mod = operator (admin key)
+  });
 }

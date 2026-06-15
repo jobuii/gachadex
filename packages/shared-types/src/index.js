@@ -182,6 +182,26 @@ export const UsernameRequest = z.object({
   username: z.string().trim().min(3).max(20).regex(/^[A-Za-z0-9_-]+$/, 'letters, numbers, _ and - only'),
 });
 
+// --- chat moderation ---------------------------------------------------------
+
+// Mute a user for N minutes (1 min – 30 days); omitted -> server default.
+export const ChatMuteRequest = z.object({
+  minutes: z.number().int().min(1).max(43_200).optional(),
+});
+
+// Operator grant/revoke moderator status (admin-key route).
+export const ModGrantRequest = z.object({
+  action: z.enum(['grant', 'revoke']),
+});
+
+// The allowed chat reaction emojis — shared by the server (validation) and the client (picker).
+export const CHAT_REACTIONS = ['👍', '❤️', '😂', '🔥', '🚀', '💯', '😮', '😢'];
+
+// Toggle a reaction on a message. The emoji must be one of CHAT_REACTIONS (re-checked server-side).
+export const ReactRequest = z.object({
+  emoji: z.string().min(1).max(16),
+});
+
 // --- auth (SIWS) -------------------------------------------------------------
 
 export const NonceRequest = z.object({ pubkey: z.string().min(32) });

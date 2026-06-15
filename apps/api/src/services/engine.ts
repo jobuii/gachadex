@@ -7,10 +7,13 @@ import { getMarketById, type MarketRow } from './markets.ts';
 import { recomputeMark } from './marks.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, getBalance, postTxn } from './ledger.ts';
 import { getFeeBps, getLiqFeeBps } from './fees.ts';
+import { getBigBetUsd, getBigWinUsd } from './chat-config.ts';
+import { emitChatEvent, type ChatEventInput } from './chat.ts';
 import { refreshReserved } from './lp.ts';
 import { getCumulativeFundingE6, settlePositionFunding } from './funding.ts';
 import { openNotionalBySide } from './oi.ts';
 import { publish } from './bus.ts';
+import { usdc } from '../money.ts';
 
 /** Charge a trading fee, split between LPs and platform revenue (a balanced ledger txn). */
 async function chargeFee(q: Queryer, userId: string, feeAmt: bigint, reason: string, refId: string): Promise<void> {
@@ -313,7 +316,10 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
   const prior = await db.query<{ id: string }>(`SELECT id FROM orders WHERE user_id=$1 AND idempotency_key=$2`, [userId, input.idempotencyKey]);
   if (prior.rows[0]) return replayOpen(db, prior.rows[0].id);
 
-  return withMarketLock(input.marketId, () =>
+  // BIG BET action bar — captured inside the tx (where the notional is known), broadcast AFTER commit so
+  // a chat failure can never roll back the trade. Stays null on a duplicate/replay, so we don't re-announce.
+  let bigBet: ChatEventInput | null = null;
+  const result = await withMarketLock(input.marketId, () =>
     db.tx(async (q) => {
       await advisoryXactLock(q, input.marketId); // DB-level single-writer per market
       const market = await validateMarketAndOrder(q, input);
@@ -426,9 +432,15 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
       await refreshMarketState(q, market, indexE6);
       publish(`positions:${userId}`, 'update', { marketId: market.id });
       publish(`balance:${userId}`, 'update', {});
+      // BIG BET fires at "$X or more" (>=); BIG WIN fires at "more than $X" (>) — asymmetry is intentional.
+      if (notion >= usdc(getBigBetUsd())) {
+        bigBet = { userId, marketId: market.id, variant: 'big_bet', side: input.side, notionalE6: notion };
+      }
       return { orderId, positionId };
     }),
   );
+  if (bigBet) await emitChatEvent(db, bigBet).catch(() => {}); // post-commit, non-fatal
+  return result;
 }
 
 export async function closePosition(db: Db, userId: string, input: CloseInput): Promise<{ orderId: string; realizedPnlUusdc: string; closedQtyE6: string; remainingQtyE6: string }> {
@@ -439,7 +451,10 @@ export async function closePosition(db: Db, userId: string, input: CloseInput): 
   if (!pos0 || pos0.user_id !== userId) throw new HttpError(404, 'position not found');
   if (pos0.status !== 'open') throw new HttpError(400, 'position not open');
 
-  return withMarketLock(pos0.market_id, () =>
+  // BIG WIN action bar — captured in the tx (where realized PnL + the closed leg's margin are known),
+  // broadcast AFTER commit (non-fatal). Stays null on a duplicate/replay, so we don't re-announce.
+  let bigWin: ChatEventInput | null = null;
+  const result = await withMarketLock(pos0.market_id, () =>
     db.tx(async (q) => {
       await advisoryXactLock(q, pos0.market_id); // DB-level single-writer per market
       const pos = await getOpenPosition(q, userId, pos0.market_id, pos0.side);
@@ -522,9 +537,15 @@ export async function closePosition(db: Db, userId: string, input: CloseInput): 
       await refreshMarketState(q, market, indexE6);
       publish(`positions:${userId}`, 'update', { marketId: market.id });
       publish(`balance:${userId}`, 'update', {});
+      if (pnl > usdc(getBigWinUsd())) {
+        const roeBps = marginRel > 0n ? Number((pnl * 10_000n) / marginRel) : 0; // return on the closed leg's margin
+        bigWin = { userId, marketId: market.id, variant: 'big_win', side: pos.side as 'long' | 'short', notionalE6: notional(closeQty, markE6), pnlE6: pnl, roeBps };
+      }
       return { orderId, realizedPnlUusdc: pnl.toString(), closedQtyE6: closeQty.toString(), remainingQtyE6: remQty.toString() };
     }),
   );
+  if (bigWin) await emitChatEvent(db, bigWin).catch(() => {}); // post-commit, non-fatal
+  return result;
 }
 
 // ---- read models ----------------------------------------------------------

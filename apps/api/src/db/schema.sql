@@ -111,7 +111,41 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS reply_to TEXT REFERENCES chat_messages(id);
+-- 'message' (a user post) | 'event' (a BIG BET / BIG WIN action bar); meta carries the structured payload
+-- the client renders the bar from (variant, side, notionalE6, pnlE6, roeBps, marketName).
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'message';
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS meta JSONB;
+-- moderation: soft-delete (the row stays for audit; listChat filters it out). deleted_by = mod user id.
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS deleted_by TEXT;
 CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_messages(created_at DESC);
+
+-- Emoji reactions: one row per (message, user, emoji). Toggling deletes/inserts the row.
+CREATE TABLE IF NOT EXISTS chat_reactions (
+  message_id TEXT NOT NULL REFERENCES chat_messages(id),
+  user_id    TEXT NOT NULL REFERENCES users(id),
+  emoji      TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (message_id, user_id, emoji)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_reactions_msg ON chat_reactions(message_id);
+
+-- Chat moderation flags on users.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_mod BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_muted_until TIMESTAMPTZ; -- muted while > now()
+ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_banned BOOLEAN NOT NULL DEFAULT false;
+
+-- Mod-action audit trail. mod_user_id NULL = operator (admin key). Append-only.
+CREATE TABLE IF NOT EXISTS chat_mod_actions (
+  id                TEXT PRIMARY KEY,
+  mod_user_id       TEXT REFERENCES users(id),       -- the acting mod; NULL for operator (admin key)
+  action            TEXT NOT NULL,                   -- delete|mute|unmute|ban|unban|grant_mod|revoke_mod
+  target_user_id    TEXT REFERENCES users(id),
+  target_message_id TEXT,
+  detail            TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_chat_mod_actions_created ON chat_mod_actions(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS auth_nonces (
   nonce      TEXT PRIMARY KEY,

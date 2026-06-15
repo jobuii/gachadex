@@ -1,5 +1,5 @@
 import { config } from '../config.ts';
-import type { Db } from '../db/client.ts';
+import { liveKnob } from './live-knob.ts';
 
 /**
  * Live-editable trading-engine knobs (basis points; 1 bps = 0.01%). Three knobs share one mechanism:
@@ -28,34 +28,11 @@ function bpsValidator(max: number, label: string) {
 export const validateFeeBps = bpsValidator(MAX_FEE_BPS, 'fee');
 export const validateFundingFactorBps = bpsValidator(MAX_FUNDING_FACTOR_BPS, 'funding factor');
 
-/** One live-editable bps knob: a settings key + a config default, cached in memory for synchronous reads.
+/** One live-editable bps knob over the shared liveKnob mechanism (settings-backed, cached for sync reads).
  *  `validate` bounds it (fees vs funding have different ceilings). */
 function liveBpsKnob(settingKey: string, defaultBps: number, validate: (v: unknown) => number) {
-  let current = defaultBps;
-  const load = async (db: Db): Promise<number> => {
-    const r = await db.query<{ value: string }>(`SELECT value FROM settings WHERE key = $1`, [settingKey]);
-    // A stored value that somehow fails validation falls back to the default rather than poisoning the knob.
-    try {
-      current = r.rows[0] ? validate(r.rows[0].value) : defaultBps;
-    } catch {
-      current = defaultBps;
-    }
-    return current;
-  };
-  return {
-    get: (): number => current,
-    load,
-    set: async (db: Db, bps: unknown): Promise<number> => {
-      const v = validate(bps);
-      await db.query(
-        `INSERT INTO settings (key, value) VALUES ($1, $2)
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-        [settingKey, String(v)],
-      );
-      return load(db);
-    },
-    view: (): { bps: number; default: number } => ({ bps: current, default: defaultBps }),
-  };
+  const k = liveKnob(settingKey, defaultBps, validate);
+  return { get: k.get, load: k.load, set: k.set, view: (): { bps: number; default: number } => ({ bps: k.get(), default: k.default }) };
 }
 
 const tradingFee = liveBpsKnob('trading_fee_bps', config.feeBps, validateFeeBps);

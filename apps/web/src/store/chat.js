@@ -24,6 +24,9 @@ export const persistChatOpen = (open) => {
 export const useChat = create((set, get) => ({
   messages: [],
   unread: 0,
+  online: 0, // live count of connected viewers (from the WS presence event)
+  modState: {}, // userId -> { mutedUntil, banned } — live mute/ban snapshots from the server
+  ranks: {}, // userId -> leaderboard rank (top 100 only) — drives chat rank badges
   _started: false,
 
   start() {
@@ -32,8 +35,42 @@ export const useChat = create((set, get) => ({
     ensureConnected();
     subscribe(['chat']);
     api.getChat().then((r) => set({ messages: r.messages })).catch(() => {});
+    // rank badges: poll the cached top-100 map on start, then refresh every 60s
+    const loadRanks = () => api.getChatRanks().then((r) => set({ ranks: r.ranks || {} })).catch(() => {});
+    loadRanks();
+    setInterval(loadRanks, 60_000);
     onMessage((m) => {
-      if (m.ch !== 'chat' || m.type !== 'message' || !m.data) return;
+      if (m.ch !== 'chat' || !m.data) return;
+      // a moderator deleted a message — drop it everywhere, no unread bump
+      if (m.type === 'delete') {
+        set((s) => ({ messages: s.messages.filter((x) => x.id !== m.data.id) }));
+        return;
+      }
+      // live online count (connected viewers)
+      if (m.type === 'presence') {
+        set({ online: m.data?.online ?? 0 });
+        return;
+      }
+      // a user's mute/ban changed — record the snapshot (drives the disabled input + mod toggle buttons)
+      if (m.type === 'modstate') {
+        set((s) => ({ modState: { ...s.modState, [m.data.userId]: { mutedUntil: m.data.mutedUntil, banned: m.data.banned } } }));
+        return;
+      }
+      // a reaction was toggled — apply the emoji's authoritative new count to that message
+      if (m.type === 'reaction') {
+        set((s) => ({
+          messages: s.messages.map((x) => {
+            if (x.id !== m.data.messageId) return x;
+            const reactions = { ...(x.reactions || {}) };
+            if (m.data.count > 0) reactions[m.data.emoji] = m.data.count;
+            else delete reactions[m.data.emoji];
+            return { ...x, reactions };
+          }),
+        }));
+        return;
+      }
+      // 'message' = a user post; 'event' = a BIG BET / BIG WIN action bar (rendered inline in the rail)
+      if (m.type !== 'message' && m.type !== 'event') return;
       set((s) =>
         s.messages.some((x) => x.id === m.data.id)
           ? s
@@ -54,5 +91,17 @@ export const useChat = create((set, get) => ({
   // optimistically relabel a user's already-rendered messages after they change their username
   relabel(userId, handle) {
     set((s) => ({ messages: s.messages.map((m) => (m.userId === userId ? { ...m, handle } : m)) }));
+  },
+
+  // optimistic: highlight the viewer's own reaction toggle immediately; the WS 'reaction' echo sets the count
+  reactMine(messageId, emoji, mine) {
+    set((s) => ({
+      messages: s.messages.map((x) => {
+        if (x.id !== messageId) return x;
+        const my = new Set(x.myReactions || []);
+        if (mine) my.add(emoji); else my.delete(emoji);
+        return { ...x, myReactions: [...my] };
+      }),
+    }));
   },
 }));
