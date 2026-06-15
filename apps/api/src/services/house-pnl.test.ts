@@ -1,5 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 
 process.env.PGLITE_DIR = 'memory://';
 process.env.DATABASE_URL = '';
@@ -9,7 +10,9 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
 const { getOrCreateSystemAccount, postTxn } = await import('./ledger.ts');
-const { housePnlBreakdown } = await import('./house-pnl.ts');
+const { housePnlBreakdown, houseEconomics } = await import('./house-pnl.ts');
+const { creditFaucet } = await import('./faucet.ts');
+const { lpDeposit } = await import('./lp.ts');
 const { usdc } = await import('../money.ts');
 
 await initDb();
@@ -48,4 +51,26 @@ test('housePnlBreakdown decomposes house equity by source and the lines reconcil
   // the displayed lines must sum EXACTLY to the total (the whole point of the card)
   const sum = BigInt(a.feesHouseE6) + BigInt(a.feesLpE6) + BigInt(a.fundingNetE6) + BigInt(a.traderPnlE6) + BigInt(a.lpOtherE6) + BigInt(a.insuranceE6);
   assert.equal(sum, BigInt(a.totalE6), 'fees(house+LP) + funding + traderPnl + lpOther + insurance = total');
+});
+
+test('houseEconomics is ledger-derived (no chain / no real-funds needed) and mirrors its sources', async () => {
+  const before = await houseEconomics(db);
+  // a fresh customer funds $1000 and moves $200 into the LP pool — pure ledger activity
+  const u = randomUUID();
+  await db.query(`INSERT INTO users(id, solana_pubkey) VALUES($1, $2)`, [u, 'pk-econ-' + u.slice(0, 8)]);
+  await creditFaucet(db, u, 1000);
+  await lpDeposit(db, u, usdc(200));
+  const after = await houseEconomics(db);
+
+  // free collateral rose by exactly $800 ($1000 faucet − $200 into the pool)
+  assert.equal(BigInt(after.freeE6) - BigInt(before.freeE6), usdc(800));
+  // customer LP value reflects the new $200 stake
+  assert.ok(BigInt(after.customerLpE6) - BigInt(before.customerLpE6) >= usdc(200) - 5n, 'LP value reflects the deposit');
+  // the economics fields are the single source of truth shared with the P/L breakdown
+  assert.equal(after.feeRevenueE6, after.pnlBreakdown.feesHouseE6);
+  assert.equal(after.fundingRevenueE6, after.pnlBreakdown.fundingNetE6);
+  assert.equal(after.insuranceE6, after.pnlBreakdown.insuranceE6);
+  // gross funding collected is never below net kept (net = gross − funding paid back out)
+  assert.ok(BigInt(after.fundingCollectedE6) >= BigInt(after.fundingRevenueE6));
+  assert.equal(typeof after.pnlBreakdown.totalE6, 'string');
 });

@@ -1,5 +1,7 @@
 import type { Db } from '../db/client.ts';
 import { getOrCreateSystemAccount, getBalance } from './ledger.ts';
+import { customerFunds } from './custody/treasury.ts';
+import { customerLpTotal } from './lp.ts';
 
 /**
  * House P/L breakdown for the admin Overview. Decomposes the platform's net equity into where it
@@ -15,6 +17,7 @@ export interface HousePnlBreakdown {
   feesHouseE6: string; // FEE_REVENUE balance — the house's cut of trading fees (net of insurance moves)
   feesLpE6: string; // the LP pool's share of trading fees (OPEN_FEE/CLOSE_FEE legs on LP_POOL)
   fundingNetE6: string; // net funding the house kept (FUNDING legs on LP_POOL)
+  fundingGrossE6: string; // gross funding customers paid in (positive FUNDING legs on LP_POOL)
   traderPnlE6: string; // net trader P/L the house absorbed (REALIZED_PNL legs on LP_POOL; +ve = house gained)
   liqPenaltiesE6: string; // liquidation penalties (LIQUIDATION_FEE legs; sit inside INSURANCE_FUND)
   insuranceE6: string; // INSURANCE_FUND balance (incl. liq penalties + insurance transfers)
@@ -33,10 +36,11 @@ export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
     getBalance(db, fee),
     getBalance(db, ins),
     // LP_POOL legs split by source (CASE, not FILTER, for PGlite compatibility).
-    db.query<{ fees: string; funding: string; pnl: string }>(
+    db.query<{ fees: string; funding: string; funding_gross: string; pnl: string }>(
       `SELECT
          COALESCE(SUM(CASE WHEN reason IN ('OPEN_FEE','CLOSE_FEE') THEN amount_uusdc ELSE 0 END), 0)::text AS fees,
          COALESCE(SUM(CASE WHEN reason = 'FUNDING' THEN amount_uusdc ELSE 0 END), 0)::text AS funding,
+         COALESCE(SUM(CASE WHEN reason = 'FUNDING' AND amount_uusdc > 0 THEN amount_uusdc ELSE 0 END), 0)::text AS funding_gross,
          COALESCE(SUM(CASE WHEN reason = 'REALIZED_PNL' THEN amount_uusdc ELSE 0 END), 0)::text AS pnl
        FROM ledger_entries WHERE account_id = $1`,
       [lp],
@@ -57,10 +61,48 @@ export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
     feesHouseE6: feeBal.toString(),
     feesLpE6: feesLp.toString(),
     fundingNetE6: fundingNet.toString(),
+    fundingGrossE6: BigInt(lpRows.rows[0].funding_gross).toString(),
     traderPnlE6: traderPnl.toString(),
     liqPenaltiesE6: BigInt(liqRows.rows[0].liq).toString(),
     insuranceE6: insBal.toString(),
     lpOtherE6: lpOther.toString(),
     totalE6: total.toString(),
+  };
+}
+
+export interface HouseEconomics {
+  freeE6: string; // total customer free collateral
+  lockedE6: string; // total customer margin locked in open positions
+  customerLpE6: string; // total current value of customers' LP-pool stakes
+  insuranceE6: string; // insurance-fund balance
+  feeRevenueE6: string; // house cut of trading fees (FEE_REVENUE)
+  fundingCollectedE6: string; // gross funding customers paid in
+  fundingRevenueE6: string; // net funding the house kept
+  pnlBreakdown: HousePnlBreakdown;
+}
+
+/**
+ * House economics for the admin Overview — ALL ledger-derived (no chain reads, no real-funds
+ * requirement), so it renders in BOTH play-money and real-funds modes. The chain/custody figures
+ * (hot/cold, on-chain total, proof-of-reserves, pending payouts) stay in the real-funds-only
+ * /admin/treasury endpoint and layer on top of this when present.
+ */
+export async function houseEconomics(db: Db): Promise<HouseEconomics> {
+  const [cust, customerLp, bd] = await Promise.all([
+    customerFunds(db),
+    customerLpTotal(db),
+    housePnlBreakdown(db),
+  ]);
+  return {
+    freeE6: cust.freeE6.toString(),
+    lockedE6: cust.lockedE6.toString(),
+    customerLpE6: customerLp.toString(),
+    insuranceE6: bd.insuranceE6, // INSURANCE_FUND balance (same source as treasuryState's)
+    feeRevenueE6: bd.feesHouseE6, // FEE_REVENUE balance
+    // gross + net funding come from the SAME query (housePnlBreakdown's LP scan), so gross >= net always
+    // holds — no race between two snapshots (the same approach treasuryState uses).
+    fundingCollectedE6: bd.fundingGrossE6,
+    fundingRevenueE6: bd.fundingNetE6,
+    pnlBreakdown: bd,
   };
 }

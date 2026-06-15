@@ -205,6 +205,8 @@ export const adminSetMod = (userId, action, adminKey) => adminReq(`/admin/chat/m
 // real-funds-only; /admin/insurance (balance) + the fee-allocation moves work in play-money too.
 export const adminGetTreasury = (adminKey) => adminGet('/admin/treasury', adminKey);
 export const adminGetInsurance = (adminKey) => adminGet('/admin/insurance', adminKey);
+// House economics for the Overview (ledger-derived) — works in BOTH fund modes, unlike /admin/treasury.
+export const adminGetEconomics = (adminKey) => adminGet('/admin/economics', adminKey);
 export const adminInsuranceFromFees = (amountUusdc, adminKey) => adminReq('/admin/insurance/from-fees', adminKey, { amountUusdc });
 export const adminInsuranceToFees = (amountUusdc, adminKey) => adminReq('/admin/insurance/to-fees', adminKey, { amountUusdc });
 export const adminInsuranceFromTreasury = (amountUusdc, adminKey) => adminReq('/admin/insurance/from-treasury', adminKey, { amountUusdc });
