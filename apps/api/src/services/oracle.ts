@@ -55,7 +55,6 @@ export function toCardUpsert(c: OracleCard): CardUpsert {
 /** Returns the cards to ingest. Injectable for tests. */
 export type CardFetcher = () => Promise<OracleCard[]>;
 
-const OUTLIER_THRESHOLD = 0.6; // reject prints > 60% from last accepted (manipulation/staleness guard)
 const BASE_VALUE_E6 = 1_000_000_000n; // indices start at 1000.000000 points
 const REANCHOR_JUMP_FACTOR = 4n; // a 1-tick jump beyond this can only be a wrong-scale divisor, not a real basket move
 
@@ -79,7 +78,13 @@ async function fetchGradedPrice(card: OracleCard): Promise<number | null> {
   }
 }
 
-/** Insert an oracle print, guarding against outliers. Returns whether it was accepted. */
+/** Record an oracle print, deduped on the provider's freshness TIMESTAMP (source_observed_at =
+ *  last_price_update). A re-poll that returns the SAME timestamp is a genuine duplicate — the provider
+ *  hasn't re-priced — so ON CONFLICT skips it; that same "no fresh timestamp" is what the staleness
+ *  breaker keys off. A NEW timestamp always writes, even at an unchanged price ($10 today and $10
+ *  tomorrow are both real prints, not duplicates). Manipulation is handled upstream by the median
+ *  price and gap risk by the engine, so there is no outlier reject. Returns whether a row was written
+ *  (RETURNING detects the no-op insert, so callers don't recompute a stray mark). */
 async function recordOracle(
   q: Queryer,
   marketId: string,
@@ -87,45 +92,14 @@ async function recordOracle(
   observedAt: Date,
   payload: unknown,
 ): Promise<boolean> {
-  const last = await q.query<{ v: string }>(
-    `SELECT index_price_e6::text AS v FROM oracle_prices
-     WHERE market_id = $1 AND is_accepted ORDER BY source_observed_at DESC LIMIT 1`,
-    [marketId],
-  );
-  let accepted = true;
-  let reason: string | null = null;
-  const prev = last.rows[0] ? BigInt(last.rows[0].v) : 0n;
-  if (prev > 0n) {
-    const dev = Number(indexE6 - prev) / Number(prev);
-    if (Math.abs(dev) > OUTLIER_THRESHOLD) {
-      // Escape hatch: adopt a large move once it PERSISTS (the most recent print already showed
-      // this level) so a genuine >60% move can't wedge the market on a frozen reference forever.
-      const recent = await q.query<{ v: string }>(
-        `SELECT index_price_e6::text AS v FROM oracle_prices WHERE market_id=$1 ORDER BY source_observed_at DESC LIMIT 1`,
-        [marketId],
-      );
-      const lastAny = recent.rows[0] ? BigInt(recent.rows[0].v) : 0n;
-      const persisted = lastAny > 0n && lastAny !== prev && Math.abs(Number(indexE6 - lastAny) / Number(lastAny)) <= OUTLIER_THRESHOLD;
-      if (persisted) {
-        reason = 'force-accepted: level persisted';
-      } else {
-        accepted = false;
-        reason = `outlier ${(dev * 100).toFixed(0)}% vs last`;
-      }
-    }
-  }
-  // RETURNING lets us detect a duplicate (no-op) insert so callers don't recompute a stray mark.
-  // NOTE for P3: a provider-supplied observedAt makes this ON CONFLICT dedup re-polls of the SAME
-  // provider snapshot (intended — one print per provider update). Wall-clock observedAt (the
-  // pokemontcg path) never conflicts, so the live feed keeps printing every pass.
   const ins = await q.query<{ id: string }>(
-    `INSERT INTO oracle_prices(market_id, index_price_e6, raw_payload, source_observed_at, is_accepted, reject_reason)
-     VALUES($1, $2, $3, $4, $5, $6)
+    `INSERT INTO oracle_prices(market_id, index_price_e6, raw_payload, source_observed_at, is_accepted)
+     VALUES($1, $2, $3, $4, true)
      ON CONFLICT(market_id, source_observed_at) DO NOTHING
      RETURNING id`,
-    [marketId, indexE6.toString(), JSON.stringify(payload ?? null), observedAt.toISOString(), accepted, reason],
+    [marketId, indexE6.toString(), JSON.stringify(payload ?? null), observedAt.toISOString()],
   );
-  return ins.rows.length > 0 && accepted;
+  return ins.rows.length > 0;
 }
 
 /** The flag-selected live fetcher (ORACLE_PRIMARY): cutover/rollback is an env flip + restart, no code deploy. */
@@ -146,10 +120,10 @@ export async function ingestCard(
 ): Promise<string> {
   const marketId = await db.tx((q) => upsertCardMarket(q, { ...toCardUpsert(c), ...extra }));
   if (pinned?.has(marketId)) return marketId; // manual override in effect — skip the auto print + mark
-  const accepted = await db.tx((q) =>
+  const recorded = await db.tx((q) =>
     recordOracle(q, marketId, c.rawE6, c.observedAt ?? fallbackObservedAt, c.payload ?? null),
   );
-  if (accepted) {
+  if (recorded) {
     const market = await getMarketById(db, marketId);
     if (market) await db.tx((q) => recomputeMark(q, market, c.rawE6, 0n, 0n));
   }
@@ -316,10 +290,10 @@ async function buildIndex(
     }
   });
 
-  const accepted = await db.tx((q) =>
+  const recorded = await db.tx((q) =>
     recordOracle(q, marketId, indexValueE6, observedAt, { kind: 'index', constituents: members.length }),
   );
-  if (accepted) {
+  if (recorded) {
     const market = await getMarketById(db, marketId);
     if (market) await db.tx((q) => recomputeMark(q, market, indexValueE6, 0n, 0n));
   }

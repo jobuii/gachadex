@@ -187,16 +187,15 @@ export function isListable(c: TplCard): boolean {
   return spot >= MIN_LIST_PRICE_USD && smooth > 0 && Math.abs(smooth / spot - 1) <= PRICE_AGREEMENT_TOLERANCE;
 }
 
-// Live-price methodology (one definition of "the raw price"; full rationale in README "The oracle pipeline"):
-//  1. ANCHOR = median(TCGplayer market, eBay 7d avg, eBay 30d avg) — outlier-proof fair value; one bad
-//     source is outvoted by the other two.
-//  2. AGREEMENT GATE = a volume proxy (the provider gives no sale counts): the anchor needs >=2 signals
-//     that agree within AGREEMENT_MAX_RATIO. If not, the card is LOW-CONFIDENCE → price = the anchor and
-//     the market is restricted to reduce-only (no new positions against a price we don't trust).
-//  3. LIVE = the eBay 1-day avg (moves daily) CLAMPED to anchor ±PRICE_BAND, so it tracks real sales but
-//     no single sale/listing can swing the market beyond the band.
-export const PRICE_BAND = 0.25; // live 1d price is clamped to median ±25%
-export const AGREEMENT_MAX_RATIO = 3; // anchor signals must agree within 3x, else low-confidence
+// Live-price methodology (one definition of "the raw price"; full rationale in docs/price_discovery.md):
+//  price = median(eBay 1-day avg, TCGplayer market, eBay 7-day avg). The median IS the fair value AND
+//  the manipulation filter: a lone bad/manipulated source is the highest or lowest of the three, so the
+//  middle skips it; the price moves only when >=2 sources agree. No anchor, no clamp.
+//  CONFIDENCE (spread flag): >=2 usable signals that agree within SPREAD_MAX_RATIO => trusted; otherwise
+//  the card is LOW-CONFIDENCE and its market is restricted to reduce-only (no new positions against a
+//  price we can't cross-check). Gap risk is handled by the engine (leverage/liquidation/ADL/insurance),
+//  NOT by clamping the price.
+export const SPREAD_MAX_RATIO = 2; // the signals must agree within 2x, else low-confidence (reduce-only)
 
 const median = (xs: number[]): number => {
   const s = [...xs].sort((a, b) => a - b);
@@ -210,24 +209,21 @@ export interface CardPrice {
   confident: boolean; // false => restrict the market (reduce-only): price can't be trusted/cross-checked
 }
 
-/** Price a card from its provider signals. See the methodology note above. Takes just the prices
- *  envelope so the history seeder prices past days through the SAME chain. */
+/** Price a card from its provider signals: the median of (eBay 1d, TCGplayer market, eBay 7d). The
+ *  median is outlier-resistant — a lone spike is outvoted — so it tracks a move once two sources agree
+ *  and ignores a single-source spike. `confident=false` (=> reduce-only) when there are fewer than two
+ *  usable signals or they disagree beyond SPREAD_MAX_RATIO. Takes just the prices envelope so the
+ *  history seeder prices past days through the SAME chain. */
 export function priceCard(card: Pick<TplCard, 'prices'>): CardPrice {
   for (const cond of CONDITION_ORDER) {
     const c = card.prices?.raw?.[cond];
     if (!c) continue;
-    const spot = c.tcgplayer?.market ?? 0;
-    const a1 = c.ebay?.avg_1d ?? 0;
-    const a7 = c.ebay?.avg_7d ?? 0;
-    const a30 = c.ebay?.avg_30d ?? 0;
-    const anchorSigs = [spot, a7, a30].filter((v) => v > 0); // the 1d avg is the LIVE input, never the anchor
-    if (anchorSigs.length === 0 && a1 <= 0) continue; // nothing usable in this condition — try the next
-    const anchor = anchorSigs.length ? median(anchorSigs) : a1;
-    const agree = anchorSigs.length >= 2 && Math.max(...anchorSigs) <= AGREEMENT_MAX_RATIO * Math.min(...anchorSigs);
-    if (!agree) return { usd: cents(anchor), confident: false }; // thin/disagreeing -> anchor price, restricted
-    const live = a1 > 0 ? a1 : anchor;
-    const clamped = Math.min(Math.max(live, anchor * (1 - PRICE_BAND)), anchor * (1 + PRICE_BAND));
-    return { usd: cents(clamped), confident: true };
+    const sigs = [c.ebay?.avg_1d, c.tcgplayer?.market, c.ebay?.avg_7d].filter(
+      (v): v is number => typeof v === 'number' && v > 0,
+    );
+    if (sigs.length === 0) continue; // nothing usable in this condition — try the next
+    const confident = sigs.length >= 2 && Math.max(...sigs) <= SPREAD_MAX_RATIO * Math.min(...sigs);
+    return { usd: cents(median(sigs)), confident };
   }
   return { usd: 0, confident: false };
 }

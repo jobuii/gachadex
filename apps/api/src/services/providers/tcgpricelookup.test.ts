@@ -103,20 +103,24 @@ const tplCard = (id: string, p: TplCardT['prices'], extra: Partial<TplCardT> = {
   game: { slug: 'pokemon', name: 'Pokemon' }, prices: p, ...extra,
 });
 
-// A card with a NM price envelope carrying the full signal set (omit a field to leave it absent).
-const env = (s: { spot?: number; a1?: number; a7?: number; a30?: number }): Pick<TplCardT, 'prices'> => ({
-  prices: { raw: { near_mint: { tcgplayer: { market: s.spot }, ebay: { avg_1d: s.a1, avg_7d: s.a7, avg_30d: s.a30 } } } },
+// A card with a NM price envelope carrying the median's three signals (omit a field to leave it absent).
+const env = (s: { spot?: number; a1?: number; a7?: number }): Pick<TplCardT, 'prices'> => ({
+  prices: { raw: { near_mint: { tcgplayer: { market: s.spot }, ebay: { avg_1d: s.a1, avg_7d: s.a7 } } } },
 });
 
-test('priceCard: median anchor, clamps the 1d avg to ±25%, and gates thin/disagreeing signals', () => {
-  // normal: signals agree -> live 1d avg used (moves daily), inside the band
-  assert.deepEqual(priceCard(env({ spot: 9.8, a7: 10.1, a30: 9.96, a1: 10.8 })), { usd: 10.8, confident: true });
-  // hot 1d avg clamped to median ±25%: median([10,10,10])=10 -> ceiling 12.5
-  assert.deepEqual(priceCard(env({ spot: 10, a7: 10, a30: 10, a1: 13 })), { usd: 12.5, confident: true });
-  // garbage HIGH spot -> outvoted by the median, gated low-confidence
-  assert.deepEqual(priceCard(env({ spot: 4699, a7: 7.75, a30: 9.96 })), { usd: 9.96, confident: false });
+test('priceCard: median of (eBay 1d, TCGplayer market, eBay 7d); a lone outlier is outvoted, no clamp', () => {
+  // three signals agree -> the median is the middle value, trusted
+  assert.deepEqual(priceCard(env({ a1: 10.8, spot: 9.8, a7: 10.1 })), { usd: 10.1, confident: true });
+  // a hot 1d avg is NOT clamped — it's just the high signal; median([10,10,13]) = 10
+  assert.deepEqual(priceCard(env({ spot: 10, a7: 10, a1: 13 })), { usd: 10, confident: true });
+  // garbage HIGH spot -> outvoted by the median (the middle of three), gated low-confidence
+  assert.deepEqual(priceCard(env({ spot: 4699, a1: 7.75, a7: 9.96 })), { usd: 9.96, confident: false });
   // garbage HIGH eBay 7d -> median ignores it, gated
-  assert.deepEqual(priceCard(env({ spot: 1.05, a7: 6449.95, a30: 1.79 })), { usd: 1.79, confident: false });
+  assert.deepEqual(priceCard(env({ spot: 1.05, a1: 1.79, a7: 6449.95 })), { usd: 1.79, confident: false });
+  // two signals agreeing within SPREAD_MAX_RATIO -> trusted (median = their average)
+  assert.deepEqual(priceCard(env({ spot: 10, a7: 15 })), { usd: 12.5, confident: true });
+  // two signals disagreeing beyond SPREAD_MAX_RATIO -> priced but reduce-only
+  assert.deepEqual(priceCard(env({ spot: 10, a7: 21 })), { usd: 15.5, confident: false });
   // a single uncrossable signal can't be corroborated -> priced but low-confidence
   assert.deepEqual(priceCard(env({ spot: 50 })), { usd: 50, confident: false });
   // nothing priced -> ineligible
@@ -124,7 +128,7 @@ test('priceCard: median anchor, clamps the 1d avg to ±25%, and gates thin/disag
 });
 
 test('rawPriceUsd delegates to priceCard().usd (one price definition)', () => {
-  const e = env({ spot: 9.8, a7: 10.1, a30: 9.96, a1: 10.8 });
+  const e = env({ spot: 9.8, a7: 10.1, a1: 10.8 });
   assert.equal(rawPriceUsd(e), priceCard(e).usd);
   assert.equal(rawPriceUsd(tplCard('d', prices({}, { market: 40 }))), 40); // NM empty -> lightly_played fallback
 });
