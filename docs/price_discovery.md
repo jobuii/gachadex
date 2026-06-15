@@ -173,11 +173,13 @@ TCGplayer $10.50, eBay 1d $10.00 / 7d $10.20 / 30d $9.80:
 
 ---
 
-# New approach — median of three (decided 2026-06-15; to implement)
+# New approach — median of three (implemented 2026-06-15)
 
-**Status:** chosen direction; implementation pending. Replaces the current ±25%-clamp approach above.
-Risk gates (per-card max-leverage, ADL, insurance fund, OI caps) are assumed **ON in production**, so
-gap risk is handled by the **engine** — the price feed's only job is to report the true price.
+**Status:** IMPLEMENTED on branch `feat/median-pricing` (not yet merged/pushed). Replaces the current
+±25%-clamp approach above. Risk gates (per-card max-leverage, ADL, insurance fund, OI caps) are assumed
+**ON in production**, so gap risk is handled by the **engine** — the price feed's only job is to report
+the true price. NOTE: dedup landed on the **provider timestamp**, not the value (see the Dedup section
+below for the live-DB reason).
 
 **One sentence:** instead of "take the live eBay price and clamp it to a slow average," take the
 **middle of three price sources** — the middle automatically ignores any single source that's lying,
@@ -197,8 +199,10 @@ and moves the instant two sources agree.
 4. **Reduce-only when flagged:** a low-confidence flag puts the market in **reduce-only** (close
    positions yes, open new ones no), so nobody bets against a price we can't cross-check. Clears
    automatically once the sources agree again. *(existing plumbing; trigger is now the spread flag)*
-5. **Record only when the value changes (dedup on value):** if the new median equals the last recorded
-   price, do nothing; write a new point only on a real change. *(changed)*
+5. **Dedup on the provider's freshness timestamp:** write a print whenever the provider hands back a
+   NEW `last_price_update`, even if the dollar value is identical ($10 today and $10 tomorrow are both
+   real prints); skip only when the SAME timestamp is re-served — i.e. the feed has genuinely not
+   re-priced. *(kept from today — see "Dedup" below for why NOT value-dedup)*
 6. **Mark:** the median is fair value; the tradeable **mark** = fair value nudged by long/short skew.
    No open interest ⇒ mark = fair value. *(kept, unchanged)*
 7. **Chart + 24h, manual pin** — *(kept, unchanged)*
@@ -215,7 +219,7 @@ and moves the instant two sources agree.
 | 1e. ±25% clamp | ❌ DROP | the dampener. |
 | 2a. 60% outlier reject | ❌ DROP | gap risk → the engine (gates on in prod). |
 | 2b. Persistence hatch | ❌ DROP | (was only there to pair with the guard). |
-| 2c. Dedup (on `source_observed_at`) | 🔄 CHANGE | **dedup on the computed value** — see below. |
+| 2c. Dedup (on `source_observed_at`) | ✅ KEEP | timestamp-dedup stays; it doubles as the staleness signal — see "Dedup" below. |
 | 3. Reduce-only mechanism | ✅ KEEP, 🔄 rewire trigger | same `low_confidence → reduce-only` plumbing, now fired by the **spread flag** instead of the agreement gate. |
 | 4. Mark = index × (1+premium) (skew) | ✅ KEEP | unchanged. |
 | 5. 24h change + chart | ✅ KEEP | unchanged. |
@@ -224,7 +228,7 @@ and moves the instant two sources agree.
 | Engine risk (liquidation, ADL, insurance, OI caps, max-leverage) | ✅ KEEP | the **sole** gap-risk handler now. |
 
 **Net:** drop 4 mechanisms (±25% clamp, 3× agreement gate, 60% reject, persistence). The price layer
-becomes **median (price + manipulation filter) + spread flag (confidence) + value-dedup.**
+becomes **median (price + manipulation filter) + spread flag (confidence) + timestamp-dedup (kept as-is).**
 
 ## The two controls we keep at the price layer (plain English)
 
@@ -235,16 +239,34 @@ becomes **median (price + manipulation filter) + spread flag (confidence) + valu
   not *open*. Same plumbing as today; only the trigger changes (old: 3× agreement gate → new: spread
   flag). It clears on its own once the sources agree again.
 
-## Dedup — on value (decided 2026-06-15)
+## Dedup — on the provider TIMESTAMP, not the value (decided 2026-06-15; corrected after a live-DB check)
 
-Today dedup keys the no-op insert on `(market_id, source_observed_at)`, where `source_observed_at` is
-the provider's `last_price_update`. But tcgpricelookup **advances `last_price_update` on every pull
-even when the value is unchanged**, so the key keeps changing → a fresh identical-value print + mark
-is written every cycle, and dedup never fires.
+We initially planned **value-dedup** (skip the write when the new median equals the last price). A
+live-DB check killed that idea — it would have broken the staleness circuit breaker.
 
-**Change:** key the no-op on the **computed price value** — skip writing a new print + mark when the
-new median equals the last accepted price. A new mark lands only on a real change. (24h change is
-unaffected: it references the last mark ≤24h ago, so a genuinely static card correctly reads 0%.)
+**What the breaker does:** `haltStaleMarkets` (`engine.ts`) flips a market to **reduce-only** when its
+newest oracle print's `ingested_at` is older than `ORACLE_STALE_MS` (**36h**). It's meant to catch a
+**dead feed**, and it uses "did a print land recently?" as the proxy for "is the feed alive?"
+
+**Why value-dedup breaks it (live evidence, 2026-06-15):** the provider advances `last_price_update`
+on **every ~6h pull even when the price is flat** — verified on a real card ($2999.99 unchanged for
+days, yet `last_price_update` ticked every pull while `updated_at` stayed frozen on May 28). So today
+a flat-but-live card gets a fresh print every pass, and the breaker correctly leaves it open. Under
+value-dedup those repeats vanish, `ingested_at` freezes, and after 36h the breaker wrongly halts the
+card. Blast radius measured on prod: **all 203 currently-tradeable cards are flat >36h → 100% would
+flip to reduce-only within 36h.** Value-dedup conflates "price flat" with "feed dead."
+
+**Decision: keep timestamp-dedup (unchanged from today).** The no-op insert stays keyed on
+`(market_id, source_observed_at)` where `source_observed_at = last_price_update`:
+
+- Healthy feed (price flat or moving): `last_price_update` keeps advancing → every poll writes a print
+  → the breaker stays happy. A same-price-new-timestamp print is **real data**, not a duplicate.
+- Genuinely stale feed: the provider re-serves the **same** `last_price_update` (or stops returning the
+  card) → ON CONFLICT skips it → `ingested_at` ages → the breaker correctly halts after 36h.
+
+This does **not** declutter the chart — a flat card still draws a point every 6h, and 24h change still
+reads 0% on a flat feed. Per the call we made, that's *correct*: a flat price is legitimate data, not
+something to hide. The only thing dedup is for is catching a stuck feed.
 
 ## Gap risk — the engine, not the price
 
@@ -263,7 +285,8 @@ Provider gives eBay-1d **$10.00**, TCGplayer **$10.50**, eBay-7d **$10.20**:
 1. Grade: near-mint has data → use it.
 2. Median of (10.00, 10.50, 10.20) = **$10.20** ← the price. *(today's clamp logic would show $10.00.)*
 3. Spread: 10.50 / 10.00 = 1.05× → narrow → **confident, tradeable.**
-4. Changed vs last recorded ($10.10)? yes → record the new point.
+4. New provider `last_price_update` vs the last one? yes → record the print (it would record even if
+   the price were unchanged — a new timestamp is a real print).
 5. Mark: slight long skew, +1% premium → **mark $10.30** (displayed/traded price).
 
 The cases that matter:
@@ -281,9 +304,8 @@ The cases that matter:
    - Delete `PRICE_BAND` and `AGREEMENT_MAX_RATIO`; add `SPREAD_MAX_RATIO` (≈ **2**, tunable). Keep the
      `median` + `cents` helpers and the `usd = 0 ⇒ unpriced` behavior.
 2. **`recordOracle` (`oracle.ts`)** — delete the 60% `OUTLIER_THRESHOLD` reject + persistence block.
-   **Value-dedup:** if the new value equals the last accepted value, no-op (no print, no mark); else
-   insert + accept. Keep the `source_observed_at` column for audit (the unique index can stay as a
-   belt-and-suspenders).
+   **Keep timestamp-dedup as today:** `INSERT … ON CONFLICT(market_id, source_observed_at) DO NOTHING`,
+   `is_accepted` always true (no value-dedup). `source_observed_at = last_price_update`.
 3. **`applyConfidence` / reduce-only** — plumbing unchanged; `confident` now comes from the spread
    check, so reduce-only is driven by the spread flag automatically.
 4. **Untouched:** `recomputeMark`/`syntheticMark`, `markets.ts` 24h/chart, `admin-pricing` pin,
@@ -292,9 +314,9 @@ The cases that matter:
 ### Tests
 - `providers/tcgpricelookup.test.ts` — median price (real move tracks; single spike outvoted), spread
   flag → `confident=false`, condition fallback, single-signal (price = that source, low-confidence).
-- `oracle.test.ts` — value-dedup (unchanged value ⇒ no new print/mark; changed ⇒ new mark); remove the
+- `oracle.test.ts` — no outlier reject (a large move is accepted); timestamp-dedup (same provider
+  timestamp ⇒ no new print; a NEW timestamp ⇒ a print even at an unchanged price); remove the
   60%/persistence tests.
-- `markets.test.ts` — 24h change is non-zero after a real move.
 
 ### Out of scope (separate decisions)
 - `isListable` market-creation gate (NM ≥ $10 + eBay-7d within 25%) — unchanged.
@@ -302,4 +324,4 @@ The cases that matter:
 
 ### Rollout
 Code-only change to two functions, behind the existing `ORACLE_PRIMARY=tcgpricelookup` path. **No
-schema change** (value-dedup reuses existing columns). Reversible by reverting the two functions.
+schema change.** Reversible by reverting the two functions.
