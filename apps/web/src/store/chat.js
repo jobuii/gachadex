@@ -27,6 +27,10 @@ export const useChat = create((set, get) => ({
   online: 0, // live count of connected viewers (from the WS presence event)
   modState: {}, // userId -> { mutedUntil, banned } — live mute/ban snapshots from the server
   ranks: {}, // userId -> leaderboard rank (top 100 only) — drives chat rank badges
+  dropPot: '0', // live DROP pot balance (micro-USDC string); grows on tips, broadcast over WS
+  tipsEnabled: false, // whether tipping into the pot is open (DROP_TIPS_ENABLED on the server)
+  tipMinUsd: 1,
+  tipMaxUsd: 10_000,
   _started: false,
 
   start() {
@@ -39,6 +43,11 @@ export const useChat = create((set, get) => ({
     const loadRanks = () => api.getChatRanks().then((r) => set({ ranks: r.ranks || {} })).catch(() => {});
     loadRanks();
     setInterval(loadRanks, 60_000);
+    // DROP pot: load the current balance + tip settings once; live updates arrive via the WS 'drop' event
+    api
+      .getDropPot()
+      .then((r) => set({ dropPot: r.potE6 ?? '0', tipsEnabled: !!r.tipsEnabled, tipMinUsd: r.minUsd ?? 1, tipMaxUsd: r.maxUsd ?? 10_000 }))
+      .catch(() => {});
     onMessage((m) => {
       if (m.ch !== 'chat' || !m.data) return;
       // a moderator deleted a message — drop it everywhere, no unread bump
@@ -49,6 +58,11 @@ export const useChat = create((set, get) => ({
       // live online count (connected viewers)
       if (m.type === 'presence') {
         set({ online: m.data?.online ?? 0 });
+        return;
+      }
+      // the DROP pot changed (a tip landed) — update the live pot pill for everyone
+      if (m.type === 'drop') {
+        if (m.data?.potE6 != null) set({ dropPot: m.data.potE6 }); // ignore a malformed event vs zeroing the pot
         return;
       }
       // a user's mute/ban changed — record the snapshot (drives the disabled input + mod toggle buttons)

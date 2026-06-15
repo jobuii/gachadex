@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { formatUsd } from '@pokex/pricing';
 import * as api from '../lib/api.js';
 import { Stat } from './adminStats.jsx';
 
@@ -26,7 +27,7 @@ const muteLeft = (until) => {
 export function ChatAdminView({ adminKey }) {
   const [thresholds, setThresholds] = useState(null); // { bigBetUsd, bigWinUsd, bigBetDefault, bigWinDefault }
   const [dropCfg, setDropCfg] = useState(null); // { intervalMin, houseFloorUsd, packTiers, gdexMin, gdexMint, defaults }
-  const [drop, setDrop] = useState(null); // { bucketE6, recentRounds }
+  const [drop, setDrop] = useState(null); // { bucketE6, recentRounds, totalTippedE6, recentTips }
   const [mods, setMods] = useState(null); // { mods, muted, banned, recentActions }
   const [err, setErr] = useState(null);
   const [note, setNote] = useState(null);
@@ -191,7 +192,23 @@ export function ChatAdminView({ adminKey }) {
       </p>
       <div className="admin-stats">
         <Stat label="DROP pot (bucket)" value={drop ? drop.bucketE6 : null} />
+        <Stat label="Total tipped" value={drop ? drop.totalTippedE6 : null} />
       </div>
+      <h4 className="chatadmin-subhead">Recent tips</h4>
+      <table className="hist-table">
+        <tbody>
+          {(!drop?.recentTips || drop.recentTips.length === 0) && (
+            <tr><td colSpan={3} className="hist-empty">No tips yet.</td></tr>
+          )}
+          {drop?.recentTips?.map((t) => (
+            <tr key={t.id}>
+              <td>{t.handle}</td>
+              <td>{formatUsd(BigInt(t.amountUusdc))}</td>
+              <td className="muted">{fmtWhen(t.at)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
       <div className="chatadmin-row">
         <label>
           Interval (min)

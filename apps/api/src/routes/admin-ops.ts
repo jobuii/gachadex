@@ -13,6 +13,7 @@ import { restrictionsReport } from '../services/restrictions.ts';
 import { setMod, listModState, unmuteUser, setBanned, resolveChatUserId } from '../services/chat-mod.ts';
 import { chatConfigView, setChatThresholds } from '../services/chat-config.ts';
 import { dropConfigView, setDropConfig, getDropView } from '../services/drop-config.ts';
+import { totalTippedE6, recentTips } from '../services/drop.ts';
 import { getUserPositions, liquidateAllEligible } from '../services/engine.ts';
 import { adminClosePosition, adminCloseUserPositions, adminCloseAllPositions } from '../services/admin-close.ts';
 
@@ -149,7 +150,11 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     const b = DropConfigRequest.parse(req.body);
     return setDropConfig(await getDb(), b);
   });
-  app.get('/admin/chat/drop', rl(config.routeRateLimits.admin), async () => getDropView(await getDb()));
+  app.get('/admin/chat/drop', rl(config.routeRateLimits.admin), async () => {
+    const db = await getDb();
+    const [view, tipped, tips] = await Promise.all([getDropView(db), totalTippedE6(db), recentTips(db)]);
+    return { ...view, totalTippedE6: tipped.toString(), recentTips: tips };
+  });
 
   // Panel 3 — moderation. GET current mods/muted/banned + recent audit; POST an action on a user (the
   // path segment may be an internal id OR a wallet pubkey, resolved server-side). grant/revoke toggle MOD;

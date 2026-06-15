@@ -124,6 +124,11 @@ export const config = {
   dropIntervalMin: num('DROP_INTERVAL_MIN', 60), // minutes between drops
   dropHouseFloorUsd: num('DROP_HOUSE_FLOOR_USD', 250), // house contribution floor per round (USD)
   dropGdexMin: num('DROP_GDEX_MIN', 500_000), // $GDEX held that grants eligibility (token units)
+  // DROP pot tips (Phase 2a). Players contribute real USDC to the pot. OFF by default — a flag so the pot
+  // can't take real money on prod until the draw/payout mechanic is live and the operator opts in.
+  dropTipsEnabled: process.env.DROP_TIPS_ENABLED === 'true',
+  dropTipMinUsd: num('DROP_TIP_MIN_USD', 1), // smallest single tip (USD)
+  dropTipMaxUsd: num('DROP_TIP_MAX_USD', 10_000), // fat-finger cap on a single tip (USD)
 
   // Funding: per-accrual rate = skewFactor * (skew / openInterest), bps (the heavy side pays)
   fundingSkewFactorBps: num('FUNDING_SKEW_FACTOR_BPS', 30), // skew-balancing component (max)

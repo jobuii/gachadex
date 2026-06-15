@@ -147,6 +147,10 @@ export function ChatSidebar({ open, onToggle }) {
   const ranks = useChat((s) => s.ranks); // userId -> leaderboard rank (top 100) for rank badges
   const reactMine = useChat((s) => s.reactMine);
   const online = useChat((s) => s.online); // live connected-viewer count
+  const dropPot = useChat((s) => s.dropPot); // live DROP pot balance (micro-USDC string)
+  const tipsEnabled = useChat((s) => s.tipsEnabled); // is tipping into the pot open
+  const tipMinUsd = useChat((s) => s.tipMinUsd);
+  const tipMaxUsd = useChat((s) => s.tipMaxUsd);
 
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -163,13 +167,40 @@ export function ChatSidebar({ open, onToggle }) {
   const [composePicker, setComposePicker] = useState(false); // the compose-box emoji popup
   const [mention, setMention] = useState(null); // @mention autocomplete: { query, start, items, active } | null
   const [hasNew, setHasNew] = useState(false); // unseen messages while scrolled up -> "new messages" pill
-  const [dropOpen, setDropOpen] = useState(false); // the DROP teaser modal (F6 Phase 1: coming soon)
+  const [dropOpen, setDropOpen] = useState(false); // the DROP modal
+  const [tipDraft, setTipDraft] = useState(''); // pot tip amount (USD)
+  const [tipBusy, setTipBusy] = useState(false);
+  const [tipMsg, setTipMsg] = useState(null); // { ok, text } | null — tip feedback
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const modMsgTimer = useRef(null);
   const hoverTimer = useRef(null);
   const atBottomRef = useRef(true); // is the list scrolled to (near) the bottom — drives auto-stick
   const wasOpenRef = useRef(false); // was the rail open last render — detect the open transition
+  const tipBusyRef = useRef(false); // synchronous double-submit guard for tips (a money action)
+
+  // tip real USDC into the DROP pot. The WS 'drop' echo updates the live pot pill for everyone.
+  const submitTip = async () => {
+    if (tipBusyRef.current) return; // a fast double-click must not double-tip before React disables the button
+    const amt = Number(tipDraft);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      setTipMsg({ ok: false, text: 'Enter an amount.' });
+      return;
+    }
+    tipBusyRef.current = true;
+    setTipBusy(true);
+    setTipMsg(null);
+    try {
+      const r = await api.dropTip(amt);
+      setTipDraft('');
+      setTipMsg({ ok: true, text: `Added ${formatUsd(BigInt(r.amountE6))} to the pot! 🎉` });
+    } catch (e) {
+      setTipMsg({ ok: false, text: e.message || 'Tip failed.' });
+    } finally {
+      tipBusyRef.current = false;
+      setTipBusy(false);
+    }
+  };
 
   // load my chat profile (username + handle) when signed in
   useEffect(() => {
@@ -398,7 +429,7 @@ export function ChatSidebar({ open, onToggle }) {
         </span>
         <span className="drop-pill">
           <img src="/GachaDexPFP2.png" alt="" />
-          <span>SOON</span>
+          <span>{BigInt(dropPot || '0') > 0n ? formatUsd(BigInt(dropPot), { decimals: 0 }) : 'SOON'}</span>
         </span>
       </button>
 
@@ -602,14 +633,33 @@ export function ChatSidebar({ open, onToggle }) {
               <strong>$20,000 USDC</strong>. One eligible wallet wins the card drawn. Eligible = you've deposited
               (or hold 500K+ $GDEX).
             </p>
+            <div className="drop-pot-line">
+              Current pot: <strong>{formatUsd(BigInt(dropPot || '0'))}</strong>
+            </div>
             <label className="drop-tip-label">
-              Add to the pot:
+              Add to the pot{tipsEnabled ? ` ($${tipMinUsd}–$${tipMaxUsd})` : ''}:
               <span className="drop-tip-row">
-                <input className="wallet-input" type="number" placeholder="USDC" disabled />
-                <button className="btn-primary sm" disabled>Tip</button>
+                <input
+                  className="wallet-input"
+                  type="number"
+                  min={tipMinUsd}
+                  max={tipMaxUsd}
+                  step="1"
+                  placeholder="USDC"
+                  value={tipDraft}
+                  onChange={(e) => setTipDraft(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && !tipBusy && submitTip()}
+                  disabled={!tipsEnabled || !user || tipBusy}
+                />
+                <button className="btn-primary sm" onClick={submitTip} disabled={!tipsEnabled || !user || tipBusy || !tipDraft.trim()}>
+                  {tipBusy ? '…' : 'Tip'}
+                </button>
               </span>
             </label>
-            <div className="drop-soon">🎁 Coming soon!</div>
+            {tipMsg && <div className={`drop-tip-msg ${tipMsg.ok ? 'ok' : 'err'}`}>{tipMsg.text}</div>}
+            <div className="drop-soon">
+              {!tipsEnabled ? '🎁 Coming soon!' : !user ? 'Connect your wallet to tip.' : '🎁 Pot is building — draws coming soon!'}
+            </div>
             <button className="btn-secondary sm" onClick={() => setDropOpen(false)}>Close</button>
           </div>
         </div>
