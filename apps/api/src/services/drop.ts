@@ -3,7 +3,6 @@ import { HttpError } from '../errors.ts';
 import { config } from '../config.ts';
 import { usdc } from '../money.ts';
 import { getOrCreateSystemAccount, getOrCreateUserAccount, getBalance, postTxn } from './ledger.ts';
-import { publish } from './bus.ts';
 import { handleFor } from './handles.ts';
 import type { Db, Queryer } from '../db/client.ts';
 
@@ -48,12 +47,12 @@ export async function recentTips(db: Db, limit = 20): Promise<TipRow[]> {
  * transaction. Gated by DROP_TIPS_ENABLED (off in prod until the draw/payout is live). Validates the amount
  * against the min/max knobs and the tipper's available balance. Broadcasts the new pot so clients update live.
  */
-export async function tipDrop(db: Db, userId: string, amountUusdc: bigint): Promise<{ potE6: string; balanceE6: string; amountE6: string }> {
+export async function tipDrop(db: Db, userId: string, amountUusdc: bigint): Promise<{ balanceE6: string; amountE6: string }> {
   if (!config.dropTipsEnabled) throw new HttpError(403, 'DROP tips are not open yet');
   if (amountUusdc < usdc(config.dropTipMinUsd)) throw new HttpError(400, `minimum tip is $${config.dropTipMinUsd}`);
   if (amountUusdc > usdc(config.dropTipMaxUsd)) throw new HttpError(400, `maximum tip is $${config.dropTipMaxUsd}`);
 
-  const { potE6, balanceE6 } = await db.tx(async (q) => {
+  const balanceE6 = await db.tx(async (q) => {
     const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
     // Lock the collateral row before reading the balance (same discipline as withdrawals) so two
     // concurrent tips can't both pass the check and overdraw.
@@ -72,8 +71,8 @@ export async function tipDrop(db: Db, userId: string, amountUusdc: bigint): Prom
       ],
     });
     await q.query(`INSERT INTO drop_tips(id, user_id, amount_uusdc, txn_id) VALUES($1, $2, $3, $4)`, [tipId, userId, amountUusdc.toString(), txnId]);
-    return { potE6: await getBalance(q, pool), balanceE6: available - amountUusdc };
+    return available - amountUusdc; // the tipper's own new collateral balance
   });
-  publish('chat', 'drop', { potE6: potE6.toString() }); // after commit — the pot pill updates for everyone
-  return { potE6: potE6.toString(), balanceE6: balanceE6.toString(), amountE6: amountUusdc.toString() };
+  // The pot total is deliberately NOT returned or broadcast — customers don't see the pot amount (admin-only).
+  return { balanceE6: balanceE6.toString(), amountE6: amountUusdc.toString() };
 }

@@ -147,7 +147,6 @@ export function ChatSidebar({ open, onToggle }) {
   const ranks = useChat((s) => s.ranks); // userId -> leaderboard rank (top 100) for rank badges
   const reactMine = useChat((s) => s.reactMine);
   const online = useChat((s) => s.online); // live connected-viewer count
-  const dropPot = useChat((s) => s.dropPot); // live DROP pot balance (micro-USDC string)
   const tipsEnabled = useChat((s) => s.tipsEnabled); // is tipping into the pot open
   const tipMinUsd = useChat((s) => s.tipMinUsd);
   const tipMaxUsd = useChat((s) => s.tipMaxUsd);
@@ -429,7 +428,7 @@ export function ChatSidebar({ open, onToggle }) {
         </span>
         <span className="drop-pill">
           <img src="/GachaDexPFP2.png" alt="" />
-          <span>{BigInt(dropPot || '0') > 0n ? formatUsd(BigInt(dropPot), { decimals: 0 }) : 'SOON'}</span>
+          <span>SOON</span>
         </span>
       </button>
 
@@ -633,9 +632,6 @@ export function ChatSidebar({ open, onToggle }) {
               <strong>$20,000 USDC</strong>. One eligible wallet wins the card drawn. Eligible = you've deposited
               (or hold 500K+ $GDEX).
             </p>
-            <div className="drop-pot-line">
-              Current pot: <strong>{formatUsd(BigInt(dropPot || '0'))}</strong>
-            </div>
             <label className="drop-tip-label">
               Add to the pot{tipsEnabled ? ` ($${tipMinUsd}–$${tipMaxUsd})` : ''}:
               <span className="drop-tip-row">

@@ -8,7 +8,7 @@ import { rl } from './_ratelimit.ts';
 import { listChat, postChat, getProfile, setUsername, getProfileCard } from '../services/chat.ts';
 import { deleteMessage, muteUser, unmuteUser, setBanned } from '../services/chat-mod.ts';
 import { toggleReaction } from '../services/chat-reactions.ts';
-import { dropPotE6, tipDrop } from '../services/drop.ts';
+import { tipDrop } from '../services/drop.ts';
 import { rankMap } from '../services/leaderboard.ts';
 
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
@@ -24,9 +24,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     return getProfileCard(await getDb(), userId);
   });
 
-  // public DROP pot: current balance + whether tipping is open (drives the live pot pill + tip input).
+  // public DROP tip settings: whether tipping is open + the bounds (drives the tip input). The pot amount
+  // itself is deliberately NOT exposed to customers — only the admin sees it.
   app.get('/chat/drop/pot', async () => ({
-    potE6: (await dropPotE6(await getDb())).toString(),
     tipsEnabled: config.dropTipsEnabled,
     minUsd: config.dropTipMinUsd,
     maxUsd: config.dropTipMaxUsd,

@@ -37,7 +37,6 @@ test('tip moves collateral into the pot, records it, returns the new pot + balan
   const u = await newFundedUser(usdc(100));
   const r = await tipDrop(db, u, usdc(25));
   assert.equal(r.amountE6, usdc(25).toString());
-  assert.equal(r.potE6, usdc(25).toString()); // pot started at 0
   assert.equal(r.balanceE6, usdc(75).toString()); // 100 - 25
 
   assert.equal((await dropPotE6(db)).toString(), usdc(25).toString());
