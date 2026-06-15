@@ -9,6 +9,7 @@ import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from
 import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFactor } from '../services/fees.ts';
 import { listCustomers } from '../services/customers.ts';
 import { marketStats } from '../services/admin-stats.ts';
+import { houseEconomics } from '../services/house-pnl.ts';
 import { restrictionsReport } from '../services/restrictions.ts';
 import { setMod, listModState, unmuteUser, setBanned, resolveChatUserId } from '../services/chat-mod.ts';
 import { chatConfigView, setChatThresholds } from '../services/chat-config.ts';
@@ -53,6 +54,10 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   // platform fees (house money). (Funding from treasury surplus lives in the custody admin routes,
   // which can read the on-chain balance.) Both are ledger moves — no USDC leaves custody.
   app.get('/admin/insurance', rl(config.routeRateLimits.admin), async () => getInsurance(await getDb()));
+
+  // House economics for the admin Overview — all ledger-derived, so it works in BOTH fund modes
+  // (unlike /admin/treasury, which is real-funds-only and layers the chain/custody figures on top).
+  app.get('/admin/economics', rl(config.routeRateLimits.admin), async () => houseEconomics(await getDb()));
   app.post('/admin/insurance/from-fees', rl(config.routeRateLimits.admin), async (req) => {
     const { amountUusdc } = InsuranceFundRequest.parse(req.body);
     return allocateFeesToInsurance(await getDb(), BigInt(amountUusdc));
