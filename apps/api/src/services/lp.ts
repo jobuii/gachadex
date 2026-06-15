@@ -122,6 +122,14 @@ export async function getLpPosition(db: Db, userId: string): Promise<{ shares: s
   return { shares: shares.toString(), valueUusdc: lpShareValue(shares, nav, totalShares).toString() };
 }
 
+/** Total current value of ALL customers' LP stakes (Σ share value). Equals NAV when the pool is
+ *  entirely customer-funded; derived from shares so it stays correct if the house ever seeds the pool. */
+export async function customerLpTotal(db: Db): Promise<bigint> {
+  const { nav, totalShares } = await poolState(db);
+  const r = await db.query<{ s: string }>(`SELECT COALESCE(SUM(shares), 0)::text AS s FROM lp_positions WHERE shares > 0`);
+  return lpShareValue(BigInt(r.rows[0].s), nav, totalShares);
+}
+
 /** Recompute pool-wide reserved capital = gross open notional across all markets. */
 export async function refreshReserved(q: Queryer): Promise<void> {
   const reserved = await grossOpenNotional(q);

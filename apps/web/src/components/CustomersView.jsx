@@ -14,7 +14,7 @@ const SORTS = [
   ['pnl', 'Realized P/L'],
   ['joined', 'Joined'],
 ];
-const COLS = 15; // table width (for the expand-row + empty-state colSpan)
+const COLS = 16; // table width (for the expand-row + empty-state colSpan)
 const KILL_PHRASE = 'CLOSE ALL';
 
 const short = (a) => shortenPubkey(a) || '—';
@@ -209,6 +209,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
               <th>Wallet</th>
               <th>Deposit addr</th>
               <th>Balance</th>
+              <th>LP Pool</th>
               <th>In trades</th>
               <th>Volume</th>
               <th>Fees paid</th>
@@ -243,6 +244,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
                       {copied && copied === c.depositAddress ? 'copied!' : short(c.depositAddress)}
                     </td>
                     <td className="num">{usd(c.freeE6)}</td>
+                    <td className="num">{usd(c.lpE6)}</td>
                     <td className="num">{usd(c.lockedE6)}</td>
                     <td className="num">{usd(c.volumeE6)}</td>
                     <td className="num">{usd(c.feesE6)}</td>

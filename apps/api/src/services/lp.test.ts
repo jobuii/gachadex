@@ -14,7 +14,7 @@ const { fromPokemontcg } = await import('./providers/pokemontcg.ts');
 const { listMarketsWithData } = await import('./markets.ts');
 const { creditFaucet, getUserBalances } = await import('./faucet.ts');
 const { openPosition, closePosition, getUserPositions } = await import('./engine.ts');
-const { lpDeposit, lpWithdraw, getPool, getLpPosition } = await import('./lp.ts');
+const { lpDeposit, lpWithdraw, getPool, getLpPosition, customerLpTotal } = await import('./lp.ts');
 const { accrueFunding } = await import('./funding.ts');
 const { reconcile } = await import('./reconcile.ts');
 const { usdc } = await import('../money.ts');
@@ -92,6 +92,21 @@ test('faucet clamps the available balance to the cap', async () => {
   await creditFaucet(db, u, 990_000); // -> exactly the $1,000,000 cap
   assert.equal((await getUserBalances(db, u)).availableUusdc.toString(), usdc(1_000_000).toString());
   await assert.rejects(creditFaucet(db, u, 1), /faucet limit/); // can't exceed the cap
+});
+
+test('customerLpTotal == pool NAV when the pool is fully customer-owned (and == Σ per-user value)', async () => {
+  const a = await newUser();
+  const b = await newUser();
+  await lpDeposit(db, a, usdc(1_000));
+  await lpDeposit(db, b, usdc(2_500));
+  const total = await customerLpTotal(db);
+  const pool = await getPool(db);
+  assert.equal(total.toString(), pool.navUusdc); // every share is customer-owned -> total == NAV
+  const holders = await db.query<{ user_id: string }>(`SELECT user_id FROM lp_positions WHERE shares > 0`);
+  let sum = 0n;
+  for (const h of holders.rows) sum += BigInt((await getLpPosition(db, h.user_id)).valueUusdc);
+  // per-user integer division floors each stake, so the aggregate can exceed the per-user sum by <= #holders uUSDC
+  assert.ok(total - sum >= 0n && total - sum <= BigInt(holders.rows.length), `total ${total} vs Σ ${sum}`);
 });
 
 test('reconciler stays balanced after LP + funding activity', async () => {
