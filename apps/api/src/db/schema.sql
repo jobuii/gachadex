@@ -120,6 +120,16 @@ ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS deleted_by TEXT;
 CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_messages(created_at DESC);
 
+-- Emoji reactions: one row per (message, user, emoji). Toggling deletes/inserts the row.
+CREATE TABLE IF NOT EXISTS chat_reactions (
+  message_id TEXT NOT NULL REFERENCES chat_messages(id),
+  user_id    TEXT NOT NULL REFERENCES users(id),
+  emoji      TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (message_id, user_id, emoji)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_reactions_msg ON chat_reactions(message_id);
+
 -- Chat moderation flags on users.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_mod BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_muted_until TIMESTAMPTZ; -- muted while > now()

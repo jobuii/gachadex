@@ -2,9 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { ReferralRedeemRequest, ReferralCodeRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
-import { authenticate } from '../plugins/auth.ts';
+import { authenticate, optionalViewerId } from '../plugins/auth.ts';
 import { rl } from './_ratelimit.ts';
-import { verifyAccessToken } from '../services/auth.ts';
 import { getLeaderboard } from '../services/leaderboard.ts';
 import { getReferralInfo, redeemReferral, setReferralCode } from '../services/referral.ts';
 
@@ -13,17 +12,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
   app.get('/leaderboard', async (req) => {
     const db = await getDb();
     const limit = Number((req.query as { limit?: string } | undefined)?.limit) || 100;
-    const header = req.headers['authorization'];
-    const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
-    let viewerUserId: string | undefined;
-    if (token) {
-      try {
-        viewerUserId = (await verifyAccessToken(token)).userId;
-      } catch {
-        /* anonymous view */
-      }
-    }
-    return getLeaderboard(db, { limit, viewerUserId });
+    return getLeaderboard(db, { limit, viewerUserId: await optionalViewerId(req) });
   });
 
   app.get('/referral/me', { preHandler: authenticate, config: { scope: 'trade' } }, async (req) => {

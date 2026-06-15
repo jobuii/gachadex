@@ -236,6 +236,61 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
   padding: 0.05rem 0.3rem; border-radius: 3px; letter-spacing: 0.03em;
 }
 .chat-profile-loading { font-size: 0.7rem; color: var(--text-muted); text-align: center; }
+
+/* emoji reactions */
+.chat-reactions { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.3rem; align-items: center; }
+.chat-react {
+  display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.45rem; color: var(--text);
+  background: var(--bg-3); border: 1px solid var(--border); border-radius: 10px; padding: 0.05rem 0.35rem; cursor: pointer;
+}
+.chat-react > span { font-size: 0.6rem; }
+.chat-react.mine { border-color: var(--gold); background: rgba(240, 192, 64, 0.12); color: var(--gold); }
+.chat-react:disabled { cursor: default; opacity: 0.85; }
+/* the add-reaction "+" lives in the message head and only shows on message hover (or while its picker is open) */
+.chat-react-add-wrap { position: relative; display: none; }
+.chat-msg:hover .chat-react-add-wrap, .chat-react-add-wrap.open { display: inline-flex; }
+.chat-react-add { background: none; border: none; color: var(--text-muted); font-size: 0.62rem; line-height: 1; padding: 0; cursor: pointer; }
+.chat-react-add:hover { color: var(--gold); }
+.chat-react-picker {
+  position: absolute; top: 130%; right: 0; z-index: 40; display: flex; flex-wrap: wrap; gap: 0.1rem; max-width: 160px;
+  background: var(--bg-2); border: 2px solid var(--accent); border-radius: 6px; padding: 0.25rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+.chat-react-picker button { background: none; border: none; cursor: pointer; font-size: 0.9rem; padding: 0.1rem 0.15rem; border-radius: 4px; }
+.chat-react-picker button:hover { background: var(--bg-3); }
+
+/* compose-box emoji picker: a smiley at the input's right edge opens an emoji grid above the box */
+.chat-compose { position: relative; flex: 1; min-width: 0; display: flex; }
+.chat-compose input { flex: 1; min-width: 0; padding-right: 1.3rem; }
+.chat-emoji-btn {
+  position: absolute; right: 0.25rem; top: 50%; transform: translateY(-50%);
+  background: none; border: none; cursor: pointer; font-size: 0.75rem; line-height: 1; padding: 0;
+}
+.chat-emoji-btn:hover { filter: brightness(1.25); }
+.chat-emoji-popup {
+  position: absolute; bottom: 135%; right: 0; z-index: 45; width: 200px; max-height: 165px; overflow-y: auto;
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.1rem;
+  background: var(--bg-2); border: 2px solid var(--accent); border-radius: 6px; padding: 0.3rem;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+}
+.chat-emoji-popup button { background: none; border: none; cursor: pointer; font-size: 0.95rem; padding: 0.12rem; border-radius: 4px; }
+.chat-emoji-popup button:hover { background: var(--bg-3); }
+
+/* @mention autocomplete menu (above the compose box) */
+.chat-mention-menu {
+  position: absolute; bottom: 135%; left: 0; z-index: 46; min-width: 60%; max-width: 100%; max-height: 160px; overflow-y: auto;
+  display: flex; flex-direction: column; background: var(--bg-2); border: 2px solid var(--accent);
+  border-radius: 6px; padding: 0.2rem; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+}
+.chat-mention-item {
+  display: flex; align-items: center; gap: 0.4rem; background: none; border: none; cursor: pointer;
+  color: var(--text); font-size: 0.5rem; padding: 0.3rem 0.4rem; border-radius: 4px; text-align: left;
+}
+.chat-mention-item.active, .chat-mention-item:hover { background: var(--bg-3); color: var(--gold); }
+.chat-mention-ava {
+  width: 16px; height: 16px; border-radius: 3px; color: #0d1117; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 0.42rem;
+}
 .chat-mod-tools { display: inline-flex; gap: 0.3rem; margin-left: auto; align-items: center; }
 /* visible, clearly-tappable mod buttons (delete / mute / ban) — a bordered box so even a dim emoji reads */
 .chat-mod-btn {

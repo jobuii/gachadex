@@ -30,7 +30,7 @@ test('chat: posts persist, list is oldest-first with a handle, and each post bro
   await postChat(db, u, 'second message');
   off();
 
-  const msgs = await listChat(db, 50);
+  const msgs = await listChat(db, { limit: 50 });
   assert.equal(msgs.length, 2);
   assert.equal(msgs[0].body, 'hello world'); // oldest first, trimmed
   assert.equal(msgs[1].body, 'second message');
@@ -94,7 +94,7 @@ test('chat: replying carries the parent context and survives a reload; bad paren
 
   await assert.rejects(postChat(db, u, 'oops', 'does-not-exist'), /no longer exists/);
 
-  const stored = (await listChat(db, 200)).find((m) => m.id === reply.id);
+  const stored = (await listChat(db, { limit: 200 })).find((m) => m.id === reply.id);
   assert.equal(stored!.replyTo!.id, parent.id);
 });
 

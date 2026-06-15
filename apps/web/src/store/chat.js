@@ -50,6 +50,19 @@ export const useChat = create((set, get) => ({
         set((s) => ({ modState: { ...s.modState, [m.data.userId]: { mutedUntil: m.data.mutedUntil, banned: m.data.banned } } }));
         return;
       }
+      // a reaction was toggled — apply the emoji's authoritative new count to that message
+      if (m.type === 'reaction') {
+        set((s) => ({
+          messages: s.messages.map((x) => {
+            if (x.id !== m.data.messageId) return x;
+            const reactions = { ...(x.reactions || {}) };
+            if (m.data.count > 0) reactions[m.data.emoji] = m.data.count;
+            else delete reactions[m.data.emoji];
+            return { ...x, reactions };
+          }),
+        }));
+        return;
+      }
       // 'message' = a user post; 'event' = a BIG BET / BIG WIN action bar (rendered inline in the rail)
       if (m.type !== 'message' && m.type !== 'event') return;
       set((s) =>
@@ -72,5 +85,17 @@ export const useChat = create((set, get) => ({
   // optimistically relabel a user's already-rendered messages after they change their username
   relabel(userId, handle) {
     set((s) => ({ messages: s.messages.map((m) => (m.userId === userId ? { ...m, handle } : m)) }));
+  },
+
+  // optimistic: highlight the viewer's own reaction toggle immediately; the WS 'reaction' echo sets the count
+  reactMine(messageId, emoji, mine) {
+    set((s) => ({
+      messages: s.messages.map((x) => {
+        if (x.id !== messageId) return x;
+        const my = new Set(x.myReactions || []);
+        if (mine) my.add(emoji); else my.delete(emoji);
+        return { ...x, myReactions: [...my] };
+      }),
+    }));
   },
 }));

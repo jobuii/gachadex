@@ -49,6 +49,22 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply): Pr
 }
 
 /**
+ * Best-effort viewer identity for PUBLIC routes that optionally personalize (leaderboard "you" row,
+ * chat "your reactions"). Returns the caller's userId if a valid Bearer token is present, else undefined.
+ * Never throws and never rejects the request — an invalid/expired token just means anonymous.
+ */
+export async function optionalViewerId(req: FastifyRequest): Promise<string | undefined> {
+  const header = req.headers['authorization'];
+  const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return undefined;
+  try {
+    return (await verifyAccessToken(token)).userId;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * preHandler for moderator-only chat actions. MUST be chained AFTER `authenticate` (it reads req.userId);
  * 403s anyone whose user row isn't is_mod. The operator (admin key) uses the separate admin-key routes.
  */

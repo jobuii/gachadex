@@ -1,15 +1,17 @@
 import type { FastifyInstance } from 'fastify';
-import { ChatPostRequest, UsernameRequest, ChatMuteRequest } from '@pokex/shared-types';
+import { ChatPostRequest, UsernameRequest, ChatMuteRequest, ReactRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
-import { authenticate, requireMod } from '../plugins/auth.ts';
+import { authenticate, requireMod, optionalViewerId } from '../plugins/auth.ts';
 import { rl } from './_ratelimit.ts';
 import { listChat, postChat, getProfile, setUsername, getProfileCard } from '../services/chat.ts';
 import { deleteMessage, muteUser, unmuteUser, setBanned } from '../services/chat-mod.ts';
+import { toggleReaction } from '../services/chat-reactions.ts';
 import { rankMap } from '../services/leaderboard.ts';
 
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/chat', async () => ({ messages: await listChat(await getDb()) })); // public read
+  // public read; optionally authenticated so a signed-in viewer's own reactions come back highlighted.
+  app.get('/chat', async (req) => ({ messages: await listChat(await getDb(), { viewerUserId: await optionalViewerId(req) }) }));
 
   // top-100 userId -> rank for chat rank badges (cached ~60s). Public, like the leaderboard itself.
   app.get('/chat/ranks', async () => rankMap(await getDb()));
@@ -32,6 +34,13 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.post('/me/username', rl(config.routeRateLimits.username, { preHandler: authenticate, config: { scope: 'full' } }), async (req) => {
     const { username } = UsernameRequest.parse(req.body ?? {});
     return setUsername(await getDb(), req.userId!, username);
+  });
+
+  // toggle an emoji reaction on a message (add if absent, remove if present)
+  app.post('/chat/messages/:id/react', rl(config.routeRateLimits.chatPost, { preHandler: authenticate, config: { scope: 'full' } }), async (req) => {
+    const { id } = req.params as { id: string };
+    const { emoji } = ReactRequest.parse(req.body ?? {});
+    return toggleReaction(await getDb(), req.userId!, id, emoji);
   });
 
   // --- moderator actions (in-chat; require a moderator account). Operator equivalents are admin-key routes.

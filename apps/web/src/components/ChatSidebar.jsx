@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { formatUsd } from '@pokex/pricing';
+import { CHAT_REACTIONS } from '@pokex/shared-types';
 import { useAuth } from '../auth/AuthContext';
 import { useChat } from '../store/chat';
 import * as api from '../lib/api.js';
@@ -17,6 +18,15 @@ function fmtTime(iso) {
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 const snippet = (s) => (s.length > 48 ? `${s.slice(0, 48)}…` : s);
+// a broader emoji set for composing messages (client-only — message bodies are free text)
+const COMPOSE_EMOJIS = ['😀', '😂', '😍', '😎', '🤔', '😅', '😭', '😡', '🥳', '😱', '💀', '👀', '👍', '👎', '🙏', '👏', '💪', '🔥', '💯', '🚀', '🎉', '❤️', '💔', '✅', '❌', '💰', '📈', '📉', '🐂', '🐻', '🤑', '💎'];
+
+// an in-progress @mention at the caret: the '@' is at the start or after whitespace, then [A-Za-z0-9_-]*.
+// returns { query, start } (start = the '@' index) so the partial can be replaced on accept.
+function mentionContext(value, caret) {
+  const m = value.slice(0, caret).match(/(?:^|\s)@([A-Za-z0-9_-]*)$/);
+  return m ? { query: m[1], start: caret - m[1].length - 1 } : null;
+}
 const usd0 = (e6) => formatUsd(BigInt(e6 ?? 0), { decimals: 0 }); // tolerate a missing field rather than blank the rail
 
 // leaderboard rank -> badge tier (ascending cutoff; first the rank fits wins). Only the top 100 earn one.
@@ -117,6 +127,7 @@ export function ChatSidebar({ open, onToggle }) {
   const relabel = useChat((s) => s.relabel);
   const modState = useChat((s) => s.modState); // live mute/ban snapshots (userId -> {mutedUntil, banned})
   const ranks = useChat((s) => s.ranks); // userId -> leaderboard rank (top 100) for rank badges
+  const reactMine = useChat((s) => s.reactMine);
 
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -129,6 +140,9 @@ export function ChatSidebar({ open, onToggle }) {
   const [modMsg, setModMsg] = useState(null); // transient confirmation banner for mod actions
   const [now, setNow] = useState(() => Date.now()); // ticks so the "muted — N min left" countdown stays live
   const [hover, setHover] = useState(null); // profile hover card anchor: { userId, top, left }
+  const [pickerFor, setPickerFor] = useState(null); // messageId whose reaction picker is open
+  const [composePicker, setComposePicker] = useState(false); // the compose-box emoji popup
+  const [mention, setMention] = useState(null); // @mention autocomplete: { query, start, items, active } | null
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const modMsgTimer = useRef(null);
@@ -169,6 +183,7 @@ export function ChatSidebar({ open, onToggle }) {
 
   const tag = (handle) => {
     if (!/^[A-Za-z0-9_-]+$/.test(handle)) return; // only username handles are taggable (a truncated pubkey isn't)
+    setMention(null);
     setText((t) => `${t}${t && !t.endsWith(' ') ? ' ' : ''}@${handle} `);
     inputRef.current?.focus();
   };
@@ -192,6 +207,14 @@ export function ChatSidebar({ open, onToggle }) {
   const closeCardSoon = () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); hoverTimer.current = setTimeout(() => setHover(null), 150); };
   const cancelClose = () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); };
 
+  // toggle an emoji reaction: highlight optimistically, then call the API (the WS echo sets the count).
+  // On failure, revert the optimistic highlight so it doesn't stick without a matching count.
+  const onReact = (m, emoji) => {
+    const mine = !(m.myReactions || []).includes(emoji);
+    reactMine(m.id, emoji, mine);
+    api.reactChat(m.id, emoji).catch(() => reactMine(m.id, emoji, !mine));
+  };
+
   const onSend = async () => {
     const body = text.trim();
     if (!body || busy) return;
@@ -200,11 +223,62 @@ export function ChatSidebar({ open, onToggle }) {
       await send(body, replyTo?.id);
       setText('');
       setReplyTo(null);
+      setComposePicker(false);
+      setMention(null);
     } catch {
       /* keep it simple */
     } finally {
       setBusy(false);
     }
+  };
+
+  // insert an emoji into the message at the caret (or append), keeping focus + caret after it
+  const insertEmoji = (emoji) => {
+    const el = inputRef.current;
+    const start = el?.selectionStart ?? text.length;
+    const end = el?.selectionEnd ?? text.length;
+    const next = text.slice(0, start) + emoji + text.slice(end);
+    if (next.length > 280) return; // at the limit — don't insert a partial/broken emoji
+    setText(next);
+    setMention(null);
+    requestAnimationFrame(() => {
+      if (!el) return;
+      try { el.focus(); const pos = start + emoji.length; el.setSelectionRange(pos, pos); } catch { /* noop */ }
+    });
+  };
+
+  // @mention autocomplete — candidates are taggable handles seen in chat (usernames, not the viewer)
+  const taggable = useMemo(
+    () => [...new Set(messages.map((mm) => mm.handle))].filter((h) => /^[A-Za-z0-9_-]+$/.test(h) && h !== me?.handle),
+    [messages, me?.handle],
+  );
+  const updateMention = (value, caret) => {
+    const ctx = mentionContext(value, caret);
+    if (!ctx) { setMention(null); return; }
+    const q = ctx.query.toLowerCase();
+    const items = taggable.filter((h) => h.toLowerCase().includes(q)).slice(0, 6);
+    setMention(items.length ? { ...ctx, items, active: 0 } : null);
+  };
+  const onComposeChange = (e) => { setText(e.target.value); updateMention(e.target.value, e.target.selectionStart ?? e.target.value.length); };
+  const acceptMention = (handle) => {
+    const caret = inputRef.current?.selectionStart ?? text.length;
+    const ctx = mentionContext(text, caret);
+    if (!ctx) return;
+    const insert = `@${handle} `;
+    const next = text.slice(0, ctx.start) + insert + text.slice(caret);
+    setText(next);
+    setMention(null);
+    const pos = ctx.start + insert.length;
+    requestAnimationFrame(() => { const el = inputRef.current; if (el) { el.focus(); el.setSelectionRange(pos, pos); } });
+  };
+  const onComposeKeyDown = (e) => {
+    if (mention) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setMention((mm) => mm && { ...mm, active: (mm.active + 1) % mm.items.length }); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setMention((mm) => mm && { ...mm, active: (mm.active - 1 + mm.items.length) % mm.items.length }); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acceptMention(mention.items[mention.active]); return; }
+      if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
+    }
+    if (e.key === 'Enter') onSend();
   };
 
   const saveName = async () => {
@@ -292,6 +366,18 @@ export function ChatSidebar({ open, onToggle }) {
                     {user && (
                       <button className="chat-reply-btn" title="Reply" onClick={() => setReplyTo({ id: m.id, handle: m.handle, body: m.body })}>↩</button>
                     )}
+                    {user && (
+                      <span className={`chat-react-add-wrap ${pickerFor === m.id ? 'open' : ''}`}>
+                        <button className="chat-react-add" title="Add reaction" onClick={() => setPickerFor(pickerFor === m.id ? null : m.id)}>＋</button>
+                        {pickerFor === m.id && (
+                          <span className="chat-react-picker">
+                            {CHAT_REACTIONS.map((e) => (
+                              <button key={e} onClick={() => { onReact(m, e); setPickerFor(null); }}>{e}</button>
+                            ))}
+                          </span>
+                        )}
+                      </span>
+                    )}
                     {isMod && (
                       <span className="chat-mod-tools">
                         <button className="chat-mod-btn chat-mod-del" title="Delete message" onClick={() => modAct('Message deleted', () => api.chatDelete(m.id))}>✕</button>
@@ -316,6 +402,20 @@ export function ChatSidebar({ open, onToggle }) {
                     <div className="chat-quote">↳ <b>{m.replyTo.handle}</b> {snippet(m.replyTo.body)}</div>
                   )}
                   <div className="chat-text">{renderBody(m.body, me?.username)}</div>
+                  {Object.keys(m.reactions || {}).length > 0 && (
+                    <div className="chat-reactions">
+                      {Object.entries(m.reactions || {}).map(([emoji, count]) => (
+                        <button
+                          key={emoji}
+                          className={`chat-react ${(m.myReactions || []).includes(emoji) ? 'mine' : ''}`}
+                          onClick={() => onReact(m, emoji)}
+                          disabled={!user}
+                        >
+                          <span>{emoji}</span> {count}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -365,15 +465,41 @@ export function ChatSidebar({ open, onToggle }) {
           >
             {me?.handle?.[0]?.toUpperCase() ?? '?'}
           </span>
-          <input
-            ref={inputRef}
-            type="text"
-            value={text}
-            maxLength={280}
-            placeholder="Message…  (@ to tag)"
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') onSend(); }}
-          />
+          <div className="chat-compose">
+            <input
+              ref={inputRef}
+              type="text"
+              value={text}
+              maxLength={280}
+              placeholder="Message… (@ to tag)"
+              onChange={onComposeChange}
+              onKeyDown={onComposeKeyDown}
+              onBlur={() => setMention(null)}
+            />
+            <button className="chat-emoji-btn" title="Emoji" onClick={() => setComposePicker((v) => !v)}>😊</button>
+            {composePicker && (
+              <div className="chat-emoji-popup">
+                {COMPOSE_EMOJIS.map((e) => (
+                  <button key={e} onMouseDown={(ev) => { ev.preventDefault(); insertEmoji(e); }}>{e}</button>
+                ))}
+              </div>
+            )}
+            {mention && (
+              <div className="chat-mention-menu">
+                {mention.items.map((h, i) => (
+                  <button
+                    key={h}
+                    className={`chat-mention-item ${i === mention.active ? 'active' : ''}`}
+                    onMouseDown={(e) => { e.preventDefault(); acceptMention(h); }}
+                    onMouseEnter={() => setMention((mm) => (mm ? { ...mm, active: i } : mm))}
+                  >
+                    <span className="chat-mention-ava" style={{ background: colorFor(h) }}>{h[0]?.toUpperCase()}</span>
+                    <span>{h}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button className="btn-primary sm" disabled={busy || !text.trim()} onClick={onSend}>{busy ? '…' : 'Send'}</button>
         </div>
       )}

@@ -194,6 +194,14 @@ export const ModGrantRequest = z.object({
   action: z.enum(['grant', 'revoke']),
 });
 
+// The allowed chat reaction emojis — shared by the server (validation) and the client (picker).
+export const CHAT_REACTIONS = ['👍', '❤️', '😂', '🔥', '🚀', '💯', '😮', '😢'];
+
+// Toggle a reaction on a message. The emoji must be one of CHAT_REACTIONS (re-checked server-side).
+export const ReactRequest = z.object({
+  emoji: z.string().min(1).max(16),
+});
+
 // --- auth (SIWS) -------------------------------------------------------------
 
 export const NonceRequest = z.object({ pubkey: z.string().min(32) });

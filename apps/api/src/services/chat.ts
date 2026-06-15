@@ -25,11 +25,13 @@ export interface ChatMessage {
   isMod: boolean; // author is a moderator (drives the MOD chip)
   authorMutedUntil?: string | null; // author's current mute expiry — lets a mod see mute↔unmute state
   authorBanned?: boolean; // author currently banned — lets a mod see ban↔unban state
+  reactions?: Record<string, number>; // emoji -> count
+  myReactions?: string[]; // emojis the viewer has reacted with (empty when anonymous)
 }
 
-/** Recent messages, oldest-first, each with its reply context resolved. */
-export async function listChat(db: Db, limit = 50): Promise<ChatMessage[]> {
-  const n = Math.min(Math.max(limit, 1), 200);
+/** Recent messages, oldest-first, each with reply context + reaction counts (and the viewer's own). */
+export async function listChat(db: Db, opts: { limit?: number; viewerUserId?: string } = {}): Promise<ChatMessage[]> {
+  const n = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const r = await db.query<{
     id: string; user_id: string; body: string; created_at: string; dn: string | null; pk: string; author_mod: boolean;
     author_mu: string | null; author_banned: boolean;
@@ -47,6 +49,24 @@ export async function listChat(db: Db, limit = 50): Promise<ChatMessage[]> {
      ORDER BY c.created_at DESC, c.id DESC LIMIT $1`,
     [n],
   );
+
+  // reaction counts (+ which the viewer reacted with) for just the fetched messages, in one query
+  const ids = r.rows.map((m) => m.id);
+  const byMsg = new Map<string, { reactions: Record<string, number>; mine: string[] }>();
+  if (ids.length) {
+    const rx = await db.query<{ message_id: string; emoji: string; n: number; mine: boolean | null }>(
+      `SELECT message_id, emoji, COUNT(*)::int AS n, BOOL_OR(user_id = $2) AS mine
+       FROM chat_reactions WHERE message_id = ANY($1) GROUP BY message_id, emoji`,
+      [ids, opts.viewerUserId ?? null],
+    );
+    for (const x of rx.rows) {
+      let e = byMsg.get(x.message_id);
+      if (!e) { e = { reactions: {}, mine: [] }; byMsg.set(x.message_id, e); }
+      e.reactions[x.emoji] = x.n;
+      if (x.mine) e.mine.push(x.emoji);
+    }
+  }
+
   return r.rows.reverse().map((m) => ({
     id: m.id,
     userId: m.user_id,
@@ -60,6 +80,8 @@ export async function listChat(db: Db, limit = 50): Promise<ChatMessage[]> {
     isMod: m.author_mod,
     authorMutedUntil: m.author_mu,
     authorBanned: m.author_banned,
+    reactions: byMsg.get(m.id)?.reactions ?? {},
+    myReactions: byMsg.get(m.id)?.mine ?? [],
   }));
 }
 
