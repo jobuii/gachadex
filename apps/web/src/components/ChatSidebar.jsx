@@ -27,6 +27,12 @@ function mentionContext(value, caret) {
   const m = value.slice(0, caret).match(/(?:^|\s)@([A-Za-z0-9_-]*)$/);
   return m ? { query: m[1], start: caret - m[1].length - 1 } : null;
 }
+
+// consecutive messages from the same author within 5 min group under one avatar/handle
+function isGroupedWith(m, prev) {
+  return !!prev && prev.kind !== 'event' && prev.userId === m.userId
+    && new Date(m.createdAt).getTime() - new Date(prev.createdAt).getTime() < 5 * 60 * 1000;
+}
 const usd0 = (e6) => formatUsd(BigInt(e6 ?? 0), { decimals: 0 }); // tolerate a missing field rather than blank the rail
 
 // leaderboard rank -> badge tier (ascending cutoff; first the rank fits wins). Only the top 100 earn one.
@@ -144,10 +150,13 @@ export function ChatSidebar({ open, onToggle }) {
   const [pickerFor, setPickerFor] = useState(null); // messageId whose reaction picker is open
   const [composePicker, setComposePicker] = useState(false); // the compose-box emoji popup
   const [mention, setMention] = useState(null); // @mention autocomplete: { query, start, items, active } | null
+  const [hasNew, setHasNew] = useState(false); // unseen messages while scrolled up -> "new messages" pill
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const modMsgTimer = useRef(null);
   const hoverTimer = useRef(null);
+  const atBottomRef = useRef(true); // is the list scrolled to (near) the bottom — drives auto-stick
+  const wasOpenRef = useRef(false); // was the rail open last render — detect the open transition
 
   // load my chat profile (username + handle) when signed in
   useEffect(() => {
@@ -166,10 +175,35 @@ export function ChatSidebar({ open, onToggle }) {
     if (open) markRead();
   }, [open, messages, markRead]);
 
+  // auto-stick to the bottom on new messages, UNLESS the user has scrolled up (then flag "new messages").
+  // Opening the rail jumps to the latest and clears the flag (fresh position on reopen).
   useEffect(() => {
     const el = listRef.current;
-    if (open && el) el.scrollTop = el.scrollHeight;
+    if (!open) { wasOpenRef.current = false; return; }
+    if (!el) return;
+    if (!wasOpenRef.current) {
+      wasOpenRef.current = true;
+      el.scrollTop = el.scrollHeight;
+      atBottomRef.current = true;
+      setHasNew(false);
+      return;
+    }
+    if (atBottomRef.current) el.scrollTop = el.scrollHeight;
+    else setHasNew(true);
   }, [messages, open]);
+
+  const onScroll = () => {
+    const el = listRef.current;
+    if (!el) return;
+    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    if (atBottomRef.current) setHasNew(false);
+  };
+  const scrollToBottom = () => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    atBottomRef.current = true;
+    setHasNew(false);
+  };
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 30_000);
@@ -326,82 +360,58 @@ export function ChatSidebar({ open, onToggle }) {
     <aside className="chat-sidebar">
       <div className="chat-header">
         <span className="chat-header-left">
-          <span className="chat-title">▣ Live Chat</span>
+          <span className="chat-title">LIVE CHAT</span>
           {online > 0 && <span className="chat-online" title={`${online} online`}>{online}</span>}
         </span>
         <button className="chat-collapse" onClick={onToggle} title="Hide chat" aria-label="Hide chat">◀</button>
       </div>
 
-      <div className="chat-messages" ref={listRef}>
+      <div className="chat-scroll-wrap">
+      <div className="chat-messages" ref={listRef} onScroll={onScroll}>
         {messages.length === 0 ? (
           <div className="chat-empty">No messages yet.<br />Say hi 👋</div>
         ) : (
-          messages.map((m) => {
+          messages.map((m, i) => {
             if (m.kind === 'event') return <ActionBar key={m.id} m={m} rank={ranks[m.userId]} isMod={isMod} onDelete={() => modAct('Message deleted', () => api.chatDelete(m.id))} />;
             const mine = m.userId === user?.id;
             const hColor = colorFor(m.handle);
             const aState = effFor(m.userId, m.authorMutedUntil, m.authorBanned);
             const aMuted = muteLeftMin(aState.mutedUntil) > 0;
             const aBanned = aState.banned;
+            const grouped = isGroupedWith(m, messages[i - 1]);
             return (
-              <div key={m.id} className="chat-msg">
-                <span
-                  className="chat-avatar"
-                  style={{ background: hColor }}
-                  onClick={() => onIdentity(m)}
-                  title={mine ? 'Edit your username' : `Tag ${m.handle}`}
-                >
-                  {m.handle?.[0]?.toUpperCase()}
-                </span>
+              <div key={m.id} className={`chat-msg ${grouped ? 'grouped' : ''}`}>
+                {grouped ? (
+                  <span className="chat-avatar-spacer" />
+                ) : (
+                  <span
+                    className={`chat-avatar ${m.isMod ? 'av-mod' : ''}`}
+                    style={{ background: hColor }}
+                    onClick={() => onIdentity(m)}
+                    onMouseEnter={(e) => openCard(m.userId, e)}
+                    onMouseLeave={closeCardSoon}
+                    title={mine ? 'Edit your username' : `Tag ${m.handle}`}
+                  >
+                    {m.handle?.[0]?.toUpperCase()}
+                  </span>
+                )}
                 <div className="chat-msg-main">
-                  <div className="chat-msg-head">
-                    <span
-                      className="chat-handle"
-                      style={{ color: hColor }}
-                      onClick={() => onIdentity(m)}
-                      onMouseEnter={(e) => openCard(m.userId, e)}
-                      onMouseLeave={closeCardSoon}
-                    >
-                      {m.handle}
-                    </span>
-                    <RankBadge rank={ranks[m.userId]} />
-                    {m.isMod && <span className="chat-mod-chip" title="Moderator">MOD</span>}
-                    <span className="chat-time">{fmtTime(m.createdAt)}</span>
-                    {user && (
-                      <button className="chat-reply-btn" title="Reply" onClick={() => setReplyTo({ id: m.id, handle: m.handle, body: m.body })}>↩</button>
-                    )}
-                    {user && (
-                      <span className={`chat-react-add-wrap ${pickerFor === m.id ? 'open' : ''}`}>
-                        <button className="chat-react-add" title="Add reaction" onClick={() => setPickerFor(pickerFor === m.id ? null : m.id)}>＋</button>
-                        {pickerFor === m.id && (
-                          <span className="chat-react-picker">
-                            {CHAT_REACTIONS.map((e) => (
-                              <button key={e} onClick={() => { onReact(m, e); setPickerFor(null); }}>{e}</button>
-                            ))}
-                          </span>
-                        )}
+                  {!grouped && (
+                    <div className="chat-msg-head">
+                      <span
+                        className="chat-handle"
+                        style={{ color: hColor }}
+                        onClick={() => onIdentity(m)}
+                        onMouseEnter={(e) => openCard(m.userId, e)}
+                        onMouseLeave={closeCardSoon}
+                      >
+                        {m.handle}
                       </span>
-                    )}
-                    {isMod && (
-                      <span className="chat-mod-tools">
-                        <button className="chat-mod-btn chat-mod-del" title="Delete message" onClick={() => modAct('Message deleted', () => api.chatDelete(m.id))}>✕</button>
-                        {!mine && !m.isMod && (
-                          <>
-                            {aMuted ? (
-                              <button className="chat-mod-btn" title="Unmute" onClick={() => modAct(`Unmuted ${m.handle}`, () => api.chatUnmute(m.userId))}>🔊</button>
-                            ) : (
-                              <button className="chat-mod-btn" title="Mute 60m" onClick={() => modAct(`Muted ${m.handle} for 60m`, () => api.chatMute(m.userId))}>🔇</button>
-                            )}
-                            {aBanned ? (
-                              <button className="chat-mod-btn" title="Unban" onClick={() => modAct(`Unbanned ${m.handle}`, () => api.chatUnban(m.userId))}>♻️</button>
-                            ) : (
-                              <button className="chat-mod-btn" title="Ban from chat" onClick={() => { if (window.confirm(`Ban ${m.handle} from chat?`)) modAct(`Banned ${m.handle}`, () => api.chatBan(m.userId)); }}>🚫</button>
-                            )}
-                          </>
-                        )}
-                      </span>
-                    )}
-                  </div>
+                      <RankBadge rank={ranks[m.userId]} />
+                      {m.isMod && <span className="chat-mod-chip" title="Moderator">MOD</span>}
+                      <span className="chat-time">{fmtTime(m.createdAt)}</span>
+                    </div>
+                  )}
                   {m.replyTo && (
                     <div className="chat-quote">↳ <b>{m.replyTo.handle}</b> {snippet(m.replyTo.body)}</div>
                   )}
@@ -421,10 +431,47 @@ export function ChatSidebar({ open, onToggle }) {
                     </div>
                   )}
                 </div>
+                {/* hover toolbar (reply / react / mod) — top-right of the row */}
+                {user && (
+                  <span className={`chat-msg-tools ${pickerFor === m.id ? 'open' : ''}`}>
+                    <button className="chat-tool-btn" title="Reply" onClick={() => setReplyTo({ id: m.id, handle: m.handle, body: m.body })}>↩</button>
+                    <span className={`chat-react-add-wrap ${pickerFor === m.id ? 'open' : ''}`}>
+                      <button className="chat-react-add chat-tool-btn" title="Add reaction" onClick={() => setPickerFor(pickerFor === m.id ? null : m.id)}>＋</button>
+                      {pickerFor === m.id && (
+                        <span className="chat-react-picker">
+                          {CHAT_REACTIONS.map((e) => (
+                            <button key={e} onClick={() => { onReact(m, e); setPickerFor(null); }}>{e}</button>
+                          ))}
+                        </span>
+                      )}
+                    </span>
+                    {isMod && (
+                      <>
+                        <button className="chat-mod-btn chat-mod-del" title="Delete message" onClick={() => modAct('Message deleted', () => api.chatDelete(m.id))}>✕</button>
+                        {!mine && !m.isMod && (
+                          aMuted ? (
+                            <button className="chat-mod-btn" title="Unmute" onClick={() => modAct(`Unmuted ${m.handle}`, () => api.chatUnmute(m.userId))}>🔊</button>
+                          ) : (
+                            <button className="chat-mod-btn" title="Mute 60m" onClick={() => modAct(`Muted ${m.handle} for 60m`, () => api.chatMute(m.userId))}>🔇</button>
+                          )
+                        )}
+                        {!mine && !m.isMod && (
+                          aBanned ? (
+                            <button className="chat-mod-btn" title="Unban" onClick={() => modAct(`Unbanned ${m.handle}`, () => api.chatUnban(m.userId))}>♻️</button>
+                          ) : (
+                            <button className="chat-mod-btn" title="Ban from chat" onClick={() => { if (window.confirm(`Ban ${m.handle} from chat?`)) modAct(`Banned ${m.handle}`, () => api.chatBan(m.userId)); }}>🚫</button>
+                          )
+                        )}
+                      </>
+                    )}
+                  </span>
+                )}
               </div>
             );
           })
         )}
+      </div>
+        {hasNew && <button className="chat-newmsg" onClick={scrollToBottom}>New messages ↓</button>}
       </div>
 
       {replyTo && (
