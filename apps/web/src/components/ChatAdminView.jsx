@@ -30,6 +30,7 @@ export function ChatAdminView({ adminKey }) {
   const [drop, setDrop] = useState(null); // { bucketE6, recentRounds, totalTippedE6, recentTips }
   const [mods, setMods] = useState(null); // { mods, muted, banned, recentActions }
   const [chatUsers, setChatUsers] = useState(null); // [{ userId, handle, pubkey, messages, lastAt, isMod }]
+  const [copied, setCopied] = useState(null); // last-copied wallet (click-to-copy, like CustomersView)
   const [err, setErr] = useState(null);
   const [note, setNote] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -146,6 +147,14 @@ export function ChatAdminView({ adminKey }) {
     }
   };
 
+  // click a wallet to copy it (same as the Customers view)
+  const copy = (text) => {
+    if (!text) return;
+    navigator.clipboard?.writeText(text);
+    setCopied(text);
+    setTimeout(() => setCopied((c) => (c === text ? null : c)), 1000);
+  };
+
   return (
     <div className="chatadmin">
       {note && <div className="ref-msg up">{note}</div>}
@@ -165,7 +174,7 @@ export function ChatAdminView({ adminKey }) {
           {chatUsers?.map((u) => (
             <tr key={u.userId}>
               <td>{u.handle}{u.isMod && <span className="chat-mod-chip">MOD</span>}</td>
-              <td className="muted" title={u.pubkey}>{shortenPubkey(u.pubkey)}</td>
+              <td className="addr" title={u.pubkey} onClick={() => copy(u.pubkey)}>{copied === u.pubkey ? 'copied!' : shortenPubkey(u.pubkey)}</td>
               <td>{u.messages}</td>
               <td className="muted">{fmtWhen(u.lastAt)}</td>
             </tr>
