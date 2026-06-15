@@ -11,6 +11,7 @@ export function Portfolio({ markets, onSelect }) {
   const { user } = useAuth();
   const [balance, setBalance] = useState(null);
   const [positions, setPositions] = useState([]);
+  const [lp, setLp] = useState(null);
   const [realFunds, setRealFunds] = useState(false);
 
   useEffect(() => {
@@ -21,6 +22,7 @@ export function Portfolio({ markets, onSelect }) {
     if (!user) return;
     api.getBalance().then(setBalance).catch(() => {});
     api.getPositions().then((r) => setPositions(r.positions)).catch(() => {});
+    api.getLpPosition().then(setLp).catch(() => {});
   }, [user]);
 
   useEffect(() => {
@@ -49,6 +51,7 @@ export function Portfolio({ markets, onSelect }) {
         <div className="stat-card"><span className="sc-label">Equity</span><span className="sc-val">{stat(v.equityUusdc)}</span></div>
         <div className="stat-card"><span className="sc-label">Available</span><span className="sc-val">{stat(v.availableUusdc)}</span></div>
         <div className="stat-card"><span className="sc-label">Margin Locked</span><span className="sc-val">{stat(v.lockedMarginUusdc)}</span></div>
+        <div className="stat-card"><span className="sc-label">LP Pool</span><span className="sc-val">{stat(lp?.valueUusdc)}</span></div>
         <div className="stat-card"><span className="sc-label">Unrealized PnL</span><span className={`sc-val ${pnlUp ? 'up' : 'down'}`}>{stat(v.unrealizedPnlUusdc)}</span></div>
       </div>
       <div style={{ margin: '1rem 0' }}>

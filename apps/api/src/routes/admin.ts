@@ -22,6 +22,7 @@ import {
 import { InsuranceFundRequest, CustodyLimitsRequest } from '@pokex/shared-types';
 import { allocateTreasurySurplusToInsurance } from '../services/insurance.ts';
 import { housePnlBreakdown } from '../services/house-pnl.ts';
+import { customerLpTotal } from '../services/lp.ts';
 import { limitsView, setLimits } from '../services/custody/limits.ts';
 
 /**
@@ -96,13 +97,15 @@ export function adminRoutes(chains: AdminChains) {
     // the customer-funds aggregate (free + locked) for the operator dashboard P/L.
     app.get('/admin/treasury', rl(config.routeRateLimits.admin), async () => {
       const db = await getDb();
-      const [s, cust, pnlBreakdown] = await Promise.all([
+      const [s, cust, pnlBreakdown, customerLpE6] = await Promise.all([
         treasuryState(db, chains.treasuryChain),
         customerFunds(db),
         housePnlBreakdown(db),
+        customerLpTotal(db),
       ]);
       return {
         pnlBreakdown, // already string-valued — no per-field serialization to forget
+        customerLpE6: customerLpE6.toString(), // total current value of all customers' LP-pool stakes
         liabilityE6: s.liabilityE6.toString(),
         hotE6: s.hotE6.toString(),
         coldE6: s.coldE6.toString(),

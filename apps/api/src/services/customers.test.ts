@@ -17,6 +17,7 @@ const { creditFaucet } = await import('./faucet.ts');
 const { openPosition } = await import('./engine.ts');
 const { listCustomers } = await import('./customers.ts');
 const { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } = await import('./ledger.ts');
+const { lpDeposit, getLpPosition } = await import('./lp.ts');
 
 await initDb();
 const db = await getDb();
@@ -109,4 +110,15 @@ test('listCustomers paginates and sorts (by volume desc) across users', async ()
   const page2 = await listCustomers(db, { limit: 1, offset: 1, sort: 'volume' });
   assert.equal(page2.customers.length, 1);
   assert.notEqual(page2.customers[0].userId, page1.customers[0].userId); // a different user on page 2
+});
+
+test("listCustomers surfaces each customer's LP-pool stake (lpE6), matching the per-user valuation", async () => {
+  const userId = await newUser('wallet-pk-lp', 'deposit-addr-lp', 7);
+  await lpDeposit(db, userId, 300_000_000n); // move $300 of the $10k faucet into the LP pool
+  const { customers } = await listCustomers(db, { limit: 200, offset: 0, sort: 'joined' });
+  const row = customers.find((c) => c.userId === userId)!;
+  const direct = await getLpPosition(db, userId);
+  assert.equal(row.lpE6, direct.valueUusdc, 'lpE6 matches the canonical getLpPosition value');
+  assert.ok(BigInt(row.lpE6) >= 300_000_000n, 'at least the $300 deposited');
+  assert.equal(BigInt(row.freeE6), 10_000_000_000n - 300_000_000n, 'free collateral dropped by the LP deposit');
 });

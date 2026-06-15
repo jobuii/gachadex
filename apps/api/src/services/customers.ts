@@ -1,4 +1,5 @@
 import type { Db } from '../db/client.ts';
+import { getPool, lpShareValue } from './lp.ts';
 
 /**
  * Operator view of individual customers (admin dashboard "Customers" tab). One row per user, joining
@@ -13,6 +14,7 @@ export interface CustomerRow {
   joinedAt: string;
   depositAddress: string | null;
   freeE6: string; // available collateral (USER_COLLATERAL)
+  lpE6: string; // current value of their LP-pool stake (shares marked to pool NAV)
   lockedE6: string; // margin locked in open positions (USER_POSITION_MARGIN)
   volumeE6: string; // lifetime traded notional (Σ qty*price over fills)
   feesE6: string; // lifetime trading fees paid
@@ -41,7 +43,7 @@ export async function listCustomers(
   opts: { limit: number; offset: number; sort: string },
 ): Promise<{ customers: CustomerRow[]; total: number }> {
   const orderBy = SORT_EXPR[opts.sort] ?? SORT_EXPR.volume;
-  const [r, totalR] = await Promise.all([
+  const [r, totalR, pool] = await Promise.all([
     db.query<{
     id: string;
     solana_pubkey: string;
@@ -50,6 +52,7 @@ export async function listCustomers(
     joined_at: string;
     deposit_address: string | null;
     free_e6: string;
+    lp_shares: string;
     locked_e6: string;
     volume_e6: string;
     fees_e6: string;
@@ -99,11 +102,16 @@ export async function listCustomers(
        FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
        WHERE a.type = 'USER_COLLATERAL' AND le.reason = 'FUNDING'
        GROUP BY a.user_id
+     ),
+     -- current LP stake (shares); valued to pool NAV in JS via lpShareValue (keeps the share math in one place)
+     lp AS (
+       SELECT user_id, shares FROM lp_positions WHERE shares > 0
      )
      SELECT u.id, u.solana_pubkey, u.display_name, u.status,
             u.created_at::text AS joined_at,
             da.address AS deposit_address,
             COALESCE(coll.amount_uusdc, 0)::text AS free_e6,
+            COALESCE(lp.shares, 0)::text AS lp_shares,
             COALESCE(marg.amount_uusdc, 0)::text AS locked_e6,
             COALESCE(vol.volume_e6, 0)::text AS volume_e6,
             COALESCE(vol.fees_e6, 0)::text AS fees_e6,
@@ -125,12 +133,16 @@ export async function listCustomers(
      LEFT JOIN dep ON dep.user_id = u.id
      LEFT JOIN wd ON wd.user_id = u.id
      LEFT JOIN fund ON fund.user_id = u.id
+     LEFT JOIN lp ON lp.user_id = u.id
      ORDER BY ${orderBy} DESC NULLS LAST, u.created_at DESC
      LIMIT $1 OFFSET $2`,
       [opts.limit, opts.offset],
     ),
     db.query<{ c: string }>(`SELECT COUNT(*)::text AS c FROM users`),
+    getPool(db),
   ]);
+  const lpNav = BigInt(pool.navUusdc);
+  const lpTotalShares = BigInt(pool.totalShares);
   return {
     customers: r.rows.map((x) => ({
       userId: x.id,
@@ -140,6 +152,7 @@ export async function listCustomers(
       joinedAt: x.joined_at,
       depositAddress: x.deposit_address,
       freeE6: x.free_e6,
+      lpE6: lpShareValue(BigInt(x.lp_shares), lpNav, lpTotalShares).toString(),
       lockedE6: x.locked_e6,
       volumeE6: x.volume_e6,
       feesE6: x.fees_e6,
