@@ -294,3 +294,38 @@ export async function setUsername(db: Db, userId: string, rawName: string): Prom
     return { username: name };
   });
 }
+
+export interface ChatUserRow {
+  userId: string;
+  handle: string;
+  pubkey: string; // their connected Solana wallet
+  messages: number; // lifetime chat messages posted
+  lastAt: string; // last message timestamp
+  isMod: boolean;
+}
+
+/**
+ * Operator view of everyone who has been active in chat — posted >=1 real message — with their connected
+ * wallet, message count, and last-active time, most-active first. For the admin CHAT view. Action-bar /
+ * system rows (kind != 'message') and authorless rows are excluded by the join.
+ */
+export async function listChatUsers(db: Db, limit = 500): Promise<ChatUserRow[]> {
+  const r = await db.query<{ id: string; pk: string; dn: string | null; is_mod: boolean; cnt: string; last_at: string }>(
+    `SELECT u.id, u.solana_pubkey AS pk, u.display_name AS dn, u.is_mod,
+            COUNT(m.id)::text AS cnt, MAX(m.created_at) AS last_at
+     FROM users u
+     JOIN chat_messages m ON m.user_id = u.id AND m.kind = 'message'
+     GROUP BY u.id, u.solana_pubkey, u.display_name, u.is_mod
+     ORDER BY COUNT(m.id) DESC, MAX(m.created_at) DESC
+     LIMIT $1`,
+    [limit],
+  );
+  return r.rows.map((x) => ({
+    userId: x.id,
+    handle: handleFor(x.dn, x.pk),
+    pubkey: x.pk,
+    messages: Number(x.cnt),
+    lastAt: x.last_at,
+    isMod: x.is_mod,
+  }));
+}

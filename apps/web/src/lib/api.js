@@ -204,6 +204,7 @@ export const adminUnpin = (id, adminKey) => adminReq(`/admin/markets/${id}/unpin
 // action is grant | revoke | unmute | unban.
 export const adminGetMods = (adminKey) => adminGet('/admin/chat/mods', adminKey);
 export const adminSetMod = (userId, action, adminKey) => adminReq(`/admin/chat/mods/${userId}`, adminKey, { action });
+export const adminGetChatUsers = (adminKey) => adminGet('/admin/chat/users', adminKey); // { users: [{handle, pubkey, messages, lastAt, isMod}] }
 // Chat admin view: live action-bar thresholds + DROP config/pot bucket.
 export const adminGetChatThresholds = (adminKey) => adminGet('/admin/chat/thresholds', adminKey);
 export const adminSetChatThresholds = (body, adminKey) => adminReq('/admin/chat/thresholds', adminKey, body);

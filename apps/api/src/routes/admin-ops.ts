@@ -12,6 +12,7 @@ import { marketStats } from '../services/admin-stats.ts';
 import { houseEconomics } from '../services/house-pnl.ts';
 import { restrictionsReport } from '../services/restrictions.ts';
 import { setMod, listModState, unmuteUser, setBanned, resolveChatUserId } from '../services/chat-mod.ts';
+import { listChatUsers } from '../services/chat.ts';
 import { chatConfigView, setChatThresholds } from '../services/chat-config.ts';
 import { dropConfigView, setDropConfig, getDropView } from '../services/drop-config.ts';
 import { totalTippedE6, recentTips } from '../services/drop.ts';
@@ -160,6 +161,9 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     const [view, tipped, tips] = await Promise.all([getDropView(db), totalTippedE6(db), recentTips(db)]);
     return { ...view, totalTippedE6: tipped.toString(), recentTips: tips };
   });
+
+  // Active chat users: everyone who has posted >=1 message, with their connected wallet + counts.
+  app.get('/admin/chat/users', rl(config.routeRateLimits.admin), async () => ({ users: await listChatUsers(await getDb()) }));
 
   // Panel 3 — moderation. GET current mods/muted/banned + recent audit; POST an action on a user (the
   // path segment may be an internal id OR a wallet pubkey, resolved server-side). grant/revoke toggle MOD;

@@ -9,7 +9,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
-const { postChat, listChat, getProfile, setUsername } = await import('./chat.ts');
+const { postChat, listChat, getProfile, setUsername, listChatUsers } = await import('./chat.ts');
 const { onMessage } = await import('./bus.ts');
 
 await initDb();
@@ -96,6 +96,27 @@ test('chat: replying carries the parent context and survives a reload; bad paren
 
   const stored = (await listChat(db, { limit: 200 })).find((m) => m.id === reply.id);
   assert.equal(stored!.replyTo!.id, parent.id);
+});
+
+test('listChatUsers lists posters with wallet + message count, most-active first, and skips non-posters', async () => {
+  const a = await newUser();
+  const b = await newUser();
+  const c = await newUser(); // posts nothing
+  await postChat(db, a, 'a1');
+  await postChat(db, a, 'a2');
+  await postChat(db, a, 'a3');
+  await postChat(db, b, 'b1');
+
+  const users = await listChatUsers(db);
+  const ra = users.find((u) => u.userId === a);
+  const rb = users.find((u) => u.userId === b);
+  assert.ok(ra && rb, 'both posters are listed');
+  assert.equal(ra!.messages, 3);
+  assert.equal(rb!.messages, 1);
+  assert.equal(ra!.pubkey, 'pk-' + a.slice(0, 8)); // connected wallet surfaced
+  assert.ok(ra!.lastAt, 'last-active timestamp present');
+  assert.ok(!users.some((u) => u.userId === c), 'a user who never posted is not listed');
+  assert.ok(users.findIndex((u) => u.userId === a) < users.findIndex((u) => u.userId === b), 'most-active first');
 });
 
 after(async () => {
