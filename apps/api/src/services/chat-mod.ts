@@ -114,6 +114,19 @@ export async function setMod(db: Db, targetUserId: string, isMod: boolean, byMod
   });
 }
 
+/**
+ * Resolve an admin-supplied identifier (an internal user id OR a Solana wallet pubkey) to a user id.
+ * The operator thinks in wallets, but moderation acts on user ids — this lets the admin CHAT view grant
+ * MOD by pasting a wallet. Returns null when no user matches.
+ */
+export async function resolveChatUserId(db: Db, idOrPubkey: string): Promise<string | null> {
+  const r = await db.query<{ id: string }>(
+    `SELECT id FROM users WHERE id = $1 OR solana_pubkey = $1 LIMIT 1`,
+    [idOrPubkey],
+  );
+  return r.rows[0]?.id ?? null;
+}
+
 export interface ModStateRow {
   userId: string;
   handle: string;

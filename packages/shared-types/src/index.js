@@ -189,10 +189,31 @@ export const ChatMuteRequest = z.object({
   minutes: z.number().int().min(1).max(43_200).optional(),
 });
 
-// Operator grant/revoke moderator status (admin-key route).
-export const ModGrantRequest = z.object({
-  action: z.enum(['grant', 'revoke']),
+// Operator chat-moderation action on a user (admin-key CHAT view). grant/revoke toggle MOD; unmute/unban
+// clear a mute/ban. The :userId path segment may be an internal id OR a wallet pubkey (resolved server-side).
+export const ChatModActionRequest = z.object({
+  action: z.enum(['grant', 'revoke', 'unmute', 'unban']),
 });
+
+// Live-tunable chat action-bar thresholds (admin CHAT view), whole USD. Partial update — only the provided
+// keys change (a blank field in the panel is left unchanged). Bounds mirror chat-config.ts.
+export const ChatThresholdsRequest = z
+  .object({
+    bigBetUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+    bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+  })
+  .strict();
+
+// Live-tunable DROP config (admin CHAT view). Partial update; bounds mirror drop-config.ts. packTiers is a
+// list of positive-integer USD pack sizes (the round opens the largest the pot can afford).
+export const DropConfigRequest = z
+  .object({
+    intervalMin: z.coerce.number().int().min(1).max(43_200).optional(),
+    houseFloorUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+    packTiers: z.array(z.coerce.number().int().positive().max(10_000_000)).min(1).max(12).optional(),
+    gdexMin: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  })
+  .strict();
 
 // The allowed chat reaction emojis — shared by the server (validation) and the client (picker).
 export const CHAT_REACTIONS = ['👍', '❤️', '😂', '🔥', '🚀', '💯', '😮', '😢'];

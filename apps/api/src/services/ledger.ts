@@ -19,7 +19,8 @@ export type AccountType =
   | 'FUNDING_POOL'
   | 'PNL_CLEARING'
   | 'FAUCET_SOURCE'
-  | 'TREASURY_USDC';
+  | 'TREASURY_USDC'
+  | 'DROP_POOL';
 
 /** System (house) accounts — one row each, user_id NULL. */
 export const SYSTEM_ACCOUNT_TYPES: AccountType[] = [
@@ -29,6 +30,9 @@ export const SYSTEM_ACCOUNT_TYPES: AccountType[] = [
   'FUNDING_POOL',
   'PNL_CLEARING',
   'FAUCET_SOURCE',
+  // DROP giveaway pot (docs/chat-social-spec.md F6). Funded by the house floor each round + real-USDC
+  // player tips; debited to buy the TCG pack. Phase 1 only reads its balance for the admin CHAT view.
+  'DROP_POOL',
   // Real-funds custody mirror (docs/real-funds-custody-plan.md): the only account real deposits/
   // withdrawals touch. Its negative balance == total internal claims; the chain reconciler asserts
   // on-chain treasury USDC >= |TREASURY_USDC| (proof of reserves). Unused until REAL_FUNDS paths land.

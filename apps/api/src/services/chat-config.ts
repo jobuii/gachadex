@@ -38,6 +38,14 @@ export const chatConfigView = (): { bigBetUsd: number; bigWinUsd: number; bigBet
   bigWinDefault: bigWin.default,
 });
 
+/** Apply a partial threshold update (only the provided keys change) and return the new view — mirrors
+ *  drop-config's setDropConfig so the admin routes are symmetric. */
+export async function setChatThresholds(db: Db, patch: { bigBetUsd?: number; bigWinUsd?: number }) {
+  if (patch.bigBetUsd !== undefined) await setBigBetUsd(db, patch.bigBetUsd);
+  if (patch.bigWinUsd !== undefined) await setBigWinUsd(db, patch.bigWinUsd);
+  return chatConfigView();
+}
+
 /** Load both thresholds from settings (boot + periodic refresh, for multi-instance convergence). */
 export async function loadChatConfig(db: Db): Promise<void> {
   await Promise.all([bigBet.load(db), bigWin.load(db)]);
