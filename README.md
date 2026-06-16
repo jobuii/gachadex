@@ -1,10 +1,12 @@
 # GachaDex
 
-A **leveraged perpetual-futures exchange on Pokémon-card prices**, settled in USDC. Trade
-perps on individual cards **and** on basket **indices** (Top 100 / Top 250, with Graded and
-Sealed planned), with an index-anchored synthetic mark, a pooled-LP counterparty, funding,
-and liquidations — plus a leaderboard, referrals, and a **live chat & social layer** (reactions,
-rank badges, presence, moderation, and a **DROP** giveaway pot).
+A **leveraged perpetual-futures exchange on trading-card prices**, settled in USDC, across
+**Pokémon, One Piece, and Magic: The Gathering**. Trade perps on individual cards **and** on
+basket **indices** (Top 100 / Top 250 per game, with Graded and Sealed planned), with an
+index-anchored synthetic mark, a pooled-LP counterparty, funding, and liquidations — plus a
+leaderboard, referrals, **delegated trading keys** (for bots / the official CLI), seven selectable
+UI **skins**, and a **live chat & social layer** (reactions, rank badges, presence, moderation,
+and a **DROP** giveaway pot).
 
 > **Two run modes.** The same engine runs on **play money** (a faucet, for demo/testing) or on **real
 > funds** — USDC custody with on-chain deposits/withdrawals on **Solana mainnet** — selected by the
@@ -13,8 +15,10 @@ rank badges, presence, moderation, and a **DROP** giveaway pot).
 > KYC-AML / geofence prerequisites for holding customer money. See
 > [Custody & wallets](#custody--wallets-real-funds-mode).
 >
-> A fan project built on public Pokémon-TCG price data (via [pokemontcg.io](https://pokemontcg.io));
-> **not** affiliated with Nintendo, The Pokémon Company, or TCGFish, and **not financial advice**.
+> A fan project built on public trading-card price data (primarily via
+> [tcgpricelookup.com](https://tcgpricelookup.com), with [pokemontcg.io](https://pokemontcg.io) as a
+> fallback feed); **not** affiliated with Nintendo, The Pokémon Company, Bandai, Wizards of the Coast,
+> or TCGFish, and **not financial advice**.
 
 ---
 
@@ -23,8 +27,8 @@ rank badges, presence, moderation, and a **DROP** giveaway pot).
 - **Sign in with your Solana wallet** (Sign-In-With-Solana) — no passwords, no email.
 - **Fund your account** — claim **faucet** play-USDC (play-money mode), or **deposit real USDC** to a
   per-user Solana deposit address and **withdraw** back out (real-funds mode).
-- **Open leveraged perps**, long or short, up to **20×**, on any card market or on the Top
-  100 / Top 250 index.
+- **Open leveraged perps**, long or short, up to **20×**, on any card market or on a per-game
+  Top 100 / Top 250 index (Pokémon live; One Piece / Magic light up as their card data flows).
 - **Manage positions** — partial or full close, live unrealized PnL, liquidation price.
 - **Provide liquidity** to the LP pool (the counterparty to all trades) and earn fees + trader PnL.
 - **Leaderboard** — traders ranked by net realized PnL (with equity + volume).
@@ -34,6 +38,10 @@ rank badges, presence, moderation, and a **DROP** giveaway pot).
   (mods + operator can delete / mute / ban).
 - **DROP** — a timed TCG-pack giveaway: tip USDC into the pot. (Teaser shipped; the draw/prize mechanic
   is in progress — see [Chat, social & DROP](#chat-social--drop).)
+- **Trade by API** — mint scoped **delegated keys** (trade-only; can never withdraw) for bots or the
+  official `gachadex` CLI / SDK, without exposing your main wallet.
+- **Reskin the app** — pick one of **7 skins** (retro arcade default, plus Pokémon / One Piece / Magic
+  themes); a separate sidebar **game switcher** filters markets by game.
 - Everything is **server-authoritative** and streamed live over WebSocket; the browser is a renderer.
 
 ---
@@ -42,81 +50,84 @@ rank badges, presence, moderation, and a **DROP** giveaway pot).
 
 This is the part most people ask about, so it's spelled out explicitly.
 
-### Card prices and the live indices — one feed
+### Card prices and the live indices — the feed
 
-There is **one** price feed: **[pokemontcg.io](https://pokemontcg.io) v2 `/cards`** (which itself
-surfaces **TCGplayer** market prices). The oracle makes a single request per cycle:
+The oracle's primary feed is **[tcgpricelookup.com](https://tcgpricelookup.com)** (Trader plan) — a
+single multi-game API returning **raw** prices (TCGplayer market + eBay 1 / 7 / 30-day averages) **and**
+graded prices (PSA / BGS / CGC) for **Pokémon, One Piece, and Magic: The Gathering**, all in USD. The
+legacy **[pokemontcg.io](https://pokemontcg.io) v2** path (Pokémon-only, TCGplayer market price) is kept
+as a fallback; `ORACLE_PRIMARY` selects between them at boot — no deploy to flip. Full matrix:
+[docs/data-providers.md](docs/data-providers.md).
 
-```
-GET https://api.pokemontcg.io/v2/cards
-      ?q=supertype:Pokémon
-      &orderBy=-tcgplayer.prices.holofoil.market
-      &pageSize=250
-```
+Each cycle the oracle fetches the tracked card universe from the active provider, and a **weekly
+discovery pass** rebalances the featured set per game (top-N by price) and retires dead long-tail
+markets. That data is used two ways (`apps/api/src/services/oracle.ts`):
 
-That one response is reused two ways (`apps/api/src/services/oracle.ts`):
-
-1. **Individual card markets** — each returned card becomes a tradeable market, priced from
-   `tcgplayer.prices` (`getCardPrice` picks the best available variant).
-2. **The Top 100 / Top 250 indices** — the *same* cards are sorted by price and the top-N slice
+1. **Individual card markets** — each tracked card becomes a tradeable market, priced by `priceCard`
+   (the pipeline below). Card-market symbols are game-namespaced (`{game}:{providerCardId}`); legacy
+   Pokémon markets keep their bare ids for continuity.
+2. **The Top 100 / Top 250 indices** — per game, the cards are sorted by price and the top-N slice
    becomes the index basket. The index value is a **divisor-based basket NAV** (S&P-style):
    `value = Σ(prices) · SCALE / divisor`, with the divisor chosen so the index starts at a base
    of 1000 and re-anchored on a constituent change so the print stays continuous.
 
-So the indices are **not a separate API** — they're computed in-house from the exact dataset
-that powers the card markets. The price *origin* is TCGplayer; pokemontcg.io is the delivery API.
+So the indices are **not a separate API** — they're computed in-house from the same dataset that
+powers the card markets. The price *origin* is TCGplayer / eBay; the provider is the delivery API.
 
-> Note: pokemontcg.io v2 caps `pageSize` at 250, so the tracked universe is the ~250 highest-priced
-> Pokémon cards. Top 250 ≈ that whole set; Top 100 ≈ its top 100; the card markets are that same set.
+### The indices (per game)
 
-### The four indices
+Each game has up to four indices (`INDEX_CATALOG` in `packages/shared-types`). An index is **listed but
+gated** (close-only / "Soon") until its data source is flowing, then auto-lights — no flag flip.
 
 | Index | Source | Status in this build |
 |---|---|---|
-| **Top 100** | In-house basket NAV from pokemontcg.io card prices | ✅ Live |
-| **Top 250** | In-house basket NAV from pokemontcg.io card prices | ✅ Live |
-| **Graded (PSA 10)** | [JustTCG](https://justtcg.com) PSA-10 prices → in-house basket | 🔒 Gated — becomes tradeable only when `JUSTTCG_API_KEY` is set |
-| **Sealed** | needs a sealed-product price feed (e.g. TCGplayer Sealed / PriceCharting) | 🔒 Gated — no source wired; shows "Soon" |
+| **Pokémon — Top 100 / Top 250** | In-house basket NAV from card prices | ✅ Live |
+| **Pokémon — Graded (PSA 10)** | Provider graded (tcgpricelookup inline; [JustTCG](https://justtcg.com) fallback) → in-house basket | 🔒 Gated — lights up when graded prices flow (`JUSTTCG_API_KEY` enables the legacy path) |
+| **Pokémon — Sealed** | needs a sealed-product feed (TCGplayer Sealed / PriceCharting) | 🔒 Gated — no source wired; shows "Soon" |
+| **One Piece — Top 100 / Top 250** | In-house basket NAV from card prices | 🔒 Gated — lights up as One Piece card data flows from the provider |
+| **Magic — Top 100 / Top 250** | In-house basket NAV from card prices | 🔒 Gated — lights up as Magic card data flows from the provider |
 
-Graded/Sealed are **listed but not tradeable** until a real feed exists. We deliberately do **not**
-scrape TCGFish: their pages and embed badges are Cloudflare bot-challenged and the badges are
-rendered images, not an API, so they can't be ingested server-side. Enabling those indices for
-real is a data decision (a licensed graded/sealed feed, or a TCGFish data partnership), not a hack.
+Gated indices are **listed but not tradeable** until their feed exists. We deliberately do **not**
+scrape TCGFish: their pages and embed badges are Cloudflare bot-challenged and the badges are rendered
+images, not an API, so they can't be ingested server-side. Enabling a graded/sealed index for real is a
+data decision (a licensed feed, or a data partnership), not a hack.
 
 ### The oracle pipeline
 
 `oracle.ts` re-prices the tracked universe on a timer (`ORACLE_REFRESH_MS`, default 6h; the upstream
-re-prices each card every few days). Each pass:
+re-prices each card roughly daily). Full rationale: [docs/price_discovery.md](docs/price_discovery.md).
+Each pass:
 
-1. **Fetch** the per-card signals from the price feed (tcgpricelookup live; the pokemontcg path is the
-   legacy fallback): the TCGplayer **market** price plus eBay **1-day / 7-day / 30-day** average sale
-   prices, per condition (Near Mint preferred, Lightly Played fallback).
+1. **Fetch** the per-card signals from the active feed: the TCGplayer **market** price plus eBay
+   **1-day / 7-day** average sale prices, per condition (Near Mint preferred, Lightly Played fallback).
 2. **Price** each card with `priceCard` — one definition of "the price"
    (`services/providers/tcgpricelookup.ts`):
-   - **Anchor = `median(TCGplayer market, eBay 7d, eBay 30d)`** — an outlier-proof fair value; any one
-     source printing garbage is outvoted by the other two.
-   - **Confidence gate** (a stand-in for volume — the provider gives no sale counts): the anchor needs
-     **≥2 signals that agree within 3×**. If not, the card is **low-confidence** → priced at the anchor
-     and the market is **restricted to reduce-only** (no new positions against a price we can't trust).
-   - **Live price = the eBay 1-day average (moves daily) clamped to anchor ±25%** — so it tracks real
-     sales, but no single sale or listing can swing the market beyond the band. Rounds to the $0.01 tick.
-3. **Outlier guard** — still reject a print that jumps > 60% from the last accepted value (with an
-   escape hatch for a sustained genuine move).
-4. **Record** the accepted print to `oracle_prices`, **recompute the synthetic mark**, and publish on
-   the `mark:{id}` channel.
+   - **Price = `median(eBay 1-day avg, TCGplayer market, eBay 7-day avg)`.** The median *is* the fair
+     value **and** the manipulation filter: a lone bad or manipulated source is the highest or lowest of
+     the three, so the middle skips it — the price only moves when **≥2 sources agree**. No separate
+     anchor, no clamp. Rounds to the $0.01 tick.
+   - **Confidence (spread flag)** — a stand-in for volume (the provider gives no sale counts): trusted
+     only when there are **≥2 usable signals that agree within 2×** (`SPREAD_MAX_RATIO`). Otherwise the
+     card is **low-confidence** → its market is **restricted to reduce-only** (no new positions against a
+     price we can't cross-check). Gap risk is handled by the **engine** (leverage / liquidation / ADL /
+     insurance), *not* by clamping the price.
+3. **Record** the accepted print to `oracle_prices` via a **hybrid dedup**: write when the provider's
+   freshness timestamp is new (even at an unchanged value — keeps the staleness breaker fed) **or** when
+   the value moved at a colliding timestamp (re-stamped on the ingest clock). No outlier reject.
+4. **Recompute the synthetic mark** and publish on the `mark:{id}` channel.
 5. **Apply the gate** — set `markets.low_confidence`, and on a *transition* append a
    `market_restriction_events` row (powers the admin "restricted now" + "flipped today" views).
-6. **Staleness halt** — a market with no fresh print within `ORACLE_STALE_MS` (36h) goes reduce-only.
+6. **Staleness halt** — a market with no accepted print within `ORACLE_STALE_MS` (36h) goes reduce-only.
 
-Worked examples (anchor = median of the three; live = the 1-day avg clamped to ±25%):
+Worked examples (price = median of the signals; confident = ≥2 usable signals within 2×):
 
-| Signals — spot / 7d / 30d / 1d | Anchor | Price | Tradeable? |
-|---|---|---|---|
-| 9.80 / 10.10 / 9.96 / 10.80 | 9.96 | **10.80** (1d inside the band) | ✅ |
-| 10 / 10 / 10 / 13 | 10 | **12.50** (1d clamped to +25%) | ✅ |
-| 4699 / 7.75 / 9.96 / — | 9.96 | **9.96** | ❌ restricted — spot is garbage, outvoted |
-| 1.05 / 6449 / 1.79 / — | 1.79 | **1.79** | ❌ restricted — eBay 7d is garbage, outvoted |
-| 50 / — / — / — | 50 | **50** | ❌ restricted — one signal, can't cross-check |
+| Signals — 1d / market / 7d | Price (median) | Tradeable? |
+|---|---|---|
+| 10.80 / 9.80 / 10.10 | **10.10** | ✅ three signals agree |
+| 13 / 10 / 10 | **10** | ✅ ≥2 agree; the high 1d is outvoted |
+| — / 10.00 / 10.50 | **10.25** | ✅ two signals within 2× |
+| 4699 / 10.00 / 9.96 | **10.00** | ❌ restricted — the median ignores the 4699 spike, but it blows the 2× spread → can't cross-check |
+| 50 / — / — | **50** | ❌ restricted — one signal, can't cross-check |
 
 A restricted market is **close-only** until its signals recover — or until an operator sets a manual
 price, which is treated as trusted and clears the gate. Indices aggregate many cards, so they're robust
@@ -127,26 +138,26 @@ by construction and never gated.
 > Every market settles against a **fair value** we compute for each card from multiple real markets —
 > never a single listing.
 >
-> **A cross-checked anchor.** We start from the median of three independent reads: TCGplayer's market
-> price, eBay's 7-day average sale price, and eBay's 30-day average. Taking the *median* means if any one
-> source prints a nonsense number, it's automatically outvoted and ignored.
+> **The median of three.** We take the median of three independent reads: eBay's latest **daily**
+> average sale price, TCGplayer's **market** price, and eBay's **7-day** average. The median is both the
+> price and the safety net — if any one source prints a nonsense number, it's the highest or lowest of
+> the three, so it's skipped. The price only moves when at least two sources agree.
 >
-> **It moves with the market.** The live price then tracks the most recent real sales — eBay's latest
-> daily data — so your chart moves day to day instead of sitting still.
+> **It moves with the market.** Because eBay's daily read is one of the three, your chart tracks recent
+> real sales day to day instead of sitting still — but a single freak sale can't move it alone.
 >
-> **On a leash.** That daily price can't stray more than ~25% from the cross-checked anchor. Genuine
-> moves come through; no freak sale or listing can yank your market.
->
-> **Thin cards are limited.** Some cards trade too rarely to price safely. Where our sources disagree,
-> we hold the card at its stable fair value and make it close-only (no new positions). Our **indices** —
-> baskets of many cards — are the most robust markets and a great default.
+> **Thin cards are limited.** Some cards trade too rarely to price safely. Where our sources disagree
+> (more than 2× apart) or there's only one, we hold the card at its median fair value and make it
+> close-only (no new positions). Our **indices** — baskets of many cards — are the most robust markets
+> and a great default.
 >
 > **What you actually trade.** Your mark price is this fair value plus a small premium reflecting live
 > buying vs. selling pressure on the venue (standard for perpetuals). With no open positions, it's
 > exactly the fair value.
 >
 > **Why it may differ from a price you see elsewhere.** We won't quote a lone $4,699 listing on a card
-> that sells for $10 — our number is the corroborated, bounded consensus.
+> that sells for $10 — our number is the corroborated consensus, and risk from a sudden real move is
+> managed by margin and liquidations rather than by capping the price.
 
 ---
 
@@ -159,7 +170,8 @@ by construction and never gated.
 - **Isolated margin, up to 20×.** Each position locks its own margin; leverage is capped per market.
 - **Pooled-LP counterparty.** There is no order book. Trades fill against the LP pool at the mark;
   the pool books trader PnL (LPs win when traders lose, and vice-versa).
-- **Fees.** Open/close fees (default 0.10% each) split between LPs and platform fee revenue.
+- **Fees.** A trading commission (`FEE_BPS`, **default 0** — off; when set, charged on both open and
+  close) splits between LPs and platform fee revenue (`FEE_LP_SHARE_PCT`); live-editable in the admin panel.
 - **Funding.** Hourly, skew-balancing: the heavier side pays the lighter side (cumulative-index lazy
   settle). Keeps the mark tethered to the index.
 - **Liquidations.** A maintenance-margin sweep runs every few seconds and after every accepted print.
@@ -235,6 +247,10 @@ Deep dives: **[docs/real-funds-custody-plan.md](docs/real-funds-custody-plan.md)
 
 - **Auth (SIWS).** `nonce → wallet signMessage → server re-renders the canonical message → ed25519
   verify → short-lived access JWT + a rotating refresh token` with token-family reuse detection.
+- **Delegated trading keys.** A full-scope wallet authorizes a fresh key (signed message) that receives
+  a **`trade`-scoped** JWT — it can open/close positions but can never withdraw or manage identity.
+  Powers bots and the official `gachadex` CLI / SDK ([docs/cli-spec.md](docs/cli-spec.md)); capped at
+  `MAX_DELEGATED_KEYS`, bounded by `DELEGATE_MAX_TTL_DAYS`, and revocable (the pubkey is burned).
 - **Faucet (play-money mode).** Credits play USDC from `FAUCET_SOURCE`, clamped so a user's available
   balance never exceeds $1,000,000. In real-funds mode the faucet is off — users fund via custody
   deposits instead (see [Custody & wallets](#custody--wallets-real-funds-mode)).
@@ -302,11 +318,11 @@ A dedicated operator tab alongside Main + Customers, all under the admin key:
 ## Architecture
 
 ```
-        pokemontcg.io v2  (TCGplayer prices; ~daily)        [+ optional JustTCG for Graded]
+  tcgpricelookup (multi-game raw + graded; ~daily)  [pokemontcg.io = fallback · JustTCG = graded fallback]
                           │
               ┌───────────▼─────────────┐
-              │  oracle (timer, 6h)      │  normalize → e6, outlier + staleness guard,
-              │  src/services/oracle.ts  │  build Top-100/250 basket NAVs, recompute marks
+              │  oracle (timer, 6h)      │  median-of-three price + 2× confidence gate, hybrid dedup,
+              │  src/services/oracle.ts  │  staleness halt, per-game Top-100/250 basket NAVs, recompute marks
               └───────────┬─────────────┘
                           │ publishes mark/stats/oi/funding
    apps/web (React SPA)   │            ┌──────────────────────────────────────┐
@@ -336,7 +352,7 @@ deliver the caller's own data.
 
 ```
 gachadex/                   (pnpm workspaces + Turborepo)
-  apps/web                  React 19 + Vite SPA — Vercel (retro "Press Start 2P" theme)
+  apps/web                  React 19 + Vite SPA — Vercel (7 selectable skins; default retro "Press Start 2P")
   apps/api                  Fastify + WebSocket backend: ledger, engine, oracle, liquidations, custody
   packages/pricing          Shared money math (price/PnL/margin/liq/mark) — FE previews must equal the engine
   packages/shared-types     Shared zod schemas + constants for the REST + WebSocket contracts
@@ -347,13 +363,16 @@ the web app, so the liquidation price / fees the user previews are exactly what 
 
 ### Data model (Postgres / PGlite)
 
-`users · sessions · auth_nonces` · `accounts · ledger_entries · balances` (double-entry core) ·
-`markets · oracle_prices · marks · index_constituents · index_divisors` (pricing) ·
+`users · sessions · auth_nonces · delegated_keys` (auth: SIWS sessions + scoped trading keys) ·
+`accounts · ledger_entries · balances` (double-entry core) ·
+`markets · oracle_prices · marks · index_constituents · index_divisors · market_restriction_events`
+(pricing; `markets.game` ∈ pokemon / onepiece / mtg) ·
 `orders · fills · positions · funding_rates · liquidations` (trading) ·
-`lp_pool · lp_positions` (liquidity) · `deposit_addresses · withdrawals · system_flags · settings ·
-worker_leases` (real-funds custody + operator config) · `chat_messages · chat_reactions ·
-chat_mod_actions · drop_tips` + mod flags on `users` (chat & social). The same `schema.sql` runs on
-PGlite locally and on managed Postgres in prod; it's idempotent and applied on boot (`db/migrate.ts`).
+`lp_pool · lp_positions` (liquidity) · `deposit_addresses · deposits · withdrawals · system_flags ·
+settings · worker_leases · provider_rate` (real-funds custody + operator config + provider rate-limit) ·
+`chat_messages · chat_reactions · chat_mod_actions · drop_tips` + mod flags on `users` (chat & social).
+The same `schema.sql` runs on PGlite locally and on managed Postgres in prod; it's idempotent and
+applied on boot (`db/migrate.ts`).
 
 ---
 
@@ -364,7 +383,9 @@ PGlite locally and on managed Postgres in prod; it's idempotent and applied on b
 | Method + path | Auth | Purpose |
 |---|---|---|
 | `POST /auth/nonce` · `POST /auth/verify` · `POST /auth/refresh` · `POST /auth/logout` · `GET /auth/me` | mixed | SIWS login + session rotation |
+| `POST /auth/delegate/nonce` · `POST /auth/delegate` · `GET /auth/delegates` · `POST /auth/delegates/:pubkey/revoke` | full | Mint / list / revoke scoped **delegated trading keys** (full-scope only) |
 | `GET /markets` · `GET /markets/:id/candles` · `GET /markets/:id/details` | public | Market list, chart series, card metadata + graded price |
+| `GET /catalog/search` · `POST /markets/ensure` | trade | Search-and-bet: browse the provider catalogue, list a market on demand (gated; real-funds listing needs the NAV caps armed) |
 | `GET /account/balance` · `POST /faucet` | yes | Balance/equity; claim play USDC |
 | `GET /positions` · `POST /orders` · `POST /positions/:id/close` | yes | Open positions; place/close perps |
 | `GET /lp/pool` · `GET /lp/position` · `POST /lp/deposit` · `POST /lp/withdraw` | mixed | LP pool state + provide/withdraw liquidity |
@@ -393,9 +414,14 @@ to the browser). Copy `apps/api/.env.example` → `apps/api/.env`; every key has
 | `DATABASE_URL` | _(empty)_ | Empty → embedded PGlite; set to managed Postgres in prod |
 | `PGLITE_DIR` | `./.pglite` | Local embedded-DB dir (use `memory://` for ephemeral) |
 | `JWT_SECRET` | dev default | **Must** be a strong ≥32-char value in production (boot refuses otherwise) |
-| `POKEMONTCG_API_KEY` | _(empty)_ | Optional; keyless works at lower rate limits |
-| `ORACLE_REFRESH_MS` / `ORACLE_PAGE_SIZE` | `6h` / `250` | Ingest cadence; page size (capped at 250 upstream) |
-| `JUSTTCG_API_KEY` / `GRADED_CONSTITUENTS` | _(empty)_ / `100` | Set the key to make the **Graded** index live |
+| `MAX_DELEGATED_KEYS` / `DELEGATE_MAX_TTL_DAYS` | `4` / `180` | Per-account cap + max lifetime for delegated trading keys |
+| `ORACLE_PRIMARY` | `pokemontcg` | Active price feed: `pokemontcg` or `tcgpricelookup` (prod runs `tcgpricelookup`); flip at boot, no deploy |
+| `TCGPRICELOOKUP_API_KEY` | _(empty)_ | Trader-plan key for the multi-game raw+graded feed; a DB-backed limiter paces 1 req/s + `TCGPRICELOOKUP_DAILY_CAP` (10k/day) across instances |
+| `POKEMONTCG_API_KEY` | _(empty)_ | Legacy fallback feed; optional, keyless works at lower rate limits |
+| `ORACLE_REFRESH_MS` / `ORACLE_PAGE_SIZE` | `6h` / `250` | Ingest cadence; page size (pokemontcg caps at 250 upstream) |
+| `DISCOVERY_INTERVAL_MS` / `RETIRE_AFTER_DAYS` | `7d` / `30` | Weekly featured-set rebalance; cull dead long-tail markets (no OI/volume) |
+| `SEARCH_AND_BET` | `true` | Catalogue search + on-demand listing (tcgpricelookup only; real-funds listing also needs the NAV caps) |
+| `JUSTTCG_API_KEY` / `GRADED_CONSTITUENTS` | _(empty)_ / `100` | Legacy graded feed: set the key to enable the **Graded** index path |
 | `REAL_FUNDS` | `false` | `false` = play-money (faucet). `true` = real custody (deposits/withdrawals); requires the custody vars below |
 | `ALLOW_MAINNET_FUNDS` | `false` | Must be `true` to run real funds on **mainnet** (the audit/KYC/geofence acknowledgement) |
 | `SOLANA_RPC_URL` | devnet | Backend Solana RPC — point at a **mainnet** provider for real funds |
@@ -406,7 +432,7 @@ to the browser). Copy `apps/api/.env.example` → `apps/api/.env`; every key has
 | `OI_CAP_NAV_BPS` · `MAX_PNL_FACTOR_BPS` · `ADL_PNL_FACTOR_BPS` | `0` (off) | Pool-risk caps (NAV-relative OI · open-gate · ADL); turn on for real funds |
 | `FAUCET_DEFAULT_USD` | `10000` | Per-claim play USDC (balance capped at $1M) |
 | `REFERRAL_BONUS_USD` / `MAX_REFERRALS_PAID` | `1000` / `50` | Referral payout (both parties) + per-referrer cap |
-| `OPEN_FEE_BPS` / `CLOSE_FEE_BPS` / `FEE_LP_SHARE_PCT` | `10` / `10` / `50` | Trading fees + LP share |
+| `FEE_BPS` / `FEE_LP_SHARE_PCT` | `0` / `50` | Trading commission (bps; **default off**, charged on both open + close) + LP share; live-editable in admin |
 | `FUNDING_SKEW_FACTOR_BPS` / `FUNDING_INTERVAL_MS` | `30` / `1h` | Funding rate cap + cadence |
 | `LIQ_FEE_BPS` / `LIQUIDATION_SWEEP_MS` / `ORACLE_STALE_MS` | `100` / `5s` / `36h` | Liquidation penalty, sweep, staleness halt |
 | `CHAT_BIG_BET_USD` / `CHAT_BIG_WIN_USD` | `500` / `100` | Chat action-bar thresholds (USD; live-editable in the admin CHAT view) |
@@ -458,7 +484,7 @@ real-funds / custody variables).
 ## Testing
 
 - **API** (`apps/api/src/**/*.test.ts`, run with `node:test` on an in-memory PGlite): ledger
-  conservation, SIWS auth, oracle ingest + outlier guard + index NAV, the trading engine
+  conservation, SIWS auth, oracle ingest + median price/dedup + index NAV, the trading engine
   (open/increase/close, margin, liq price, idempotency under contention), LP deposit/withdraw,
   funding, liquidations + bad-debt socialization, leaderboard + referrals, and a chaos test of
   concurrent activity. The reconciler asserts the ledger stays balanced after every scenario.
@@ -474,15 +500,20 @@ The engine is complete end to end — ledger → SIWS auth → oracle/marks → 
 per-user deposit addresses + sweeps, hot/cold treasury with proof-of-reserves + auto-freeze,
 withdrawals (manual + capped auto-approve), the insurance fund, and live-editable custody limits. The
 pool-protection engine (adaptive depth, NAV-relative OI caps, pool-health gate, ADL) ships too, and a
-marketing landing page is the public entry point. A **chat & social layer** ships alongside — live chat
-with reactions, leaderboard rank badges, presence, and moderation, plus the **DROP** giveaway-pot teaser
-with real-USDC player tipping (flag-gated, **off by default**).
+marketing landing page is the public entry point. The platform is **multi-game** — `markets.game`
+(Pokémon / One Piece / Magic), a per-game index catalogue, the `tcgpricelookup` multi-game provider, a
+sidebar **game switcher**, and **7 UI skins** — with One Piece / Magic markets data-gated (they light up
+as the provider returns their cards). **Delegated trading keys** (scoped, revocable) back the official
+`gachadex` CLI / SDK and **search-and-bet** (on-demand market listing). A **chat & social layer** ships
+alongside — live chat with reactions, leaderboard rank badges, presence, and moderation, plus the
+**DROP** giveaway-pot teaser with real-USDC player tipping (flag-gated, **off by default**).
 
 **Operator responsibility before real money on mainnet:** the security audit, KYC/AML, and geofencing
 are yours to put in place — the code only gates on `ALLOW_MAINNET_FUNDS=true`, it does not verify them.
 
 Still deferred: the full **DROP** round mechanic (the scheduled draw, the rare.win pack-open, and the
-on-chain NFT prize — needs rare.win API access), a real **Graded / Sealed** price feed (needs a licensed
-source), **multi-game** markets (One Piece / MTG), **limit / stop** orders, a Go engine rewrite, and the
-**KMS-held deposit seed** (`DEPOSIT_SEED_KMS_REF` is recognized but not yet implemented — use
-`DEPOSIT_MASTER_SEED` for now).
+on-chain NFT prize — needs rare.win API access), a real **Graded / Sealed** price feed and the **One
+Piece / Magic** card data flowing through the provider (those markets exist but stay gated until then),
+**limit / stop** orders (today's `limitPriceE6` is a slippage guard, not a resting order), a Go engine
+rewrite, and the **KMS-held deposit seed** (`DEPOSIT_SEED_KMS_REF` is recognized but throws "not
+implemented" — use `DEPOSIT_MASTER_SEED` for now).
