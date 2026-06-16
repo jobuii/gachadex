@@ -7,12 +7,15 @@ a recommendation.
 **TL;DR — two findings, in priority order:**
 
 1. **URGENT + FREE (does not need Scrydex):** the live mispricing is largely **self-inflicted**. Our
-   median-of-three is 2-parts-eBay : 1-part-TCGplayer, and tcgpricelookup's eBay `avg_1d`/`avg_7d` are
-   identical garbage values that **outvote the correct TCGplayer market price**. Result: a $1 card live
-   at $6,450 (Apprentice Sorcerer) AND a ~$1,247 serialized card live at $19.99 (Sheoldred) — same bug,
-   both directions. **Fix: stop blending eBay; price from the TCGplayer market alone.** tcgpl's own
-   TCGplayer field is already mostly correct (it equals Scrydex). This corrects the bulk of mispricing
-   today and un-flags many false `reduce_only` markets, with no new vendor. See §12.
+   median-of-three is 2-parts-eBay : 1-part-TCGplayer, so one eBay value **outvotes the correct
+   TCGplayer market price** — both when eBay is too high (Apprentice Sorcerer: a $1 card live at $6,450)
+   and too low (Sheoldred: a ~$1,247 serialized card live at $19.99). The defect is **using eBay to set
+   the price**, not the eBay number itself: measured across the universe, eBay corroborates TCGplayer
+   within 2× for **~70%** of cards (median ratio **0.865** — the real eBay discount), so it is a valid
+   *confidence cross-check*, just not a price input (§13). **Fix: price from the TCGplayer market;
+   use eBay `avg_1d` as the confidence gate (corroborate within a band), with TCGplayer's own low/high
+   spread as the fallback gate when eBay is absent/off.** Corrects the bulk of mispricing today and
+   un-flags many false `reduce_only` markets, no new vendor. See §12–§13.
 
 2. **ENHANCEMENT: adopt Scrydex as the primary raw source** (demote tcgpricelookup to cross-check /
    fallback). Scrydex's raw ≈ TCGplayer market but **fresher** than tcgpl's, plus native price trends
@@ -198,19 +201,22 @@ raw tcgpricelookup signals behind our marks flipped that and revealed the real r
 | Groudon ex (93/101) | $169.99 | $196.01 | $169.99 = $169.99 | $263.03 |
 
 Three facts:
-1. **tcgpl's eBay `avg_1d` and `avg_7d` are IDENTICAL** on every card (a real rolling average never is) —
-   a single mismatched/placeholder value, not an average. The eBay side is unreliable.
-2. **Our median-of-three is 2 eBay : 1 TCGplayer**, so the two identical eBay values ARE the median and
-   **always outvote the one correct TCGplayer market price.**
+1. **Our median-of-three is 2 eBay : 1 TCGplayer**, so one eBay value (counted twice via `avg_1d` +
+   `avg_7d`) **outvotes the one correct TCGplayer market price** — whether eBay is too low (Sheoldred)
+   or too high (Apprentice).
+2. **The eBay number is NOT uniformly garbage** (measured in §13): it corroborates TCGplayer within 2×
+   for ~70% of cards (median ratio 0.865 — the real eBay discount). It is a valid *confidence
+   cross-check*; the defect is using it to **set the price**. The ~30% where it's off (13% wildly) are
+   wrong-printing matches concentrated in premium/exotic printings — exactly the cards to flag.
 3. **Scrydex's raw price ≈ tcgpl's OWN TCGplayer market field** (identical on the serialized/retro MTG
    cards), just **fresher** where tcgpl's TCGplayer lags (Charizard δ exotic: tcgpl-TCGplayer $599 stale
    vs Scrydex $4,000; M Charizard EX: $680 vs $1,000; Lugia EX: $510 vs $725).
 
-**So the live mispricing is largely self-inflicted.** We blend tcgpl's bad eBay data into a median that
-discards the good TCGplayer value. Sheoldred (a ~$1,247 serialized card) is **live at $19.99**;
-Apprentice Sorcerer (a $1 card) is **live at $6,449.95** — the SAME bug in opposite directions. It's also
-why so many cards sit `reduce_only`: the eBay-vs-TCGplayer disagreement trips the confidence gate
-constantly (every card in this sample except two was `low_confidence`).
+**So the live mispricing is largely self-inflicted.** We let eBay outvote the good TCGplayer value in the
+price median. Sheoldred (a ~$1,247 serialized card) is **live at $19.99**; Apprentice Sorcerer (a $1
+card) is **live at $6,449.95** — the SAME bug in opposite directions. It's also why so many cards sit
+`reduce_only`: the eBay-vs-TCGplayer disagreement trips the confidence gate constantly (every card in
+this sample except two was `low_confidence`).
 
 **Coverage note:** 5 of 6 One Piece liquid cards were promo/event/regional printings (Treasure Cup,
 Online Region, Event Pack) that **did not match** in Scrydex — confirming weaker Scrydex coverage of OP
@@ -221,15 +227,48 @@ promos, and our DB is heavy on exactly those.
 The headline §0 recommendation ("switch to Scrydex") still holds for freshness + features, but the
 **urgent** fix is cheaper and does not need Scrydex:
 
-1. **NOW (free, urgent): stop blending tcgpl's eBay averages.** Price from the TCGplayer market alone
-   (keep eBay only as a sanity bound, not a median input). This single change corrects the bulk of live
-   mispricing today — Sheoldred $19.99→$1,247, Apprentice $6,450→$1 — with no new vendor, and un-flags
-   many false `reduce_only` markets. tcgpl's TCGplayer field is already mostly correct (== Scrydex).
+1. **NOW (free, urgent): price from the TCGplayer market; use eBay as the confidence gate, not a price
+   input.** `price = TCGplayer market` (NM→LP). `confident` when eBay `avg_1d` corroborates within a band
+   (eBay runs ~0.87× TCGplayer, so an asymmetric band like 0.5×–1.3× is the starting point), with
+   TCGplayer's own `low/high` spread as the fallback gate when eBay is absent (~30% of cards) or off.
+   This corrects the bulk of live mispricing today — Sheoldred $19.99→$1,247, Apprentice $6,450→$1 — with
+   no new vendor, and un-flags the false `reduce_only` markets. tcgpl's TCGplayer field is already mostly
+   correct (== Scrydex). **Decision to make:** strict (eBay-only gate → ~30% premium cards reduce-only)
+   vs hybrid (eBay OR tight TCGplayer low/high spread → fewer false flags). Recommend hybrid.
 2. **THEN (enhancement): adopt Scrydex as primary raw.** Its value over the free fix is real but narrower
    than first thought: a consistently **fresher** TCGplayer market than tcgpl's, plus native trends (24h),
    sealed products, population reports, and webhooks. Keep tcgpl as cross-check + a fallback for the
    promos/serialized printings Scrydex misses.
 
 **Bottom line:** Scrydex is a worthwhile upgrade for freshness + features, but it is NOT what fixes
-correctness — our own median blending tcgpl's garbage eBay data is the bug, and fixing that is free and
-urgent. Do the median fix immediately; adopt Scrydex as the enhancement.
+correctness — our own median letting eBay outvote the good TCGplayer value is the bug, and fixing that is
+free and urgent. Do the median fix immediately; adopt Scrydex as the enhancement.
+
+## 13. Is eBay `avg_1d` reliable as a confidence source? (measured across all 751 cards)
+
+An earlier draft called eBay "garbage." That was wrong — measured, the eBay number is a usable second
+source for the majority of cards. The defect is using it to set the price (the 2:1 median), not the
+number itself. Stats from the latest stored print of every card market (`oracle_prices.raw_payload`):
+
+- **Coverage:** 679/751 have a TCGplayer market; **473 have eBay `avg_1d`** (so ~30% of cards have no
+  eBay at all → the confidence gate needs a non-eBay fallback for those).
+- **Is it a real average?** `avg_1d == avg_7d` on **375 (79%)**, differ on **98 (21%)**. So it's a
+  genuine 1d/7d series 21% of the time; the identical 79% is mostly low-volume cards with a flat weekly
+  average (consistent with a real average, not proof of a placeholder).
+- **Agreement with TCGplayer** (431 cards with both): within ±25% = **177 (41%)**, within 2× =
+  **298 (69%)**, beyond 2× = **133 (31%)**, wildly off >10× = **58 (13%)**. **Median ratio 0.870** —
+  eBay typically prints ~13% under TCGplayer, the real sold-price discount.
+
+**By price tier** (the universe is ~98% premium — 423 of 431 cards-with-both have TCGplayer > $200):
+
+| TCGplayer tier | cards | agree within 2× | disagree % | median eBay/TCGplayer |
+|---|---|---|---|---|
+| > $200 | 423 | 297 (70%) | 30% | 0.865 |
+| $20–200 | 4 | 1 | 75% | — (tiny n) |
+| < $20 | 4 | 0 | 100% | — (tiny n; the $1→$6,450 type) |
+
+**Conclusion:** eBay `avg_1d` corroborates TCGplayer for ~70% of cards (median 0.865) — **reliable
+enough to be the confidence cross-check**, not reliable enough to set the price. The ~30% it's off on
+are wrong-printing matches concentrated in premium/exotic printings — which is exactly what the
+confidence gate should flag as low-confidence. Hence the §12 design: price from TCGplayer, gate
+confidence on eBay corroboration, fall back to the TCGplayer low/high spread when eBay is absent/off.
