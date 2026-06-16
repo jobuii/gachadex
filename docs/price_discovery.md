@@ -330,3 +330,65 @@ The cases that matter:
 ### Rollout
 Code-only change to two functions, behind the existing `ORACLE_PRIMARY=tcgpricelookup` path. **No
 schema change.** Reversible by reverting the two functions.
+
+---
+
+# Next approach — Scrydex-primary pricing (Option B, decided 2026-06-17)
+
+**Status:** DECIDED, not yet built. Supersedes the median-of-three above. Full implementation spec:
+`docs/scrydex-pricing-build-spec.md`. Evaluation that led here: `docs/scrydex-evaluation.md`.
+
+## Why the median-of-three is being replaced
+
+The median above is **2 parts eBay : 1 part TCGplayer** (`avg_1d`, `market`, `avg_7d`), and
+tcgpricelookup's eBay `avg_1d`/`avg_7d` come back identical, so **one eBay value outvotes the correct
+TCGplayer price** — both when eBay is too low (Sheoldred: a ~$1,247 serialized card priced $19.99) and
+too high (Apprentice Sorcerer: a $1 card priced $6,449.95). Measured across all 751 cards, eBay
+corroborates TCGplayer within 2× for **~70%** (median ratio 0.865 — the real eBay discount), so the eBay
+number is a fine **confidence cross-check** but a bad **price input**. tcgpl's own TCGplayer field is
+mostly correct and equals Scrydex; Scrydex's is the same source but fresher (catches tcgpl's stale
+TCGplayer, e.g. Charizard δ tcgpl $599 vs Scrydex $4,000) and adds trends, sealed, pop reports, webhooks.
+
+## The design (Option B)
+
+- **Sources:** **Scrydex primary** (TCGplayer `market`/`low/mid/high` + `trends`), **tcgpricelookup
+  secondary** (its TCGplayer `market` + eBay `avg_1d`), used as a cross-check + fallback when available.
+- **Price = the TCGplayer market**, anchored, never set by eBay: Scrydex `market` (NM→LP→MP) ?? tcgpl
+  TCGplayer `market` ?? manual pin ?? keep-last/halt. eBay is no longer a price input.
+- **Confidence = a trust SCORE** (not a single spread test), from: (i) Scrydex & tcgpl TCGplayer agree
+  (cross-feed stability), (ii) eBay corroborates within a band (cross-venue), (iii) Scrydex `low/high`
+  spread tight (liquidity), (iv) `trends.days_1` not a wild unexplained spike (manipulation), (v) data
+  fresh. Score → **tradeable / reduce-only / halted**. This keeps a self-consistent TCGplayer price
+  tradeable even when eBay mismatched the wrong printing (fewer false `reduce_only`), but flags genuine
+  spikes and uncorroborated thin markets.
+
+## Kept / changed / dropped vs the median approach
+
+| Median-of-three (now live) | Option B | Note |
+|---|---|---|
+| price = median([eBay 1d, TCGP, eBay 7d]) | 🔄 price = TCGplayer market (Scrydex→tcgpl) | eBay is NO longer a price input |
+| confident = ≥2 signals within 2× | 🔄 trust SCORE → tradeable/reduce-only/halted | richer, fewer false flags |
+| eBay as a price source | 🔄 eBay as a confidence cross-check only | fixes the outvote bug |
+| hybrid dedup (timestamp OR value) | ✅ KEEP | Scrydex has no provider ts → wall-clock + value-dedup |
+| 36h staleness breaker | ✅ KEEP | fed by whether Scrydex still returns the card |
+| mark = index × (1+premium) (skew) | ✅ KEEP | unchanged |
+| 24h change from marks | 🔄 can use Scrydex `trends.days_1` natively | the 24h we never had |
+| manual pin, engine gap controls | ✅ KEEP | unchanged |
+| graded via tcgpl/JustTCG | 🔄 Scrydex PSA/BGS/CGC ladder + pop reports | upgrade |
+
+**Net:** the manipulation defence moves from "median outvotes a lone source" to "TCGplayer-anchored price
++ cross-venue/cross-feed corroboration + trend-spike gate" — keeping every existing safety layer and
+adding a real cross-venue check.
+
+## Worked example (four cards)
+
+| Card (true value) | feeds | median (today) | **Option B** |
+|---|---|---|---|
+| Pikachu Star (~$3,200) | TCGP $3,200, eBay $3,200 | $3,200 · tradeable | $3,200 · tradeable |
+| Sheoldred serial (~$1,247) | TCGP $1,247, eBay $20 | **$20 · locked (wrong)** | **$1,247 · tradeable** (TCGP self-consistent; eBay mismatch noted) |
+| Apprentice Sorcerer (~$1) | TCGP $1, eBay $6,449 | **$6,449 · locked (wrong)** | **$1 · tradeable** |
+| Spiked card (~$100) | TCGP jumps $900, eBay $100 | $100 · locked | $900 · **reduce-only** (spike uncorroborated) |
+
+Option B prices every card correctly and keeps the self-consistent ones tradeable, while still flagging
+the genuine spike. (Options A and C — simpler binary gate / move-hold — are recorded in
+`docs/scrydex-evaluation.md` §10–12 and the build spec; B was chosen for fewest false `reduce_only`.)
