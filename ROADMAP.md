@@ -148,3 +148,44 @@ the risk:
 3. **Deposit-matched / volume-milestone bonus** — pay after the referred user deposits or trades $N.
    Cuts signup farming; still a marketing cost.
 4. **Flat signup bonus** — highest abuse risk; only with strong KYC + tight caps.
+
+---
+
+## 6. Limit / stop orders (not implemented — deferred)
+
+**Status: not built.** `ORDER_KINDS = ['market', 'reduce_only']` — every order fills **immediately at the
+current mark**; `reduce_only` is just a close-only market order. The `limitPriceE6` on an order is a
+**slippage guard** (the worst acceptable fill; the engine rejects with `slippage_exceeded`) — **not** a
+resting limit order. There is no resting-order store and no trigger mechanism.
+
+**What enabling requires** (a real build, not a flag flip):
+- A **resting-order store** — an `orders`-style table for pending limit/stop orders (trigger price + type +
+  side + qty + reduce-only).
+- A **trigger loop** that watches each market's mark and fills/cancels resting orders when the trigger is
+  hit — modelled on the liquidation sweep (every few seconds + after each accepted oracle print).
+- Order **types** in the schema/engine (limit, stop-market, optionally stop-limit) + cancel / amend, and
+  margin reservation semantics for resting orders.
+- **UI** to place and manage them.
+
+Until then, traders use market orders with the optional slippage bound.
+
+---
+
+## 7. KMS-held deposit seed (real-funds security hardening — deferred, "custody P4")
+
+In real-funds custody each user's deposit address is derived from one **HD master seed**
+(`m/44'/501'/{index}'/0'`). Two ways to supply it:
+
+- **`DEPOSIT_MASTER_SEED`** *(what we run on now)* — the **raw seed sits in an env var**. The secret that
+  controls *every* user's deposit-address private key lives in plaintext in the app environment.
+- **`DEPOSIT_SEED_KMS_REF`** — a *reference* to the seed held in a **KMS** (AWS KMS / GCP KMS / HashiCorp
+  Vault), so the raw seed never touches the app env; the app asks the KMS to derive/sign.
+
+**Status:** `config.depositSeedKmsRef` is recognized and the boot-check accepts it as a configured seed,
+**but** if you actually set it the derivation path throws `"KMS-held deposit seed is not implemented yet
+(custody P4)"` (`apps/api/src/services/custody/wallet.ts:25`). So in practice you **must** run on
+`DEPOSIT_MASTER_SEED`.
+
+**TODO before scaling real funds on mainnet:** implement the `depositSeedKmsRef` derivation path and move
+the master seed out of a plaintext env var into a managed / hardware key store, so host or env access can't
+derive every deposit key and sweep funds.
