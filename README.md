@@ -468,6 +468,61 @@ pnpm lint           # lint (web) + tsc typecheck (api)
 pnpm test           # api (node:test on PGlite) + pricing property tests
 ```
 
+The default run mode is **play money** (`REAL_FUNDS` unset → faucet, no custody). `pnpm dev:api` boots on
+PGlite and ingests live prices a moment after boot, so markets self-populate — no setup. To run a single
+test file: `cd apps/api && npx tsx --test src/services/<name>.test.ts`.
+
+### Codebase conventions & how to add a feature
+
+**Invariants every change must respect:**
+
+- **Money is `BIGINT` micro-USDC (`*_e6`)** — never floats; JSON encodes them as decimal strings. The
+  shared math lives in **`packages/pricing`** and is imported by **both** the api and the web app, so the
+  liquidation price / fee / PnL the UI previews is exactly what the engine computes. Don't recompute money
+  math in a component — call `@pokex/pricing`.
+- **Double-entry ledger.** Every value movement is a balanced `ledger_entries` transaction (Σ per `txn_id`
+  = 0); `balances` is a cache. Move money through `services/ledger.ts`, never by writing `balances`
+  directly — the reconciler (`services/reconcile.ts`) asserts it stays balanced.
+- **Server-authoritative.** The browser renders; all money state arrives from the api over REST (hydrate)
+  + WebSocket (live). Never trust client-supplied prices/amounts.
+- **Single-writer per market + idempotency.** Engine operations take an in-process lock **and** a Postgres
+  advisory lock, and carry a client idempotency key — replays return the prior result.
+
+**The wiring patterns you'll reuse:**
+
+- **A REST endpoint** is a Fastify plugin in `apps/api/src/routes/*.ts`, registered in `src/server.ts`
+  (`buildServer`). Authed routes declare `{ preHandler: authenticate, config: { scope: 'trade' | 'full' } }`
+  — a route-walk test fails any authed route missing an explicit scope (fail-closed → `full`). Wrap
+  abuse-prone routes with `rl(config.routeRateLimits.<x>, …)` (`routes/_ratelimit.ts`). Throw
+  `HttpError(status, message, code?)` for errors. Request/response shapes are **zod schemas in
+  `packages/shared-types`** — the REST/WS contract the SDK consumes; additive changes are free, breaking
+  ones bump `API_VERSION` (`server.ts`).
+- **Business logic** goes in `apps/api/src/services/*.ts` (the route stays a thin handler; the service does
+  the work and posts the ledger transactions).
+- **A DB change** is idempotent DDL appended to `apps/api/src/db/schema.sql` (`CREATE TABLE/INDEX IF NOT
+  EXISTS`, `ALTER TABLE … ADD COLUMN IF NOT EXISTS`) — there are no separate migration files; the whole
+  schema is re-applied on every boot (`db/migrate.ts` → `db.exec`). `pnpm --filter @pokex/api db:reset`
+  wipes the local PGlite DB.
+- **A live-tunable operator knob** uses `liveKnob(settingKey, default, validate)` (`services/live-knob.ts`):
+  the config value is the default, an operator override in the `settings` table overlays it, and it's
+  cached for synchronous hot-path reads (boot-loaded + refreshed ~30s in `index.ts`). Surface it in the
+  admin panel. Examples: `services/fees.ts`, `chat-config.ts`, `drop-config.ts`.
+- **Pushing to the client over WebSocket** is `publish(channel, type, data)` (`services/bus.ts`); the WS
+  hub (`plugins/ws.ts`) forwards to subscribers. Public channels are `mark|stats|oi|funding:{marketId}`
+  and `chat`; private channels `positions|orders|balance|liquidations|lp:{userId}` require an authed
+  socket. The web side subscribes and handles frames in a zustand store (`apps/web/src/store/*` +
+  `lib/ws.js`).
+- **Frontend** is React 19 + zustand + plain CSS under `apps/web/src` (`components/`, `store/`, `lib/api.js`,
+  `lib/ws.js`). Theming is token-driven (`index.css` + `themes.css`, `store/theme.js`); a feature renders
+  across all 7 skins by using the CSS tokens (`--bg`, `--gold`, `--accent`, …) rather than hardcoded
+  colors/fonts. Check `mockups/*.html` + `references/*.png` for the approved design before building a UI
+  control.
+
+**Testing.** Tests are `node:test` on an in-memory PGlite. The setup pattern: set `PGLITE_DIR=memory://`,
+`DATABASE_URL=''`, and a ≥32-char `JWT_SECRET`, then `await initDb()` and dynamically `import` the service
+under test (see any `services/*.test.ts`). The reconciler runs in tests, so a money bug usually surfaces as
+an unbalanced-ledger assertion. Run the full suite (`pnpm test`) before committing.
+
 ### Deployment topology (hybrid)
 
 - **Frontend → Vercel** (static SPA). Set the project **Root Directory** to `apps/web` and
