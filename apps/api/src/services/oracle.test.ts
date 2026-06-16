@@ -84,11 +84,10 @@ test('no outlier reject: a large move is accepted (manipulation handled by the m
   assert.equal(Number(chari.markE6) / 1_000_000, 99_999);
 });
 
-test('timestamp-dedup: re-serving the SAME provider timestamp is a no-op; a new timestamp writes even at an unchanged price', async () => {
-  // flat $42 throughout — dedup keys on the provider's freshness timestamp, NOT the price value
-  const oc = (observedAt: Date) => ({
+test('hybrid dedup: skip a true duplicate; record on a new timestamp OR a changed value (even at the same timestamp)', async () => {
+  const oc = (observedAt: Date, usd = 42) => ({
     game: 'mtg', symbol: 'mtg:dedupe-1', cardId: 'dedupe-1', displayName: 'Dedupe', variant: null,
-    imageSmall: null, providerCardId: 'dedupe-1', rawE6: 42_000_000n, observedAt,
+    imageSmall: null, providerCardId: 'dedupe-1', rawE6: BigInt(usd) * 1_000_000n, observedAt,
   });
   const count = async () =>
     Number(
@@ -98,13 +97,54 @@ test('timestamp-dedup: re-serving the SAME provider timestamp is a no-op; a new 
         )
       ).rows[0].n,
     );
+  const mark = async () =>
+    Number(
+      (
+        await db.query<{ v: string }>(
+          `SELECT k.mark_price_e6::text AS v FROM marks k JOIN markets m ON m.id = k.market_id
+           WHERE m.symbol = 'mtg:dedupe-1' ORDER BY k.computed_at DESC LIMIT 1`,
+        )
+      ).rows[0].v,
+    ) / 1_000_000;
   const t1 = new Date('2026-06-15T06:00:00Z');
   await ingest(db, async () => [oc(t1)]);
   assert.equal(await count(), 1, 'first print recorded');
-  await ingest(db, async () => [oc(t1)]); // SAME last_price_update re-served -> genuine duplicate -> skipped
-  assert.equal(await count(), 1, 'same provider timestamp -> no new print (the feed has not re-priced)');
-  await ingest(db, async () => [oc(new Date('2026-06-15T12:00:00Z'))]); // new timestamp, still $42
-  assert.equal(await count(), 2, 'a new timestamp at an unchanged price still records a fresh print');
+  await ingest(db, async () => [oc(t1)]); // SAME timestamp, SAME value -> genuine duplicate
+  assert.equal(await count(), 1, 'same timestamp + same value -> no new print');
+  await ingest(db, async () => [oc(new Date('2026-06-15T12:00:00Z'))]); // NEW timestamp, still $42 -> flat but live
+  assert.equal(await count(), 2, 'a new timestamp at an unchanged price still records (the feed is live)');
+  await ingest(db, async () => [oc(t1, 55)]); // SAME (frozen) timestamp, value moved 42 -> 55
+  assert.equal(await count(), 3, 'same timestamp + changed value -> the move is still recorded');
+  assert.equal(await mark(), 55, 'and the mark re-prices to the moved value');
+});
+
+test('hybrid dedup: a move is not lost when a provider timestamp collides AFTER a wall-clock re-stamp', async () => {
+  // Regression (adversarial review): the "last value" lookup must read the most-recently-RECORDED value
+  // (insertion order), not the row with the max source_observed_at — a value-move re-stamp carries the
+  // ingest wall-clock, which sorts newer than any historical provider timestamp, so source_observed_at
+  // ordering returned a stale row and silently dropped the next move.
+  const oc = (observedAt: Date, usd: number) => ({
+    game: 'mtg', symbol: 'mtg:lostmove-1', cardId: 'lostmove-1', displayName: 'LostMove', variant: null,
+    imageSmall: null, providerCardId: 'lostmove-1', rawE6: BigInt(usd) * 1_000_000n, observedAt,
+  });
+  const mark = async () =>
+    Number(
+      (
+        await db.query<{ v: string }>(
+          `SELECT k.mark_price_e6::text AS v FROM marks k JOIN markets m ON m.id = k.market_id
+           WHERE m.symbol = 'mtg:lostmove-1' ORDER BY k.computed_at DESC LIMIT 1`,
+        )
+      ).rows[0].v,
+    ) / 1_000_000;
+  const t1 = new Date('2026-06-14T00:00:00Z');
+  const t2 = new Date('2026-06-15T00:00:00Z'); // a later provider timestamp, but still in the past vs now()
+  await ingest(db, async () => [oc(t1, 100)]); // (t1, 100)
+  await ingest(db, async () => [oc(t1, 200)]); // t1 collides, value moved -> wall-clock re-stamp @ 200
+  assert.equal(await mark(), 200);
+  await ingest(db, async () => [oc(t2, 100)]); // new provider timestamp t2 -> records @ 100
+  assert.equal(await mark(), 100);
+  await ingest(db, async () => [oc(t2, 200)]); // t2 collides, a real 100 -> 200 move must still record
+  assert.equal(await mark(), 200, 'the move is recorded, not mistaken for the newer-sorted stale re-stamp');
 });
 
 test('card metadata is stored; JustTCG graded data activates the Graded index', async () => {

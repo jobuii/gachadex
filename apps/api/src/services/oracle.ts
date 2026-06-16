@@ -78,13 +78,19 @@ async function fetchGradedPrice(card: OracleCard): Promise<number | null> {
   }
 }
 
-/** Record an oracle print, deduped on the provider's freshness TIMESTAMP (source_observed_at =
- *  last_price_update). A re-poll that returns the SAME timestamp is a genuine duplicate — the provider
- *  hasn't re-priced — so ON CONFLICT skips it; that same "no fresh timestamp" is what the staleness
- *  breaker keys off. A NEW timestamp always writes, even at an unchanged price ($10 today and $10
- *  tomorrow are both real prints, not duplicates). Manipulation is handled upstream by the median
- *  price and gap risk by the engine, so there is no outlier reject. Returns whether a row was written
- *  (RETURNING detects the no-op insert, so callers don't recompute a stray mark). */
+/** Record an oracle print. Dedup is HYBRID — a print lands when EITHER the provider's freshness
+ *  timestamp is new OR the computed value moved since the last accepted print:
+ *   - New `source_observed_at` (provider re-priced): the insert succeeds, even at an unchanged value
+ *     (a flat but live feed) — and every insert's fresh `ingested_at` keeps the staleness breaker fed.
+ *   - Same timestamp but a CHANGED value: the provider moved the price WITHOUT advancing its clock
+ *     (its `last_price_update` is frequently null, so we fall back to a near-static `updated_at`), or
+ *     our pricing logic changed. The provider timestamp would collide, so we re-stamp the move on the
+ *     ingest wall-clock and record it — otherwise a real move (and the new median taking effect on a
+ *     frozen card) would be lost.
+ *   - Same timestamp AND same value: a genuine duplicate — skip.
+ *  This only ever ADDS writes vs pure timestamp-dedup, so it cannot re-trip the 36h staleness breaker.
+ *  Manipulation is handled upstream by the median price and gap risk by the engine — no outlier reject.
+ *  Returns whether a row was written (so callers skip a stray mark recompute on a no-op). */
 async function recordOracle(
   q: Queryer,
   marketId: string,
@@ -92,14 +98,30 @@ async function recordOracle(
   observedAt: Date,
   payload: unknown,
 ): Promise<boolean> {
-  const ins = await q.query<{ id: string }>(
-    `INSERT INTO oracle_prices(market_id, index_price_e6, raw_payload, source_observed_at, is_accepted)
-     VALUES($1, $2, $3, $4, true)
-     ON CONFLICT(market_id, source_observed_at) DO NOTHING
-     RETURNING id`,
-    [marketId, indexE6.toString(), JSON.stringify(payload ?? null), observedAt.toISOString()],
+  const json = JSON.stringify(payload ?? null);
+  const insert = (at: Date) =>
+    q.query<{ id: string }>(
+      `INSERT INTO oracle_prices(market_id, index_price_e6, raw_payload, source_observed_at, is_accepted)
+       VALUES($1, $2, $3, $4, true)
+       ON CONFLICT(market_id, source_observed_at) DO NOTHING
+       RETURNING id`,
+      [marketId, indexE6.toString(), json, at.toISOString()],
+    );
+  // Timestamp path: a new provider snapshot records, whatever the value.
+  const byTimestamp = await insert(observedAt);
+  if (byTimestamp.rows.length > 0) return true;
+  // The provider re-used its timestamp: record it only if the value moved since the last accepted print.
+  // Order by id (insertion order), NOT source_observed_at: a value-move re-stamp (below) carries the
+  // ingest wall-clock, which sorts newer than any historical provider timestamp — so source_observed_at
+  // ordering could return a stale row and drop a real move (the same hazard markets.ts avoids).
+  const last = await q.query<{ v: string }>(
+    `SELECT index_price_e6::text AS v FROM oracle_prices
+     WHERE market_id = $1 AND is_accepted ORDER BY id DESC LIMIT 1`,
+    [marketId],
   );
-  return ins.rows.length > 0;
+  if (last.rows[0] && BigInt(last.rows[0].v) === indexE6) return false; // same timestamp AND same value -> duplicate
+  const byValue = await insert(new Date()); // re-stamp the move on the ingest wall-clock so it lands
+  return byValue.rows.length > 0;
 }
 
 /** The flag-selected live fetcher (ORACLE_PRIMARY): cutover/rollback is an env flip + restart, no code deploy. */
