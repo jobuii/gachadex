@@ -93,9 +93,18 @@ not the hot loop.**
 
 ## 4. Provider orchestration
 
-- New config flag `PRICE_PRIMARY = scrydex | tcgpricelookup` (default `scrydex` once live). When
-  `scrydex`: each refresh fetches Scrydex by `scrydex_card_id` for the price + tcgpl (existing fetcher)
-  for the eBay/TCGplayer cross-check, joins by `tcgplayer_id`, calls `combinePrice`.
+- **Reuse the existing `ORACLE_PRIMARY` selector — add `scrydex` as a third value** (`pokemontcg |
+  tcgpricelookup | scrydex`). No new flag: the primary price source IS the primary feed, so a separate
+  `PRICE_PRIMARY` would be a redundant/contradictory axis. When `ORACLE_PRIMARY=scrydex`: each refresh
+  fetches Scrydex by `scrydex_card_id` for the price **and** runs tcgpl (existing fetcher) for the
+  eBay/TCGplayer cross-check, joins by `tcgplayer_id`, calls `combinePrice`. (That "also run tcgpl" is
+  behaviour of the scrydex branch, not a config knob.)
+- **Branch points to extend** (each currently special-cases `tcgpricelookup` / `pokemontcg`):
+  - `config.ts` `oraclePrimary()` validator + type → allow `'scrydex'`.
+  - `oracle.ts` `primaryFetcher` → 3-way: `scrydex` → Scrydex+tcgpl combined fetch; else as today.
+  - `config.ts` `catalogSearchEnabled` and `index.ts` discovery-loop gate (`=== 'tcgpricelookup'`) →
+    true for `scrydex` too (Scrydex has search; markets exist).
+  - `discovery.ts` rebalance guard (`=== 'pokemontcg'`) → unaffected; `scrydex` is fine.
 - tcgpl "secondary if available": if tcgpl returns nothing for a card, confidence simply loses the eBay
   + cross-feed inputs (degrades, doesn't fail). If **Scrydex** returns nothing, price falls back to
   tcgpl TCGplayer market.
@@ -227,9 +236,11 @@ must ack in < 2s (Scrydex times out at 10s, retries 4× with backoff).
 
 ## 10. Config & flags (`apps/api/src/config.ts`)
 
-`SCRYDEX_API_KEY`, `SCRYDEX_TEAM_ID`, `SCRYDEX_BASE` (default the live base), `PRICE_PRIMARY`
-(`scrydex`|`tcgpricelookup`, default current until cutover), FX config (reuse the speced Frankfurter),
-and the rubric thresholds as live-tunable knobs (`liveKnob`) so confidence can be tuned without a deploy.
+`SCRYDEX_API_KEY`, `SCRYDEX_TEAM_ID`, `SCRYDEX_BASE` (default the live base), `SCRYDEX_WEBHOOK_SECRET`
+(`whsec_…`, for the §8 HMAC check), and FX config (reuse the speced free Frankfurter base). The provider
+selector is the **existing `ORACLE_PRIMARY`, extended to allow `scrydex`** (no separate `PRICE_PRIMARY` —
+§4). The confidence band / spike / clamp thresholds are live-tunable knobs (`liveKnob`), not env, so they
+tune without a deploy.
 
 ## 11. Tests (`apps/api/src/services/providers/scrydex.test.ts` + pricing tests)
 
@@ -246,13 +257,13 @@ and the rubric thresholds as live-tunable knobs (`liveKnob`) so confidence can b
 
 ## 12. Rollout & reversibility
 
-1. Land behind `PRICE_PRIMARY=tcgpricelookup` (no behaviour change) + run the one-time `scrydex_card_id`
-   match backfill (log match rate + unmatched list) + register the `raw_updated` webhook (§8) and the
-   batch-poll backfill (§3a).
-2. Flip `PRICE_PRIMARY=scrydex` in a non-prod/observe window; diff new vs current marks across the
-   universe (expect the §12 corrections — Sheoldred, Apprentice, etc.).
-3. Cut over prod; the hybrid dedup re-prices the universe on the first pass. Reversible by flipping the
-   flag back to `tcgpricelookup`.
+1. Land with `ORACLE_PRIMARY=tcgpricelookup` (current — no behaviour change) + run the one-time
+   `scrydex_card_id` match backfill (log match rate + unmatched list) + register the `raw_updated`
+   webhook (§8) and the batch-poll backfill (§3a).
+2. Flip `ORACLE_PRIMARY=scrydex` in a non-prod/observe window; diff new vs current marks across the
+   universe (expect the §5 corrections — Sheoldred, Apprentice, etc.).
+3. Cut over prod; the hybrid dedup re-prices the universe on the first pass. Reversible by flipping
+   `ORACLE_PRIMARY` back to `tcgpricelookup` (instant — tcgpl stays fully wired).
 
 ## 13. Decisions (resolved 2026-06-17)
 
