@@ -332,3 +332,58 @@ test('backfillScrydexIds matches by tcgplayer product_id and stores scrydex_card
 
   await db.query(`DELETE FROM markets WHERE id IN ($1,$2)`, [hit, miss]);
 });
+
+test('backfillScrydexIds: a per-card search failure is tolerated, and names are sanitized of Lucene specials', async () => {
+  // a real-world ugly One Piece name (embedded quotes + parenthetical/bracket qualifiers) that 400'd Scrydex
+  const bad = await upsertCardMarket(db, { game: 'onepiece', symbol: 'rz-bad', cardId: 'rz-bad', displayName: 'Capone"Gang"Bege (CS 2023 Top Players Pack) [Finalist]', variant: 'std', imageSmall: 'i', tcgplayerId: 7001 });
+  const ok = await upsertCardMarket(db, { symbol: 'rz-ok', cardId: 'rz-ok', displayName: 'Charizard #4', variant: 'holofoil', imageSmall: 'i', tcgplayerId: 42382 });
+
+  const queries: string[] = [];
+  const stub = {
+    searchCards: async (_slug: string, params: { q?: string }) => {
+      const q = params.q ?? '';
+      queries.push(q);
+      if (q.includes('Capone')) throw new Error('scrydex 400 on /onepiece/v1/cards'); // simulate the malformed-name 400
+      return q.includes('Charizard')
+        ? { data: [sxFullCard('base1-4', 42382, 100)], total_count: 1, page: 1, page_size: 100 }
+        : { data: [], total_count: 0, page: 1, page_size: 100 };
+    },
+  } as unknown as InstanceType<typeof ScrydexClient>;
+
+  const res = await backfillScrydexIds(db, { client: stub }); // must NOT throw despite the bad card
+  assert.equal(res.matched, 1, 'the good card still matched after the bad one failed');
+  assert.equal(res.failures, 1, 'the errored search is counted as a failure (not silent)');
+  assert.ok(res.unmatched.some((u) => u.id === bad), 'the failing card is reported unmatched, not fatal');
+  // names are sanitized: no Lucene brackets/parens/backslash, and no quotes beyond the wrapping pair
+  for (const q of queries) {
+    assert.doesNotMatch(q, /[[\]()\\]/, `query carries Lucene specials: ${q}`);
+    assert.equal((q.match(/"/g) || []).length, 2, `query has embedded quotes: ${q}`);
+  }
+
+  await db.query(`DELETE FROM markets WHERE id IN ($1,$2)`, [bad, ok]);
+});
+
+test('backfillScrydexIds apply: a per-card failure writes nothing for that card; the rest still persist', async () => {
+  const bad = await upsertCardMarket(db, { game: 'onepiece', symbol: 'rz2-bad', cardId: 'rz2-bad', displayName: 'Capone"Gang"Bege (CS) [Finalist]', variant: 'std', imageSmall: 'i', tcgplayerId: 7011 });
+  const ok = await upsertCardMarket(db, { symbol: 'rz2-ok', cardId: 'rz2-ok', displayName: 'Charizard #4', variant: 'holofoil', imageSmall: 'i', tcgplayerId: 42382 });
+  const stub = {
+    searchCards: async (_slug: string, params: { q?: string }) => {
+      const q = params.q ?? '';
+      if (q.includes('Capone')) throw new Error('scrydex 400 on /onepiece/v1/cards');
+      return q.includes('Charizard')
+        ? { data: [sxFullCard('base1-4', 42382, 100)], total_count: 1, page: 1, page_size: 100 }
+        : { data: [], total_count: 0, page: 1, page_size: 100 };
+    },
+  } as unknown as InstanceType<typeof ScrydexClient>;
+
+  const res = await backfillScrydexIds(db, { client: stub, apply: true });
+  assert.equal(res.applied, 1, 'only the succeeding card was written');
+  assert.equal(res.failures, 1, 'the throwing card is counted as a failure');
+  assert.ok(res.unmatched.some((u) => u.id === bad));
+  const okRow = await db.query<{ c: string | null }>(`SELECT scrydex_card_id AS c FROM markets WHERE id=$1`, [ok]);
+  assert.equal(okRow.rows[0].c, 'base1-4', 'the good card persisted');
+  const badRow = await db.query<{ c: string | null }>(`SELECT scrydex_card_id AS c FROM markets WHERE id=$1`, [bad]);
+  assert.equal(badRow.rows[0].c, null, 'the failed card stays null → tcgpl fallback (no mis-write)');
+
+  await db.query(`DELETE FROM markets WHERE id IN ($1,$2)`, [bad, ok]);
+});

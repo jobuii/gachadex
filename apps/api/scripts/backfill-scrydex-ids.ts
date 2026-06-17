@@ -35,6 +35,9 @@ const r = await backfillScrydexIds(db, { apply, limit, log: console.log });
 console.log(`\nmarkets needing a scrydex id: ${r.total}`);
 console.log(`matched:   ${r.matched}${apply ? ` (written: ${r.applied})` : ' (dry run — nothing written)'}`);
 console.log(`unmatched: ${r.unmatched.length} (stay null -> tcgpl fallback)`);
+// failures > 0 means searches ERRORED (Scrydex 400/outage), not just "no coverage" — a high count on an
+// otherwise-healthy universe is a signal to investigate before trusting the coverage number.
+if (r.failures > 0) console.log(`search failures: ${r.failures} (errored — included in unmatched; see the "search failed" lines above)`);
 for (const u of r.unmatched) console.log(`  - ${u.name} (${u.id})`);
 
 await closeDb();
