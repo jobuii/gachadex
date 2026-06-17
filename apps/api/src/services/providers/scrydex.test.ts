@@ -13,6 +13,7 @@ const { ScrydexClient, extractRaw, scrydexSlug, scoreConfidence, combinePrice, f
   await import('./scrydex.ts');
 const { ProviderLimiter } = await import('./limiter.ts');
 const { upsertCardMarket } = await import('../markets.ts');
+const { repriceExpansions } = await import('../oracle.ts');
 
 await initDb();
 const db = await getDb();
@@ -386,4 +387,19 @@ test('backfillScrydexIds apply: a per-card failure writes nothing for that card;
   assert.equal(badRow.rows[0].c, null, 'the failed card stays null → tcgpl fallback (no mis-write)');
 
   await db.query(`DELETE FROM markets WHERE id IN ($1,$2)`, [bad, ok]);
+});
+
+test('repriceExpansions is gated on ORACLE_PRIMARY=scrydex (webhook re-price inert off-flag; rollback-safe)', async () => {
+  const id = await upsertCardMarket(db, { symbol: 'gate-m', cardId: 'gate-m', displayName: 'Gate Card', variant: 'holofoil', imageSmall: 'i', providerCardId: 'tpl-gate', tcgplayerId: 8001 });
+  await db.query(`UPDATE markets SET scrydex_card_id='sx-gate', scrydex_expansion_id='gate-exp' WHERE id=$1`, [id]);
+
+  // sxClient throws if ever reached — proving the gate short-circuits BEFORE any fetch.
+  const sxStub = { getCardsByIds: async () => { throw new Error('gate breached: Scrydex fetched while ORACLE_PRIMARY != scrydex'); } } as unknown as Parameters<typeof fetchScrydexTrackedCards>[1];
+  const tplStub = { getCardsByIds: async () => [] } as unknown as Parameters<typeof fetchScrydexTrackedCards>[2];
+
+  // test env's ORACLE_PRIMARY is 'pokemontcg' (apps/api/.env) → the gate must short-circuit (no fetch, returns 0)
+  const n = await repriceExpansions(db, ['gate-exp'], { sxClient: sxStub, tplClient: tplStub, fx: async () => null });
+  assert.equal(n, 0, 'no re-price when Scrydex is not the primary feed');
+
+  await db.query(`DELETE FROM markets WHERE id=$1`, [id]);
 });
