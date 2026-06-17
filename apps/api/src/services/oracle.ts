@@ -4,9 +4,10 @@ import { INDEX_CATALOG } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import type { Db, Queryer } from '../db/client.ts';
 import { upsertCardMarket, upsertIndexMarket, getMarketById, type CardUpsert } from './markets.ts';
-import { recomputeMark } from './marks.ts';
+import { recomputeMark, getMarkClampBps } from './marks.ts';
 import { pokemontcgFetcher } from './providers/pokemontcg.ts';
 import { fetchTrackedCards } from './providers/tcgpricelookup.ts';
+import { fetchScrydexTrackedCards } from './providers/scrydex.ts';
 
 /**
  * Provider-agnostic card snapshot — the seam between price providers and the oracle (P2 of the
@@ -27,6 +28,7 @@ export interface OracleCard {
   metadata?: unknown; // provider-extracted detail-panel JSON (markets.metadata column)
   rawE6: bigint; // raw spot in micro-USD; 0n = unpriced (skipped by ingest)
   confident?: boolean; // false => low price confidence (thin/disagreeing signals): restrict the card to reduce-only
+  markCorroborated?: boolean; // present => engage the §6a mark guard; true => eBay confirms this move, adopt without clamp (absent => no guard, legacy behaviour)
   gradedE6?: bigint | null; // PSA-10 in micro-USD when the provider supplies it inline (P3); else the gradedFetcher fallback runs
   observedAt?: Date | null; // provider freshness timestamp; null/absent -> the ingest pass wall-clock (legacy behavior)
   payload?: unknown; // audit payload stored on the oracle print
@@ -126,7 +128,14 @@ async function recordOracle(
 
 /** The flag-selected live fetcher (ORACLE_PRIMARY): cutover/rollback is an env flip + restart, no code deploy. */
 function primaryFetcher(db: Db): CardFetcher {
-  return config.oraclePrimary === 'tcgpricelookup' ? () => fetchTrackedCards(db) : pokemontcgFetcher;
+  switch (config.oraclePrimary) {
+    case 'scrydex':
+      return () => fetchScrydexTrackedCards(db);
+    case 'tcgpricelookup':
+      return () => fetchTrackedCards(db);
+    default:
+      return pokemontcgFetcher;
+  }
 }
 
 /** Ingest a price snapshot: upsert card markets, record prints, recompute marks, rebuild indices. */
@@ -147,7 +156,10 @@ export async function ingestCard(
   );
   if (recorded) {
     const market = await getMarketById(db, marketId);
-    if (market) await db.tx((q) => recomputeMark(q, market, c.rawE6, 0n, 0n));
+    // Mark guard (§6a) engages only when the provider supplies a corroboration signal (the Scrydex
+    // path); the legacy feeds pass none and recompute exactly as before.
+    const guard = c.markCorroborated !== undefined ? { corroborated: c.markCorroborated, clampBps: getMarkClampBps() } : undefined;
+    if (market) await db.tx((q) => recomputeMark(q, market, c.rawE6, 0n, 0n, guard));
   }
   // tx-wrap so the flag flip and its audit row commit atomically (matches the manual-price path).
   if (c.confident !== undefined) await db.tx((q) => applyConfidence(q, marketId, c.confident!));
@@ -170,6 +182,28 @@ export async function applyConfidence(q: Queryer, marketId: string, confident: b
       reason ?? (low ? 'low price confidence (thin or disagreeing signals)' : 'price confidence restored'),
     ]);
   }
+}
+
+/** Ingest a SUBSET of cards (the webhook re-price path, §8): upsert + print + mark + confidence per
+ *  card, reusing ingestCard (so the mark guard runs). Deliberately skips the index rebuild — a webhook
+ *  re-prices the named cards; the index baskets are rebuilt by the next full `ingest` poll, never from a
+ *  partial set (that would mutate a basket from a handful of constituents). Returns the count priced. */
+export async function ingestScopedCards(db: Db, cards: OracleCard[]): Promise<number> {
+  const priced = cards.filter((c) => c.rawE6 > 0n);
+  if (priced.length === 0) return 0;
+  const pinnedRows = await db.query<{ id: string }>(`SELECT id FROM markets WHERE price_pinned`);
+  const pinned = new Set(pinnedRows.rows.map((r) => r.id));
+  const at = new Date();
+  for (const c of priced) await ingestCard(db, c, at, pinned);
+  return priced.length;
+}
+
+/** Re-price every tracked market in the given Scrydex expansions (the prices.raw_updated webhook, §8):
+ *  scoped Scrydex+tcgpl fetch joined by tcgplayer_id, then ingestScopedCards. Returns cards re-priced. */
+export async function repriceExpansions(db: Db, expansionIds: string[]): Promise<number> {
+  if (expansionIds.length === 0) return 0;
+  const cards = await fetchScrydexTrackedCards(db, undefined, undefined, undefined, expansionIds);
+  return ingestScopedCards(db, cards);
 }
 
 export async function ingest(

@@ -239,6 +239,12 @@ CREATE TABLE IF NOT EXISTS markets (
   price_tick_e6      BIGINT NOT NULL DEFAULT 10000,   -- $0.01
   price_pinned       BOOLEAN NOT NULL DEFAULT false,  -- operator manual-price override; auto-oracle skips pinned markets
   low_confidence     BOOLEAN NOT NULL DEFAULT false,  -- oracle price-quality gate: thin/disagreeing signals -> reduce-only (see priceCard)
+  -- Mark guard (§6a, ORACLE_PRIMARY=scrydex): an uncorroborated >clamp% jump caps the per-update mark
+  -- move so a bad/glitched print can't wrongfully liquidate. mark_clamped = clamped right now;
+  -- mark_candidate_e6 = the un-clamped candidate we're creeping toward (NULL when not clamped).
+  mark_clamped       BOOLEAN NOT NULL DEFAULT false,
+  clamped_since      TIMESTAMPTZ,
+  mark_candidate_e6  BIGINT,
   cumulative_volume_uusdc BIGINT NOT NULL DEFAULT 0,   -- Σ traded notional; drives B' adaptive mark depth
   -- Stable cross-provider identity (tcgpricelookup migration P0): symbol/card_id are provider DISPLAY
   -- ids (pokemontcg today, tcgpricelookup UUIDs later) and differ per provider, so a feed cutover must
@@ -246,6 +252,8 @@ CREATE TABLE IF NOT EXISTS markets (
   -- across providers); provider_card_id = the tcgpricelookup card UUID once matched/created.
   tcgplayer_id       BIGINT,
   provider_card_id   TEXT,
+  scrydex_card_id    TEXT,                            -- Scrydex card id (ORACLE_PRIMARY=scrydex); matched once, then the batch poll fetches by it
+  scrydex_expansion_id TEXT,                          -- Scrydex expansion id of the matched card; the prices.raw_updated webhook (§8) carries expansion_ids, so this maps an event to our tracked markets
   -- Featured = index-constituent eligible (the discovery top-250 per game). The TRACKED universe
   -- (everything priced) and the INDEX basket (featured only) are deliberately distinct sets, so
   -- on-demand long-tail markets (P6 search-and-bet) can never mutate the Top-100/250 baskets.
@@ -256,6 +264,11 @@ CREATE INDEX IF NOT EXISTS idx_markets_kind ON markets(kind, status);
 -- upgrade existing DBs (no-op on a fresh schema)
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS image_large TEXT;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS game TEXT NOT NULL DEFAULT 'pokemon';
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS scrydex_card_id TEXT;
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS scrydex_expansion_id TEXT;
+-- The prices.raw_updated webhook (§8) carries expansion_ids; this index makes "which tracked markets are
+-- in these expansions" a fast lookup on the hot webhook path.
+CREATE INDEX IF NOT EXISTS idx_markets_scrydex_expansion ON markets(scrydex_expansion_id) WHERE scrydex_expansion_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_markets_game ON markets(game, kind, status);
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS set_logo TEXT;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS metadata JSONB;
@@ -270,6 +283,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_provider_card ON markets(provider_
 CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_tcgplayer ON markets(tcgplayer_id) WHERE tcgplayer_id IS NOT NULL;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS featured BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS low_confidence BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS mark_clamped BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS clamped_since TIMESTAMPTZ;
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS mark_candidate_e6 BIGINT;
 
 -- Append-only audit of the oracle's price-confidence gate flipping a card market between tradeable and
 -- restricted (reduce-only). Powers the admin "restricted now" + "flipped today" views; one row per flip.
@@ -282,6 +298,21 @@ CREATE TABLE IF NOT EXISTS market_restriction_events (
 );
 CREATE INDEX IF NOT EXISTS idx_restriction_events_at ON market_restriction_events(at DESC);
 CREATE INDEX IF NOT EXISTS idx_restriction_events_market ON market_restriction_events(market_id, at DESC);
+
+-- Append-only audit of the mark guard (§6a) engaging/disengaging on a card market: one row per flip,
+-- carrying the candidate (un-clamped) vs adopted (clamped) mark at the transition. Powers the admin
+-- "mark guards" panel + the engage/disengage history, mirroring market_restriction_events.
+CREATE TABLE IF NOT EXISTS mark_clamp_events (
+  id           BIGSERIAL PRIMARY KEY,
+  market_id    TEXT NOT NULL REFERENCES markets(id),
+  clamped      BOOLEAN NOT NULL,  -- true = guard engaged (mark capped); false = disengaged (candidate adopted)
+  candidate_e6 BIGINT NOT NULL,   -- the un-clamped candidate mark at the flip
+  adopted_e6   BIGINT NOT NULL,   -- the mark actually written this update
+  reason       TEXT,
+  at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_clamp_events_at ON mark_clamp_events(at DESC);
+CREATE INDEX IF NOT EXISTS idx_clamp_events_market ON mark_clamp_events(market_id, at DESC);
 
 CREATE TABLE IF NOT EXISTS index_constituents (
   id        TEXT PRIMARY KEY,
@@ -447,8 +478,10 @@ CREATE TABLE IF NOT EXISTS liquidations (
   insurance_drawn_uusdc BIGINT NOT NULL DEFAULT 0,
   socialized_uusdc      BIGINT NOT NULL DEFAULT 0,
   txn_id                TEXT,
+  mark_guarded          BOOLEAN NOT NULL DEFAULT false, -- the mark was clamped (§6a guard engaged) at liquidation time
   created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE liquidations ADD COLUMN IF NOT EXISTS mark_guarded BOOLEAN NOT NULL DEFAULT false;
 
 -- =========================================================================
 -- Real-funds custody (P0 foundation — tables only; deposit/withdraw paths

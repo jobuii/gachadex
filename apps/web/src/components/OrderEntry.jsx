@@ -173,6 +173,11 @@ export function OrderEntry({ market, onTraded }) {
 
       <div className="order-form">
         {!market.tradeable && <div className="order-gated">Data source pending — not yet tradeable.</div>}
+        {market.markStabilizing && (
+          <div className="order-gated" title="An uncorroborated price jump is being smoothed over a few updates so a bad print can't trigger a liquidation. The price shown is the one that settles trades.">
+            Price stabilizing — recent move is being smoothed.
+          </div>
+        )}
 
         <div className="order-side-toggle">
           <button className={`side-btn buy ${side === 'long' ? 'active' : ''}`} onClick={() => setSide('long')}>LONG</button>

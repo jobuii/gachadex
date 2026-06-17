@@ -86,10 +86,19 @@ Scrydex search is by name/Lucene DSL, not by our `tcgplayer_id`. We still **pers
 one-time backfill stores `markets.scrydex_card_id` **alongside** `tcgplayer_id` / `provider_card_id`
 (store BOTH, so a card is matchable from either feed). But the steady-state refresh **fetches in batches
 of ≤100 cards per request** (1 credit each), NOT one-by-one (by-id ≈ 90k credits/mo, over the 50k plan).
-Batch via the list/search endpoint (per expansion, or a multi-id query if the DSL supports one — confirm
-an id/ids filter; the DSL is known to support `language:`/`types:`/`subtypes:`). Unmatched cards → NULL →
-tcgpl fallback. **With webhooks (§8) as the primary update path, this batch poll is the backfill/reconcile,
-not the hot loop.**
+Batch via the list/search endpoint with an id-OR query. **Confirmed against the live API 2026-06-17**
+(`api.scrydex.com`, docs `scrydex.com/docs/pokemon/cards`):
+
+- Batch-by-id query is `q=id:<a> OR id:<b> OR …` — **repeat the `id:` field per id**. The grouped form
+  `id:(a OR b)` silently returns `{"data":[]}` (Lucene-ish, but the `id` field doesn't honour a bare
+  value-group); the explicit per-field OR works and returns each match with the right `count`. Ids are
+  hyphenated (e.g. `tcgp-B2b-9`) and need no quoting.
+- `page_size` max **100** (snake_case or camelCase both accepted); each id matches ≤1 card, so a ≤100-id
+  batch fits one page with no intra-batch pagination. `include=prices` is opt-in. Search envelope is
+  `{data, page, page_size, count, total_count}` (snake_case in the real response).
+
+Unmatched cards → NULL → tcgpl fallback. **With webhooks (§8) as the primary update path, this batch poll
+is the backfill/reconcile, not the hot loop.**
 
 ## 4. Provider orchestration
 
@@ -174,6 +183,12 @@ Mechanism (per update):
   tighter than §6's 40% spike-gate because this protects money, not just opens; raise toward
   pool-protection, lower toward user-protection.
 
+**Implementation note (build):** the clamp persists across intraday trades. The engine recomputes the
+mark from the latest `marks.index_price_e6` on every trade (`getLatestMarkIndex`), so while clamped the
+guarded value is written as BOTH `mark_price_e6` AND `index_price_e6` — otherwise the next trade would
+recompute from the raw jump and `max_dev` would snap the mark straight back, defeating the guard. The raw
+candidate lives in `oracle_prices` (audit) + `markets.mark_candidate_e6` (what we creep toward).
+
 **Trade-off (accepted):** the single displayed price **creeps** on a genuine *uncorroborated* >25% move
 (a few updates to fully reflect it) rather than jumping; corroborated moves jump immediately. In
 exchange there is no hidden value — what's on the chart is exactly what liquidates you.
@@ -223,6 +238,20 @@ must ack in < 2s (Scrydex times out at 10s, retries 4× with backoff).
 - **Backfill:** the batch poll (§3a) runs on a slow cadence to catch missed webhooks + new cards — the
   reconcile, not the hot loop.
 - **24h change:** surface Scrydex `trends.days_1` directly.
+
+**Implementation (build, confirmed live 2026-06-17):** the payload is `{ id, name, data: { expansion_ids } }`
+— it names the EXPANSIONS that re-priced, NOT the cards. So `markets.scrydex_expansion_id` (set by the
+backfill) maps an event to our tracked markets; `POST /webhooks/scrydex` verifies the **Stripe-style**
+`X-Scrydex-Signature: t=…,v1=…` (HMAC-SHA256 of `${t}.${rawBody}`, hex, 5-min replay window, constant-time
+compare — over the RAW body via an encapsulated content-type parser), acks 200 immediately, and
+re-prices the affected expansions' markets in the background (`repriceExpansions` → scoped
+`fetchScrydexTrackedCards` → `ingestScopedCards`, which runs per-card ingest incl. the mark guard but
+SKIPS the index rebuild — baskets rebuild on the next full poll, never from a partial set). **Backfill:**
+Scrydex has no by-product_id filter (verified), so `backfillScrydexIds` searches by name and matches the
+variant whose `marketplaces[].product_id == tcgplayer_id`, storing `scrydex_card_id` +
+`scrydex_expansion_id`; unmatched markets stay null → tcgpl fallback. The 36h staleness breaker
+(`haltStaleMarkets`, keyed on `oracle_prices.ingested_at`) is already fed by the batch poll's flat prints
+as long as the poll runs within the window — no extra column needed.
 
 ## 9. Schema changes (`apps/api/src/db/schema.sql`, idempotent)
 

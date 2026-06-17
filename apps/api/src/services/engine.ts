@@ -133,7 +133,7 @@ async function replayClose(q: Queryer, orderId: string): Promise<{ orderId: stri
 
 async function getLatestMarkIndex(q: Queryer, marketId: string): Promise<{ markE6: bigint; indexE6: bigint } | null> {
   const r = await q.query<{ m: string; i: string }>(
-    `SELECT mark_price_e6::text AS m, index_price_e6::text AS i FROM marks WHERE market_id=$1 ORDER BY computed_at DESC LIMIT 1`,
+    `SELECT mark_price_e6::text AS m, index_price_e6::text AS i FROM marks WHERE market_id=$1 ORDER BY computed_at DESC, id DESC LIMIT 1`,
     [marketId],
   );
   return r.rows[0] ? { markE6: BigInt(r.rows[0].m), indexE6: BigInt(r.rows[0].i) } : null;
@@ -687,9 +687,9 @@ async function liquidatePositionInTx(q: Queryer, pos: PositionRow, market: Marke
   const orderId = await insertSystemOrder(q, pos, market.id, 'liq');
   await insertFill(q, { orderId, positionId: pos.id, marketId: market.id, execPriceE6: markE6, qtyE6: qty, feeUusdc: liqFeeTaken, realizedPnlUusdc: pnl });
   await q.query(
-    `INSERT INTO liquidations(id,position_id,market_id,user_id,trigger_mark_e6,closed_qty_e6,liquidation_fee_uusdc,bad_debt_uusdc,insurance_drawn_uusdc,socialized_uusdc)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-    [randomUUID(), pos.id, market.id, pos.user_id, markE6.toString(), qty.toString(), liqFeeTaken.toString(), badDebt.toString(), drawn.toString(), socialized.toString()],
+    `INSERT INTO liquidations(id,position_id,market_id,user_id,trigger_mark_e6,closed_qty_e6,liquidation_fee_uusdc,bad_debt_uusdc,insurance_drawn_uusdc,socialized_uusdc,mark_guarded)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [randomUUID(), pos.id, market.id, pos.user_id, markE6.toString(), qty.toString(), liqFeeTaken.toString(), badDebt.toString(), drawn.toString(), socialized.toString(), market.mark_clamped],
   );
 
   await refreshMarketState(q, market, indexE6);
@@ -750,8 +750,11 @@ export async function liquidateEligible(db: Db, marketId: string): Promise<numbe
         const fresh = await getOpenPosition(q, candidate.user_id, marketId, candidate.side);
         if (!fresh || fresh.id !== candidate.id) return;
         const mi2 = await getLatestMarkIndex(q, marketId);
-        if (!mi2 || !isLiquidatable(fresh, market, mi2.markE6)) return;
-        await liquidatePositionInTx(q, fresh, market, mi2.markE6, mi2.indexE6);
+        // Re-read the market INSIDE the tx so the liquidation check and the mark_guarded audit flag use
+        // within-tx-consistent state (an ingest could flip mark_clamped between the sweep load and here).
+        const m2 = await getMarketById(q, marketId);
+        if (!mi2 || !m2 || !isLiquidatable(fresh, m2, mi2.markE6)) return;
+        await liquidatePositionInTx(q, fresh, m2, mi2.markE6, mi2.indexE6);
         count++;
       }),
     );

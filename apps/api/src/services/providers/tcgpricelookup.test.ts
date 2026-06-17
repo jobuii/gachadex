@@ -8,7 +8,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 
 const { getDb, closeDb } = await import('../../db/client.ts');
 const { initDb } = await import('../../db/init.ts');
-const { TcgPriceLookupClient, TPL_BATCH_SIZE, rawPriceUsd, priceCard, gradedPsa10Usd, fromTplCard, fetchTrackedCards } =
+const { TcgPriceLookupClient, TPL_BATCH_SIZE, rawPriceUsd, priceCard, gradedPsa10Usd, fromTplCard, fetchTrackedCards, tplCrossCheck } =
   await import('./tcgpricelookup.ts');
 const { ProviderLimiter } = await import('./limiter.ts');
 const { upsertCardMarket, cardSymbol } = await import('../markets.ts');
@@ -106,6 +106,13 @@ const tplCard = (id: string, p: TplCardT['prices'], extra: Partial<TplCardT> = {
 // A card with a NM price envelope carrying the median's three signals (omit a field to leave it absent).
 const env = (s: { spot?: number; a1?: number; a7?: number }): Pick<TplCardT, 'prices'> => ({
   prices: { raw: { near_mint: { tcgplayer: { market: s.spot }, ebay: { avg_1d: s.a1, avg_7d: s.a7 } } } },
+});
+
+test('tplCrossCheck: TCGplayer market + eBay 1d for the Scrydex combine (not a price); missing → null', () => {
+  assert.deepEqual(tplCrossCheck(env({ spot: 9.8, a1: 10.8, a7: 10.1 })), { tcgpMarket: 9.8, ebay1d: 10.8 });
+  assert.deepEqual(tplCrossCheck(env({ a1: 10.8 })), { tcgpMarket: null, ebay1d: 10.8 }); // eBay only
+  assert.deepEqual(tplCrossCheck(env({ spot: 9.8 })), { tcgpMarket: 9.8, ebay1d: null }); // TCGplayer only
+  assert.deepEqual(tplCrossCheck({ prices: null }), { tcgpMarket: null, ebay1d: null }); // no raw envelope
 });
 
 test('priceCard: median of (eBay 1d, TCGplayer market, eBay 7d); a lone outlier is outvoted, no clamp', () => {
