@@ -8,6 +8,7 @@ import { recoverInFlight, processAllRequested } from './services/custody/withdra
 import { treasuryPass } from './services/custody/treasury.ts';
 import { loadLimits } from './services/custody/limits.ts';
 import { loadFee, loadLiqFee, loadFundingFactor } from './services/fees.ts';
+import { loadMarkClampBps } from './services/marks.ts';
 import { loadChatConfig } from './services/chat-config.ts';
 import { loadDropConfig } from './services/drop-config.ts';
 import { tryAcquireLease, releaseLease } from './services/lease.ts';
@@ -212,7 +213,7 @@ async function main() {
     startLiquidationLoop(db, app.log);
     // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
     // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.
-    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d), loadDropConfig(d)]);
+    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d), loadDropConfig(d), loadMarkClampBps(d)]);
     await loadLiveKnobs(db);
     setInterval(() => void loadLiveKnobs(db).catch((e) => app.log.warn(e, 'live-knob refresh failed')), 30_000);
     if (config.realFunds) {

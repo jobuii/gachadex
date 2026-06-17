@@ -54,6 +54,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
   const [fundingDraft, setFundingDraft] = useState(''); // operator enters a PERCENT (0.30 = 0.30%/hour)
   const [stats, setStats] = useState(null); // { markets: [...], totals } | null — per-asset trading stats
   const [restrictions, setRestrictions] = useState(null); // { restricted:[...], flippedToday:[...] } | null — price-confidence gate
+  const [markGuards, setMarkGuards] = useState(null); // { clamped:[...], flippedToday:[...] } | null — §6a mark guard
   const [tab, setTab] = useState('main'); // 'main' (the operator tools) | 'customers' | 'chat'
   const [withdrawals, setWithdrawals] = useState([]); // requested withdrawal queue (real-funds)
   const [wbusy, setWbusy] = useState(null); // withdrawal id being approved/reversed
@@ -164,6 +165,13 @@ export function AdminPanel({ onGoToMarket } = {}) {
       })(),
       (async () => {
         try {
+          setMarkGuards(await api.adminGetMarkGuards(key)); // mark guard (§6a): clamped now + flips today
+        } catch {
+          setMarkGuards(null);
+        }
+      })(),
+      (async () => {
+        try {
           setWithdrawals((await api.adminGetWithdrawals('requested', key)).withdrawals || []); // real-funds-only
         } catch {
           setWithdrawals([]);
@@ -213,6 +221,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
     setFundingFactorState(null);
     setStats(null);
     setRestrictions(null);
+    setMarkGuards(null);
     setTab('main');
     setWithdrawals([]);
     setMsg(null);
@@ -785,6 +794,40 @@ export function AdminPanel({ onGoToMarket } = {}) {
                   <span style={{ color: 'var(--danger)' }}>{r.displayName}</span>{' '}
                   <span className="muted">
                     ({r.game}) — {new Date(r.at).toLocaleTimeString()} · {r.reason}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {markGuards && (
+        <div
+          className="admin-mark-guards"
+          style={{ margin: '0.6rem 0', padding: '0.6rem 0.8rem', border: '1px solid var(--border)', borderRadius: 8 }}
+        >
+          <div>
+            <strong>Mark guards</strong>{' '}
+            <span className="muted">
+              — a clamped market shows a price that creeps toward an uncorroborated jump rather than jumping, so a bad print can&apos;t wrongfully liquidate. The shown mark is the one that liquidates.
+            </span>
+          </div>
+          <div style={{ marginTop: '0.35rem' }}>
+            <span className="muted">Clamped now: </span>
+            <strong style={{ color: markGuards.clamped.length ? 'var(--warning, #c80)' : undefined }}>{markGuards.clamped.length}</strong>
+            <span className="muted"> · Guard flips today: </span>
+            <strong>{markGuards.flippedToday.length}</strong>
+          </div>
+          {markGuards.clamped.length > 0 && (
+            <ul style={{ margin: '0.4rem 0 0', paddingLeft: '1.1rem', maxHeight: 160, overflowY: 'auto' }}>
+              {markGuards.clamped.map((g) => (
+                <li key={g.marketId}>
+                  <span style={{ color: 'var(--warning, #c80)' }}>{g.displayName}</span>{' '}
+                  <span className="muted">
+                    ({g.game}) — showing ${(Number(g.adoptedE6) / 1e6).toFixed(2)} vs candidate ${(Number(g.candidateE6) / 1e6).toFixed(2)}
+                    {g.gapPct != null && <> · gap {g.gapPct.toFixed(0)}%</>}
+                    {g.since && <> · since {new Date(g.since).toLocaleTimeString()}</>}
                   </span>
                 </li>
               ))}

@@ -265,6 +265,7 @@ export function scoreConfidence(price: number, sx: ScrydexRaw | null, x: CrossCh
 export interface Combined {
   priceUsd: number; // 0 = halted (no usable price)
   tier: Tier;
+  ebayCorroborated: boolean; // eBay (independent venue) agrees with the price → the mark guard adopts a move without clamping (§6a)
 }
 
 /** FX a Scrydex raw to USD (JP printings report JPY — decision #3). Returns null when it's JPY and no
@@ -289,7 +290,8 @@ export function combinePrice(sx: ScrydexRaw | null, x: CrossCheck, fxJpyUsd: num
   let priceUsd = sxUsd && sxUsd.market > 0 ? sxUsd.market : 0;
   if (!(priceUsd > 0) && x.tcgpMarket != null && x.tcgpMarket > 0) priceUsd = x.tcgpMarket; // fallback to tcgpl TCGplayer
   priceUsd = cents(priceUsd);
-  return { priceUsd, tier: scoreConfidence(priceUsd, sxUsd, x) };
+  const ebayCorroborated = x.ebay1d != null && x.ebay1d > 0 && priceUsd > 0 && ebayInBand(x.ebay1d, priceUsd);
+  return { priceUsd, tier: scoreConfidence(priceUsd, sxUsd, x), ebayCorroborated };
 }
 
 let defaultClient: ScrydexClient | null = null;
@@ -409,6 +411,7 @@ export async function fetchScrydexTrackedCards(
         ...base,
         rawE6: toE6(combined.priceUsd),
         confident: combined.tier === 'tradeable',
+        markCorroborated: combined.ebayCorroborated, // engages the §6a mark guard (eBay-only corroboration)
         payload: {
           scrydex: {
             id: sxCard?.id ?? null,

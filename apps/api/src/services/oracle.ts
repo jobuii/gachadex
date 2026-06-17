@@ -4,7 +4,7 @@ import { INDEX_CATALOG } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import type { Db, Queryer } from '../db/client.ts';
 import { upsertCardMarket, upsertIndexMarket, getMarketById, type CardUpsert } from './markets.ts';
-import { recomputeMark } from './marks.ts';
+import { recomputeMark, getMarkClampBps } from './marks.ts';
 import { pokemontcgFetcher } from './providers/pokemontcg.ts';
 import { fetchTrackedCards } from './providers/tcgpricelookup.ts';
 import { fetchScrydexTrackedCards } from './providers/scrydex.ts';
@@ -28,6 +28,7 @@ export interface OracleCard {
   metadata?: unknown; // provider-extracted detail-panel JSON (markets.metadata column)
   rawE6: bigint; // raw spot in micro-USD; 0n = unpriced (skipped by ingest)
   confident?: boolean; // false => low price confidence (thin/disagreeing signals): restrict the card to reduce-only
+  markCorroborated?: boolean; // present => engage the §6a mark guard; true => eBay confirms this move, adopt without clamp (absent => no guard, legacy behaviour)
   gradedE6?: bigint | null; // PSA-10 in micro-USD when the provider supplies it inline (P3); else the gradedFetcher fallback runs
   observedAt?: Date | null; // provider freshness timestamp; null/absent -> the ingest pass wall-clock (legacy behavior)
   payload?: unknown; // audit payload stored on the oracle print
@@ -155,7 +156,10 @@ export async function ingestCard(
   );
   if (recorded) {
     const market = await getMarketById(db, marketId);
-    if (market) await db.tx((q) => recomputeMark(q, market, c.rawE6, 0n, 0n));
+    // Mark guard (§6a) engages only when the provider supplies a corroboration signal (the Scrydex
+    // path); the legacy feeds pass none and recompute exactly as before.
+    const guard = c.markCorroborated !== undefined ? { corroborated: c.markCorroborated, clampBps: getMarkClampBps() } : undefined;
+    if (market) await db.tx((q) => recomputeMark(q, market, c.rawE6, 0n, 0n, guard));
   }
   // tx-wrap so the flag flip and its audit row commit atomically (matches the manual-price path).
   if (c.confident !== undefined) await db.tx((q) => applyConfidence(q, marketId, c.confident!));

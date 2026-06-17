@@ -11,6 +11,7 @@ import { listCustomers } from '../services/customers.ts';
 import { marketStats } from '../services/admin-stats.ts';
 import { houseEconomics } from '../services/house-pnl.ts';
 import { restrictionsReport } from '../services/restrictions.ts';
+import { markGuardsReport } from '../services/mark-guards.ts';
 import { setMod, listModState, unmuteUser, setBanned, resolveChatUserId } from '../services/chat-mod.ts';
 import { listChatUsers } from '../services/chat.ts';
 import { chatConfigView, setChatThresholds } from '../services/chat-config.ts';
@@ -138,6 +139,10 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   // Price-confidence gate (oracle): which card markets are restricted (reduce-only) right now, and which
   // flipped INTO restricted today. Drives the admin "Restricted" badges + the daily transitions panel.
   app.get('/admin/restrictions', rl(config.routeRateLimits.admin), async () => restrictionsReport(await getDb()));
+
+  // Mark guard (§6a): which card markets are clamped (mark creeping vs the candidate) right now, and the
+  // engage/disengage transitions today. Drives the admin "mark guards" panel.
+  app.get('/admin/mark-guards', rl(config.routeRateLimits.admin), async () => markGuardsReport(await getDb()));
 
   // --- CHAT admin view (docs/chat-social-spec.md). Three panels: action-bar thresholds, DROP config +
   // pot bucket, and moderation. All under the same admin-key hook; registers in both fund modes.

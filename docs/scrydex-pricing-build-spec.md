@@ -183,6 +183,12 @@ Mechanism (per update):
   tighter than §6's 40% spike-gate because this protects money, not just opens; raise toward
   pool-protection, lower toward user-protection.
 
+**Implementation note (build):** the clamp persists across intraday trades. The engine recomputes the
+mark from the latest `marks.index_price_e6` on every trade (`getLatestMarkIndex`), so while clamped the
+guarded value is written as BOTH `mark_price_e6` AND `index_price_e6` — otherwise the next trade would
+recompute from the raw jump and `max_dev` would snap the mark straight back, defeating the guard. The raw
+candidate lives in `oracle_prices` (audit) + `markets.mark_candidate_e6` (what we creep toward).
+
 **Trade-off (accepted):** the single displayed price **creeps** on a genuine *uncorroborated* >25% move
 (a few updates to fully reflect it) rather than jumping; corroborated moves jump immediately. In
 exchange there is no hidden value — what's on the chart is exactly what liquidates you.

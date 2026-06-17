@@ -35,6 +35,7 @@ export interface MarketRow {
   price_tick_e6: string;
   price_pinned: boolean;
   low_confidence: boolean;
+  mark_clamped: boolean; // mark guard engaged right now (§6a) — the prior-state input to recomputeMark's clamp
   featured: boolean;
 }
 
@@ -42,7 +43,7 @@ const COLS = `id, kind, game, symbol, display_name, card_id, variant, index_slug
   max_leverage_e2, init_margin_bps, maint_margin_bps,
   max_oi_long_uusdc::text AS max_oi_long_uusdc, max_oi_short_uusdc::text AS max_oi_short_uusdc,
   skew_k_e6::text AS skew_k_e6, premium_cap_e6::text AS premium_cap_e6, max_dev_bps,
-  min_qty_e6::text AS min_qty_e6, qty_step_e6::text AS qty_step_e6, price_tick_e6::text AS price_tick_e6, price_pinned, low_confidence, featured`;
+  min_qty_e6::text AS min_qty_e6, qty_step_e6::text AS qty_step_e6, price_tick_e6::text AS price_tick_e6, price_pinned, low_confidence, mark_clamped, featured`;
 
 export async function getMarketById(q: Queryer, id: string): Promise<MarketRow | null> {
   const r = await q.query<MarketRow>(`SELECT ${COLS} FROM markets WHERE id = $1`, [id]);
@@ -145,6 +146,7 @@ export interface MarketView {
   change24hPct: number;
   pricePinned: boolean;
   restricted: boolean; // low price confidence -> reduce-only (no new positions); see priceCard
+  markStabilizing: boolean; // §6a mark guard engaged: the mark is creeping toward an uncorroborated jump (price stabilizing)
   featured: boolean; // top-250-by-price member (the sidebar's default card list)
 }
 
@@ -247,6 +249,7 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
       change24hPct: changeMap.get(m.id) ?? 0,
       pricePinned: m.price_pinned,
       restricted: m.low_confidence,
+      markStabilizing: m.mark_clamped, // §6a mark guard engaged — show the "price stabilizing" badge
       featured: m.featured,
     };
   });

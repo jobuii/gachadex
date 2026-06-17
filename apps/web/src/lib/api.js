@@ -248,6 +248,8 @@ export const adminLiquidateAll = (adminKey) => adminReq('/admin/positions/liquid
 export const adminGetMarketStats = (adminKey) => adminGet('/admin/market-stats', adminKey);
 // Price-confidence gate: card markets restricted (reduce-only) now + the ones that flipped into restricted today.
 export const adminGetRestrictions = (adminKey) => adminGet('/admin/restrictions', adminKey);
+// Mark guard (§6a): card markets whose mark is clamped (creeping toward an uncorroborated jump) now + today's engage/disengage flips.
+export const adminGetMarkGuards = (adminKey) => adminGet('/admin/mark-guards', adminKey);
 // Withdrawal queue (real-funds). GET by status; approve = sign+broadcast; reverse = re-credit an unpaid row.
 export const adminGetWithdrawals = (status, adminKey) => adminGet(`/admin/withdrawals?status=${encodeURIComponent(status)}`, adminKey);
 export const adminApproveWithdrawal = (id, adminKey) => adminReq(`/admin/withdrawals/${id}/approve`, adminKey);
