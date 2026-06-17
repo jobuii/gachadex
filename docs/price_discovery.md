@@ -355,19 +355,27 @@ TCGplayer, e.g. Charizard δ tcgpl $599 vs Scrydex $4,000) and adds trends, seal
   secondary** (its TCGplayer `market` + eBay `avg_1d`), used as a cross-check + fallback when available.
 - **Price = the TCGplayer market**, anchored, never set by eBay: Scrydex `market` (NM→LP→MP) ?? tcgpl
   TCGplayer `market` ?? manual pin ?? keep-last/halt. eBay is no longer a price input.
-- **Confidence = a trust SCORE** (not a single spread test), from: (i) Scrydex & tcgpl TCGplayer agree
-  (cross-feed stability), (ii) eBay corroborates within a band (cross-venue), (iii) Scrydex `low/high`
+- **Confidence = a decision tree** (not a single spread test) over five checks: (i) Scrydex & tcgpl
+  TCGplayer agree (cross-feed stability — same venue, so a freshness check, NOT an independent one),
+  (ii) eBay corroborates within **0.5×–1.5×** (the only independent venue), (iii) Scrydex `low/high`
   spread tight (liquidity), (iv) `trends.days_1` not a wild unexplained spike (manipulation), (v) data
-  fresh. Score → **tradeable / reduce-only / halted**. This keeps a self-consistent TCGplayer price
-  tradeable even when eBay mismatched the wrong printing (fewer false `reduce_only`), but flags genuine
-  spikes and uncorroborated thin markets.
+  fresh. First-match precedence: no price → **halted**; uncorroborated spike → **reduce-only**; a
+  corroborator (eBay OR cross-feed) confirms → **tradeable**; a corroborator present but disagrees →
+  **reduce-only**; no corroborator available → lean permissive (**tradeable** iff spread tight + fresh).
+  This keeps a self-consistent TCGplayer price tradeable even when eBay mismatched the wrong printing
+  (fewer false `reduce_only`), while flagging genuine spikes and uncorroborated thin markets. (Full
+  tree: build spec §6.)
+- **Mark guard (liquidation protection):** ONE visible mark (displayed = traded = liquidation). An
+  uncorroborated **>25%** jump caps the per-update move at 25% (corroborated moves adopt immediately), so
+  a single bad print can't wrongfully liquidate; a **"price stabilizing"** badge + an admin **"mark
+  guards"** panel + a clamp-events log make it visible. (Full design: build spec §6a.)
 
 ## Kept / changed / dropped vs the median approach
 
 | Median-of-three (now live) | Option B | Note |
 |---|---|---|
 | price = median([eBay 1d, TCGP, eBay 7d]) | 🔄 price = TCGplayer market (Scrydex→tcgpl) | eBay is NO longer a price input |
-| confident = ≥2 signals within 2× | 🔄 trust SCORE → tradeable/reduce-only/halted | richer, fewer false flags |
+| confident = ≥2 signals within 2× | 🔄 **decision tree** → tradeable/reduce-only/halted | richer, fewer false flags — build spec §6 |
 | eBay as a price source | 🔄 eBay as a confidence cross-check only | fixes the outvote bug |
 | freshness / dedup | 🔄 **webhooks-primary** | Scrydex push (`raw_updated`) fixes staleness; batch-poll backfill — build spec §8 |
 | 36h staleness breaker | ✅ KEEP | fed by whether Scrydex still returns the card |
@@ -377,8 +385,8 @@ TCGplayer, e.g. Charizard δ tcgpl $599 vs Scrydex $4,000) and adds trends, seal
 | graded via tcgpl/JustTCG | 🔄 Scrydex PSA/BGS/CGC ladder + pop reports | upgrade |
 
 **Net:** the manipulation defence moves from "median outvotes a lone source" to "TCGplayer-anchored price
-+ cross-venue/cross-feed corroboration + trend-spike gate" — keeping every existing safety layer and
-adding a real cross-venue check.
++ cross-venue/cross-feed corroboration (the open/close gate) + a per-update clamp on the mark itself
+(liquidation protection)" — keeping every existing safety layer and adding a real cross-venue check.
 
 ## Worked example (four cards)
 
@@ -387,7 +395,7 @@ adding a real cross-venue check.
 | Pikachu Star (~$3,200) | TCGP $3,200, eBay $3,200 | $3,200 · tradeable | $3,200 · tradeable |
 | Sheoldred serial (~$1,247) | TCGP $1,247, eBay $20 | **$20 · locked (wrong)** | **$1,247 · tradeable** (TCGP self-consistent; eBay mismatch noted) |
 | Apprentice Sorcerer (~$1) | TCGP $1, eBay $6,449 | **$6,449 · locked (wrong)** | **$1 · tradeable** |
-| Spiked card (~$100) | TCGP jumps $900, eBay $100 | $100 · locked | $900 · **reduce-only** (spike uncorroborated) |
+| Spiked card (~$100) | TCGP jumps $900, eBay $100 | $100 · locked | **reduce-only**; mark guard caps the move to **$125** this update (not $900), reverts if it was a glitch |
 
 Option B prices every card correctly and keeps the self-consistent ones tradeable, while still flagging
 the genuine spike. (Options A and C — simpler binary gate / move-hold — are recorded in
