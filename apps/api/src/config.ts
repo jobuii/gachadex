@@ -10,11 +10,13 @@ function num(name: string, fallback: number): number {
   return v ? Number(v) : fallback;
 }
 
-/** ORACLE_PRIMARY: which price feed drives the oracle. Fails fast on a typo. */
-function oraclePrimary(): 'pokemontcg' | 'tcgpricelookup' {
+/** ORACLE_PRIMARY: which price feed drives the oracle. Fails fast on a typo. `scrydex` = Scrydex-primary
+ *  pricing (docs/scrydex-pricing-build-spec.md): Scrydex sets the TCGplayer price, tcgpl runs alongside
+ *  for the eBay/cross-feed confidence checks. */
+function oraclePrimary(): 'pokemontcg' | 'tcgpricelookup' | 'scrydex' {
   const v = process.env.ORACLE_PRIMARY ?? 'pokemontcg';
-  if (v !== 'pokemontcg' && v !== 'tcgpricelookup') {
-    throw new Error(`ORACLE_PRIMARY must be 'pokemontcg' or 'tcgpricelookup', got '${v}'`);
+  if (v !== 'pokemontcg' && v !== 'tcgpricelookup' && v !== 'scrydex') {
+    throw new Error(`ORACLE_PRIMARY must be 'pokemontcg', 'tcgpricelookup', or 'scrydex', got '${v}'`);
   }
   return v;
 }
@@ -95,6 +97,18 @@ export const config = {
   tcgpricelookupBase: process.env.TCGPRICELOOKUP_BASE ?? 'https://api.tcgpricelookup.com/v1',
   tcgpricelookupMinIntervalMs: num('TCGPRICELOOKUP_MIN_INTERVAL_MS', 1100), // 1 req/s + 10% headroom
   tcgpricelookupDailyCap: num('TCGPRICELOOKUP_DAILY_CAP', 10_000),
+
+  // Scrydex (Growth plan) — primary raw source under ORACLE_PRIMARY=scrydex (docs/scrydex-pricing-build-spec.md).
+  // Price = TCGplayer market; tcgpl runs alongside for the eBay/cross-feed confidence checks. 100 req/s,
+  // credit-metered (batch ≤100 cards/req); webhooks are the primary update path.
+  scrydexApiKey: process.env.SCRYDEX_API_KEY ?? '',
+  scrydexTeamId: process.env.SCRYDEX_TEAM_ID ?? '',
+  scrydexBase: process.env.SCRYDEX_BASE ?? 'https://api.scrydex.com',
+  scrydexWebhookSecret: process.env.SCRYDEX_WEBHOOK_SECRET ?? '', // whsec_… for HMAC-SHA256 verification
+  scrydexMinIntervalMs: num('SCRYDEX_MIN_INTERVAL_MS', 50), // 100 req/s cap → 20/s with headroom
+  scrydexDailyCap: num('SCRYDEX_DAILY_CAP', 1600), // ~50k credits/mo ÷ 30 (a guard; overage just bills)
+  // FX for JP-only cards (Frankfurter, free/no key) — JPY→USD per decision #3.
+  fxBase: process.env.FX_BASE ?? 'https://api.frankfurter.dev',
   discoveryIntervalMs: num('DISCOVERY_INTERVAL_MS', 7 * 24 * 60 * 60 * 1000), // weekly featured rebalance (post-cutover loop)
   // Search-and-bet (P6): catalog search proxy + on-demand market creation. Endpoints only register
   // when the tcgpricelookup feed is live; SEARCH_AND_BET=false turns them off without a deploy.

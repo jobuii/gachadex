@@ -246,6 +246,7 @@ CREATE TABLE IF NOT EXISTS markets (
   -- across providers); provider_card_id = the tcgpricelookup card UUID once matched/created.
   tcgplayer_id       BIGINT,
   provider_card_id   TEXT,
+  scrydex_card_id    TEXT,                            -- Scrydex card id (ORACLE_PRIMARY=scrydex); matched once, then the batch poll fetches by it
   -- Featured = index-constituent eligible (the discovery top-250 per game). The TRACKED universe
   -- (everything priced) and the INDEX basket (featured only) are deliberately distinct sets, so
   -- on-demand long-tail markets (P6 search-and-bet) can never mutate the Top-100/250 baskets.
@@ -256,6 +257,7 @@ CREATE INDEX IF NOT EXISTS idx_markets_kind ON markets(kind, status);
 -- upgrade existing DBs (no-op on a fresh schema)
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS image_large TEXT;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS game TEXT NOT NULL DEFAULT 'pokemon';
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS scrydex_card_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_markets_game ON markets(game, kind, status);
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS set_logo TEXT;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS metadata JSONB;
