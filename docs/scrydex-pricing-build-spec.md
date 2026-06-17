@@ -149,11 +149,12 @@ Mechanism (per update):
 - Compute the candidate mark from the new index as usual (`index × (1 + premium)`).
 - **Corroborated move** — eBay `avg_1d` OR the cross-feed TCGplayer moved the same direction by a
   comparable amount → **adopt the candidate immediately.**
-- **Uncorroborated jump > X = 25%** vs the last mark → the mark moves **at most 25% toward** the
-  candidate this update (clamped creep). A one-print glitch reverts next update (no wrongful
-  liquidation); a persistent real move fully adopts over ~3 updates. X is tunable — tighter than §6's
-  40% spike-gate because this protects money, not just opens; raise toward pool-protection, lower toward
-  user-protection.
+- **Uncorroborated jump > X = 25%** vs the last mark → **cap the per-update change at 25%** of the
+  current mark (e.g. last mark $100, candidate $900 → mark moves to **$125** this update, not $900;
+  candidate $20 → $75). The mark creeps toward a persistent move over the next few updates; a one-print
+  glitch reverts on the next update before the cap is exhausted (no wrongful liquidation). X is tunable —
+  tighter than §6's 40% spike-gate because this protects money, not just opens; raise toward
+  pool-protection, lower toward user-protection.
 
 **Trade-off (accepted):** the single displayed price **creeps** on a genuine *uncorroborated* >25% move
 (a few updates to fully reflect it) rather than jumping; corroborated moves jump immediately. In
