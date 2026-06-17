@@ -148,6 +148,11 @@ export const FeeRequest = z.object({ bps: z.coerce.number().int().min(0).max(100
 // admin panel takes a percentage and converts (pct * 100 = bps). Scaled by the book's skew each hour.
 export const FundingFactorRequest = z.object({ bps: z.coerce.number().int().min(0).max(100) }).strict();
 
+// Live-tunable mark-guard clamp (§6a) — the per-update cap, in bps, on an UNCORROBORATED mark move
+// (ORACLE_PRIMARY=scrydex). 100-9000 (1%-90%); default 2500 (25%). Lower = more user protection
+// (price creeps), higher = more pool protection (adopts moves faster).
+export const MarkClampRequest = z.object({ bps: z.coerce.number().int().min(100).max(9000) }).strict();
+
 // --- real-funds wallet (custody P2) -------------------------------------------
 // Withdrawals need a step-up: the wallet signs a server-rendered message over the EXACT
 // (amount, dest, nonce) — get the message from /wallet/withdraw/nonce, sign it, submit both.
