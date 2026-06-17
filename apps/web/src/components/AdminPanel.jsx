@@ -52,6 +52,8 @@ export function AdminPanel({ onGoToMarket } = {}) {
   const [liqFeeDraft, setLiqFeeDraft] = useState('');
   const [fundingFactor, setFundingFactorState] = useState(null); // { bps, default } | null — max hourly funding rate
   const [fundingDraft, setFundingDraft] = useState(''); // operator enters a PERCENT (0.30 = 0.30%/hour)
+  const [markClamp, setMarkClampState] = useState(null); // { bps, default } | null — §6a mark-guard clamp
+  const [markClampDraft, setMarkClampDraft] = useState(''); // operator enters a PERCENT (25 = 25%/update)
   const [stats, setStats] = useState(null); // { markets: [...], totals } | null — per-asset trading stats
   const [restrictions, setRestrictions] = useState(null); // { restricted:[...], flippedToday:[...] } | null — price-confidence gate
   const [markGuards, setMarkGuards] = useState(null); // { clamped:[...], flippedToday:[...] } | null — §6a mark guard
@@ -151,6 +153,13 @@ export function AdminPanel({ onGoToMarket } = {}) {
       })(),
       (async () => {
         try {
+          setMarkClampState(await api.adminGetMarkClamp(key)); // §6a mark-guard clamp
+        } catch {
+          setMarkClampState(null);
+        }
+      })(),
+      (async () => {
+        try {
           setStats(await api.adminGetMarketStats(key)); // per-asset stats + net exposure
         } catch {
           setStats(null);
@@ -219,6 +228,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
     setFeeState(null);
     setLiqFeeState(null);
     setFundingFactorState(null);
+    setMarkClampState(null);
     setStats(null);
     setRestrictions(null);
     setMarkGuards(null);
@@ -335,6 +345,29 @@ export function AdminPanel({ onGoToMarket } = {}) {
       setFundingFactorState(r);
       setFundingDraft('');
       setMsg(`Funding factor set to ${(r.bps / 100).toFixed(2)}%/hour (max, scaled by the book's skew).`);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Mark-guard clamp (§6a): the operator enters a PERCENT (per-update cap on an uncorroborated mark
+  // move); we store bps (pct*100). Bounds 1-90% — lower = more user protection, higher = more pool.
+  const saveMarkClamp = async () => {
+    setErr(null);
+    setMsg(null);
+    const pct = Number(markClampDraft);
+    if (!Number.isFinite(pct) || pct < 1 || pct > 90) {
+      setErr('Enter a clamp percentage between 1 and 90 (e.g. 25 for a 25%/update cap).');
+      return;
+    }
+    setBusy('markClamp');
+    try {
+      const r = await api.adminSetMarkClamp(Math.round(pct * 100), adminKey.trim());
+      setMarkClampState(r);
+      setMarkClampDraft('');
+      setMsg(`Mark-guard clamp set to ${(r.bps / 100).toFixed(2)}%/update (uncorroborated moves).`);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -710,6 +743,27 @@ export function AdminPanel({ onGoToMarket } = {}) {
         <span className="muted" style={{ fontSize: '0.85rem' }}>%/hour</span>
         <button className="btn-primary sm" disabled={busy === 'funding'} onClick={saveFunding}>
           {busy === 'funding' ? '…' : 'Save funding'}
+        </button>
+      </div>
+
+      <h3 style={{ marginTop: '1.25rem' }}>Mark-guard clamp</h3>
+      <p className="ref-blurb">
+        Caps how far the mark can move on a single <strong>uncorroborated</strong> price jump (one eBay
+        doesn&apos;t confirm) — the price creeps toward a real move over a few updates so a bad print can&apos;t
+        wrongfully liquidate open positions. Active under <code>ORACLE_PRIMARY=scrydex</code>. Enter a
+        percentage: <code>25</code> caps each update at 25% of the last mark. Lower = more trader
+        protection; higher = adopts real moves faster. Currently{' '}
+        <strong>{markClamp ? `${(markClamp.bps / 100).toFixed(2)}%/update` : '—'}</strong>
+        {markClamp ? ` (default ${(markClamp.default / 100).toFixed(2)}%)` : ''}.
+      </p>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.35rem 0' }}>
+        <input
+          className="wallet-input" type="number" min="1" max="90" step="0.01" placeholder="25"
+          value={markClampDraft} onChange={(e) => setMarkClampDraft(e.target.value)} style={{ width: 120 }}
+        />
+        <span className="muted" style={{ fontSize: '0.85rem' }}>%/update</span>
+        <button className="btn-primary sm" disabled={busy === 'markClamp'} onClick={saveMarkClamp}>
+          {busy === 'markClamp' ? '…' : 'Save clamp'}
         </button>
       </div>
 

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest } from '@pokex/shared-types';
+import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { rl } from './_ratelimit.ts';
@@ -7,6 +7,7 @@ import { requireAdminKey } from './admin.ts';
 import { setManualPrice, setPricePin } from '../services/admin-pricing.ts';
 import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from '../services/insurance.ts';
 import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFactor } from '../services/fees.ts';
+import { markClampView, setMarkClampBps } from '../services/marks.ts';
 import { listCustomers } from '../services/customers.ts';
 import { marketStats } from '../services/admin-stats.ts';
 import { houseEconomics } from '../services/house-pnl.ts';
@@ -94,6 +95,16 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     const { bps } = FundingFactorRequest.parse(req.body);
     await setFundingFactor(await getDb(), bps);
     return fundingFactorView();
+  });
+
+  // Live-tunable mark-guard clamp (§6a) — the per-update cap (bps) on an UNCORROBORATED mark move under
+  // ORACLE_PRIMARY=scrydex. A POST persists to settings, picked up within ~30s (no deploy). Same shape
+  // as /admin/fee.
+  app.get('/admin/mark-clamp', rl(config.routeRateLimits.admin), async () => markClampView());
+  app.post('/admin/mark-clamp', rl(config.routeRateLimits.admin), async (req) => {
+    const { bps } = MarkClampRequest.parse(req.body);
+    await setMarkClampBps(await getDb(), bps);
+    return markClampView();
   });
 
   // Operator "Customers" view — one row per user (wallet, deposit address, balances, lifetime volume,

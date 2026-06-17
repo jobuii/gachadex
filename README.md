@@ -167,6 +167,13 @@ by construction and never gated.
   the `premium` comes from the LP pool's long/short skew (scaled by a per-market `k`, capped). The
   oracle/index value is a hard anchor; skew adds bounded intraday motion. Same model for cards and
   indices. (`packages/pricing/src/index.js` → `syntheticMark`.)
+- **Mark guard** (under `ORACLE_PRIMARY=scrydex`). An *uncorroborated* price jump — one the independent
+  eBay venue doesn't confirm — is capped at **±`mark_clamp_bps`** of the last mark per update, so the
+  displayed = traded = liquidation price *creeps* toward a real move over a few updates and a one-print
+  glitch can't wrongfully liquidate open positions; an eBay-corroborated move adopts immediately. The
+  clamp is a settings-backed **live knob** — default **25 %** (range 1–90 %), tunable with no deploy via
+  `GET`/`POST /admin/mark-clamp` — and currently-clamped markets + engage/disengage history show in the
+  admin **mark-guards** panel. (`apps/api/src/services/marks.ts` → `recomputeMark`.)
 - **Isolated margin, up to 20×.** Each position locks its own margin; leverage is capped per market.
 - **Pooled-LP counterparty.** There is no order book. Trades fill against the LP pool at the mark;
   the pool books trader PnL (LPs win when traders lose, and vice-versa).
@@ -391,7 +398,7 @@ applied on boot (`db/migrate.ts`).
 | `GET /lp/pool` · `GET /lp/position` · `POST /lp/deposit` · `POST /lp/withdraw` | mixed | LP pool state + provide/withdraw liquidity |
 | `GET /leaderboard` · `GET /referral/me` · `POST /referral/redeem` | mixed | Leaderboard (public, optional viewer); referral code + redeem |
 | `GET /wallet/deposit-address` · `POST /wallet/withdraw/nonce` · `POST /wallet/withdraw` · `GET /wallet/transactions` | yes | Real-funds custody: deposit address, withdraw (wallet step-up), wallet history |
-| `/admin/markets/:id/price` · `/admin/treasury` · `/admin/insurance/*` · `/admin/custody-limits` · `/admin/withdrawals/*` · `/admin/freeze` · `/admin/customers` · `/admin/chat/*` | admin key | Operator ops (manual pricing always; custody ops under real funds) + Customers & CHAT view — see [docs/ops-runbook.md](docs/ops-runbook.md) |
+| `/admin/markets/:id/price` · `/admin/treasury` · `/admin/insurance/*` · `/admin/custody-limits` · `/admin/withdrawals/*` · `/admin/freeze` · `/admin/customers` · `/admin/chat/*` · live knobs `/admin/{fee,liq-fee,funding-factor,mark-clamp}` · `/admin/{restrictions,mark-guards}` | admin key | Operator ops (manual pricing always; custody ops under real funds) + Customers & CHAT view, the live-tunable engine knobs, and the price-confidence / mark-guard panels — see [docs/ops-runbook.md](docs/ops-runbook.md) |
 | `GET /chat` · `POST /chat` · `/chat/messages/:id/react` · `/chat/ranks` · `/chat/profile/:id` · `GET /chat/drop/pot` · `POST /chat/drop/tip` · mod routes | mixed | Live chat: read/post, reactions, rank map, profile card, DROP pot tips (real USDC), mod actions |
 | `GET /health` | public | Health check |
 

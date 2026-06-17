@@ -232,6 +232,10 @@ export const adminSetLiqFee = (bps, adminKey) => adminReq('/admin/liq-fee', admi
 // Live funding factor (bps; max hourly funding rate at full skew). GET -> { bps, default }; POST { bps }.
 export const adminGetFundingFactor = (adminKey) => adminGet('/admin/funding-factor', adminKey);
 export const adminSetFundingFactor = (bps, adminKey) => adminReq('/admin/funding-factor', adminKey, { bps });
+// Live mark-guard clamp (§6a; bps per-update cap on an uncorroborated mark move, ORACLE_PRIMARY=scrydex).
+// GET -> { bps, default }; POST { bps } (100-9000).
+export const adminGetMarkClamp = (adminKey) => adminGet('/admin/mark-clamp', adminKey);
+export const adminSetMarkClamp = (bps, adminKey) => adminReq('/admin/mark-clamp', adminKey, { bps });
 // Per-customer operator view (paginated + sortable) -> { customers: [...], total }.
 export const adminGetCustomers = ({ limit = 50, offset = 0, sort = 'volume' } = {}, adminKey) =>
   adminGet(`/admin/customers?limit=${limit}&offset=${offset}&sort=${encodeURIComponent(sort)}`, adminKey);
