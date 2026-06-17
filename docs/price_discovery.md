@@ -359,16 +359,18 @@ TCGplayer, e.g. Charizard δ tcgpl $599 vs Scrydex $4,000) and adds trends, seal
   TCGplayer agree (cross-feed stability — same venue, so a freshness check, NOT an independent one),
   (ii) eBay corroborates within **0.5×–1.5×** (the only independent venue), (iii) Scrydex `low/high`
   spread tight (liquidity), (iv) `trends.days_1` not a wild unexplained spike (manipulation), (v) data
-  fresh. First-match precedence: no price → **halted**; uncorroborated spike → **reduce-only**; a
-  corroborator (eBay OR cross-feed) confirms → **tradeable**; a corroborator present but disagrees →
-  **reduce-only**; no corroborator available → lean permissive (**tradeable** iff spread tight + fresh).
-  This keeps a self-consistent TCGplayer price tradeable even when eBay mismatched the wrong printing
-  (fewer false `reduce_only`), while flagging genuine spikes and uncorroborated thin markets. (Full
-  tree: build spec §6.)
-- **Mark guard (liquidation protection):** ONE visible mark (displayed = traded = liquidation). An
-  uncorroborated **>25%** jump caps the per-update move at 25% (corroborated moves adopt immediately), so
-  a single bad print can't wrongfully liquidate; a **"price stabilizing"** badge + an admin **"mark
-  guards"** panel + a clamp-events log make it visible. (Full design: build spec §6a.)
+  fresh. First-match precedence: no price → **halted**; a **spike that eBay didn't confirm** →
+  **reduce-only** (only the independent venue corroborates a *move* — cross-feed is the same venue);
+  a corroborator (eBay OR cross-feed) confirms a *stable* price → **tradeable**; a corroborator present
+  but disagrees → **reduce-only**; no corroborator available → lean permissive (**tradeable** iff spread
+  tight + fresh). This keeps a self-consistent TCGplayer price tradeable even when eBay mismatched the
+  wrong printing (fewer false `reduce_only`), while flagging genuine spikes and uncorroborated thin
+  markets. (Full tree: build spec §6.)
+- **Mark guard (liquidation protection):** ONE visible mark (displayed = traded = liquidation). A
+  **>25%** jump caps the per-update move at 25% **unless eBay (the independent venue) confirms it** —
+  two TCGplayer vendors agreeing is NOT enough — so a single bad print can't wrongfully liquidate; a
+  **"price stabilizing"** badge + an admin **"mark guards"** panel + a clamp-events log make it visible.
+  (Full design + worked scenarios: build spec §6a.)
 
 ## Kept / changed / dropped vs the median approach
 

@@ -116,7 +116,9 @@ checks (tunable thresholds):
 - **C2 eBay corroborates** — eBay `avg_1d` present and within **0.5×–1.5×** of price (decision #1).
   *(The only genuinely independent venue.)*
 - **C3 spread tight** — Scrydex `(high − low) / market` ≤ 0.5.
-- **C4 no uncorroborated spike** — `|trends.days_1| ≤ 40%`, OR a corroborator moved with it.
+- **C4 no uncorroborated spike** — `|trends.days_1| ≤ 40%`, OR **eBay** moved the same direction with
+  it. *(Only the independent venue corroborates a SPIKE — the cross-feed (C1) is the same venue
+  (TCGplayer), so two vendors both showing the jump does NOT confirm it isn't a glitch/manipulation.)*
 - **C5 fresh** — priced from a live fetch/webhook this cycle.
 
 Evaluate in order, first match wins:
@@ -134,6 +136,11 @@ tuning aid; the tree is authoritative. Worked cards: Pikachu (C2 passes → trad
 but C1 passes → tradeable $1,247), Apprentice (C1 passes → tradeable $1), spike (C4 fails → reduce_only),
 no-eBay single feed (step 5 → tradeable iff spread tight).
 
+**Cross-feed vs spike (important):** C1 only un-gates a *stable* price (it rules out a one-vendor data
+glitch — that's the Sheoldred case). A **spike** (large day-1 move) is gated at step 2 and can only be
+un-gated/adopted when **eBay** confirms it — same-venue (cross-feed) agreement during a move is NOT
+independent confirmation, so step 2 fires before step 3 can act on C1.
+
 Map to existing state: `TRADEABLE ⇒ low_confidence=false`; `REDUCE_ONLY/HALTED ⇒ low_confidence=true`
 (reuse `applyConfidence`, which logs flips to `market_restriction_events`). The 36h staleness breaker
 still owns the feed-down `reduce_only` separately.
@@ -147,8 +154,10 @@ corroboration-clamp. Engine-side, in the mark recompute / liquidation path.
 
 Mechanism (per update):
 - Compute the candidate mark from the new index as usual (`index × (1 + premium)`).
-- **Corroborated move** — eBay `avg_1d` OR the cross-feed TCGplayer moved the same direction by a
-  comparable amount → **adopt the candidate immediately.**
+- **Corroborated move** — **eBay `avg_1d`** moved the same direction by a comparable amount → **adopt
+  the candidate immediately.** *(Only eBay, the independent venue. Cross-feed agreement — both TCGplayer
+  vendors showing the jump — does NOT bypass the clamp: same venue can't confirm a move isn't a
+  glitch/manipulation.)*
 - **Uncorroborated jump > X = 25%** vs the last mark → **cap the per-update change at 25%** of the
   current mark (e.g. last mark $100, candidate $900 → mark moves to **$125** this update, not $900;
   candidate $20 → $75). The mark creeps toward a persistent move over the next few updates; a one-print
@@ -167,6 +176,18 @@ exchange there is no hidden value — what's on the chart is exactly what liquid
   market — candidate vs adopted mark, gap %, duration, trigger.
 - **Clamp events log** (mirror `market_restriction_events`): engage/disengage history.
 - Liquidation records note the mark was guarded at the time.
+
+**Worked scenarios** — TCGplayer jumps $100 → $900 (last mark $100):
+
+| Scrydex TCGP | tcgpl TCGP | eBay | Mark this update | Tier | Why |
+|---|---|---|---|---|---|
+| $900 | $900 | $100 | **$125** (capped, creeps) | reduce_only | eBay didn't confirm; two TCGplayer vendors agreeing is the *same venue*, not independent confirmation. Reopens once eBay catches up or the move ages past the day-1 spike. |
+| $900 | $100 | $100 | **$125** (capped) | reduce_only | lone-vendor jump — the other feed AND eBay both say $100; almost certainly a Scrydex glitch; reverts when it clears. |
+| $900 | $900 | $900 | **$900** (immediate) | tradeable | the independent venue (eBay) confirms a real move → adopt fully, no clamp, no gate. |
+
+*Optional refinement (not yet decided):* in row 2 the primary (Scrydex) is the sole outlier while tcgpl
+**and** eBay agree at $100 — we could price it at **$100** (the agreeing majority) rather than creep up
+from Scrydex's lone $900. The clamp contains it either way; flagged for the build.
 
 ## 7. Fallbacks & coverage
 
@@ -250,10 +271,10 @@ and the rubric thresholds as live-tunable knobs (`liveKnob`) so confidence can b
    insurance, OI caps) are the backstop. Revisit only if Scrydex exposes a second venue (Cardmarket).
 7. ✅ **Mark guard: SINGLE guarded mark, 25% corroboration-clamp** (resolved 2026-06-17; full design §6a).
    The best-practice review's one real gap — the gate protects *opens*, not the mark that *liquidates*.
-   Decision: one visible mark (no hidden liquidation price); an uncorroborated >25% jump clamps to ≤25%
-   per update (corroborated moves jump immediately), with a "price stabilizing" badge + admin "mark
-   guards" panel + clamp events log. Engine-side. Trade-off accepted: the displayed price creeps on an
-   uncorroborated big move.
+   Decision: one visible mark (no hidden liquidation price); a >25% jump clamps to ≤25% per update unless
+   **eBay (the independent venue) confirms it** — cross-feed agreement alone does NOT bypass the clamp
+   (§6a) — with a "price stabilizing" badge + admin "mark guards" panel + clamp events log. Engine-side.
+   Trade-off accepted: the displayed price creeps on an uncorroborated big move.
 8. ✅ **Liquidity-tiered leverage / OI caps: LEAVE AS-IS.** The review flagged that "20x everywhere" is
    aggressive for thin cards; operator chose to keep the current flat risk config for now.
 
@@ -261,5 +282,5 @@ and the rubric thresholds as live-tunable knobs (`liveKnob`) so confidence can b
 
 - Graded via Scrydex PSA/BGS/CGC ladder + population reports (replace JustTCG).
 - Sealed products (opens the gated sealed index).
-- (Webhooks moved to core — §8.) Revisit single-venue (decision #6) if Scrydex exposes Cardmarket / EUR.
-- If approved, the §13 #7 mark-persistence guard (engine-side liquidation protection).
+- (Webhooks moved to core — §8; the mark guard moved to core — §6a/#7.) Revisit single-venue
+  (decision #6) if Scrydex exposes a second venue (Cardmarket / EUR).
