@@ -186,6 +186,81 @@ export function extractRaw(card: ScrydexCard, tcgplayerId: number | null): Scryd
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Price + confidence combine (Scrydex anchor + tcgpl cross-checks) — build spec §5/§6
+// ---------------------------------------------------------------------------
+
+const cents = (x: number): number => Math.round(x * 100) / 100; // prices live on a $0.01 tick
+
+/** tcgpricelookup cross-check signals for one card (NOT a price source — confidence only). */
+export interface CrossCheck {
+  tcgpMarket: number | null; // tcgpl's TCGplayer market — the cross-FEED (same venue: a freshness check, not independent)
+  ebay1d: number | null; // tcgpl's eBay avg_1d — the only genuinely independent VENUE
+}
+
+export type Tier = 'tradeable' | 'reduce_only' | 'halted';
+
+// Confidence thresholds (tunable; build spec §6/§13 — candidates for liveKnob).
+export const EBAY_BAND_LO = 0.5; // C2 eBay corroboration band (decision #1: 0.5×–1.5×)
+export const EBAY_BAND_HI = 1.5;
+const CROSSFEED_TOL = 0.15; // C1 cross-feed agreement (±15%)
+const SPREAD_MAX = 0.5; // C3 (high − low) / market
+const SPIKE_PCT = 40; // C4 day-1 spike threshold (%)
+
+const ebayInBand = (v: number, price: number) => v >= EBAY_BAND_LO * price && v <= EBAY_BAND_HI * price;
+
+/** Confidence tier — the §6 decision tree, first match wins. `sx` is the Scrydex raw ALREADY converted
+ *  to USD; `x` carries the tcgpl cross-checks. A SPIKE is corroborated ONLY by eBay (the independent
+ *  venue) — cross-feed agreement (both TCGplayer) cannot un-gate a move (§6 C4, the tightened rule). */
+export function scoreConfidence(price: number, sx: ScrydexRaw | null, x: CrossCheck): Tier {
+  if (!(price > 0)) return 'halted'; // 1. no usable price
+  const ebay = x.ebay1d != null && x.ebay1d > 0 ? x.ebay1d : null;
+  const cross = sx != null && x.tcgpMarket != null && x.tcgpMarket > 0 ? x.tcgpMarket : null;
+  const ebayAgrees = ebay != null && ebayInBand(ebay, price);
+  const crossAgrees = cross != null && sx != null && Math.abs(sx.market / cross - 1) <= CROSSFEED_TOL;
+  const day1 = sx?.day1Pct ?? null;
+  // 2. uncorroborated day-1 spike → reduce_only (manipulation gate; only eBay corroborates a move).
+  if (day1 != null && Math.abs(day1) > SPIKE_PCT && !ebayAgrees) return 'reduce_only';
+  // 3. a corroborator (eBay OR cross-feed) confirms the price → tradeable.
+  if (ebayAgrees || crossAgrees) return 'tradeable';
+  // 4. a corroborator is present but disagrees → reduce_only.
+  if (ebay != null || cross != null) return 'reduce_only';
+  // 5. no corroborator available → lean permissive: tradeable iff the Scrydex spread is tight.
+  const spreadTight =
+    sx != null && sx.low != null && sx.high != null && sx.market > 0 && (sx.high - sx.low) / sx.market <= SPREAD_MAX;
+  return spreadTight ? 'tradeable' : 'reduce_only';
+}
+
+export interface Combined {
+  priceUsd: number; // 0 = halted (no usable price)
+  tier: Tier;
+}
+
+/** FX a Scrydex raw to USD (JP printings report JPY — decision #3). Returns null when it's JPY and no
+ *  rate is available (we can't price it in USD — better halt than mis-price a yen number as dollars). */
+export function toUsd(sx: ScrydexRaw, fxJpyUsd: number | null): ScrydexRaw | null {
+  if (sx.currency !== 'JPY') return sx;
+  if (!fxJpyUsd || fxJpyUsd <= 0) return null;
+  return {
+    ...sx,
+    market: sx.market * fxJpyUsd,
+    low: sx.low != null ? sx.low * fxJpyUsd : null,
+    high: sx.high != null ? sx.high * fxJpyUsd : null,
+    currency: 'USD',
+  };
+}
+
+/** Combine the Scrydex price (anchor) with the tcgpl cross-checks into a final USD price + tier. Price
+ *  source order: Scrydex TCGplayer market (FX'd) → tcgpl TCGplayer market → 0 (halt; manual-pin +
+ *  keep-last live in ingestCard). **eBay never sets the price.** */
+export function combinePrice(sx: ScrydexRaw | null, x: CrossCheck, fxJpyUsd: number | null): Combined {
+  const sxUsd = sx ? toUsd(sx, fxJpyUsd) : null;
+  let priceUsd = sxUsd && sxUsd.market > 0 ? sxUsd.market : 0;
+  if (!(priceUsd > 0) && x.tcgpMarket != null && x.tcgpMarket > 0) priceUsd = x.tcgpMarket; // fallback to tcgpl TCGplayer
+  priceUsd = cents(priceUsd);
+  return { priceUsd, tier: scoreConfidence(priceUsd, sxUsd, x) };
+}
+
 let defaultClient: ScrydexClient | null = null;
 
 /** Process-wide client (one ProviderLimiter, shared with the priority queue). */

@@ -8,7 +8,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 
 const { getDb, closeDb } = await import('../../db/client.ts');
 const { initDb } = await import('../../db/init.ts');
-const { ScrydexClient, extractRaw, scrydexSlug } = await import('./scrydex.ts');
+const { ScrydexClient, extractRaw, scrydexSlug, scoreConfidence, combinePrice } = await import('./scrydex.ts');
 const { ProviderLimiter } = await import('./limiter.ts');
 
 await initDb();
@@ -101,4 +101,53 @@ test('extractRaw: NM absent -> LP fallback; graded-only -> null; JPY currency pa
 
   const noMarket = card([{ marketplaces: [{ name: 'tcgplayer', product_id: 7 }], prices: [{ type: 'raw', condition: 'NM', low: 5 }] }]);
   assert.equal(extractRaw(noMarket, 7), null, 'a raw entry with no market value is skipped');
+});
+
+// --- scoreConfidence (the §6 decision tree) ---
+type RawT = import('./scrydex.ts').ScrydexRaw;
+const sx = (over: Partial<RawT> = {}): RawT => ({ market: 100, low: 90, high: 120, currency: 'USD', day1Pct: 0, condition: 'NM', variant: 'holofoil', ...over });
+
+test('scoreConfidence: the worked cards (eBay or cross-feed confirms; thin/disagree → reduce_only)', () => {
+  // Pikachu — eBay agrees → tradeable
+  assert.equal(scoreConfidence(3200, sx({ market: 3200, low: 3100, high: 3300 }), { tcgpMarket: 3200, ebay1d: 3200 }), 'tradeable');
+  // Sheoldred — eBay (20) disagrees but the cross-feed agrees → tradeable at $1,247
+  assert.equal(scoreConfidence(1247, sx({ market: 1247 }), { tcgpMarket: 1247, ebay1d: 20 }), 'tradeable');
+  // Apprentice — eBay (6449) disagrees, cross-feed agrees → tradeable at $1
+  assert.equal(scoreConfidence(1, sx({ market: 1, low: 0.8, high: 1.2 }), { tcgpMarket: 1, ebay1d: 6449 }), 'tradeable');
+  // no usable price → halted
+  assert.equal(scoreConfidence(0, null, { tcgpMarket: null, ebay1d: null }), 'halted');
+  // a corroborator present but disagrees (no spike) → reduce_only
+  assert.equal(scoreConfidence(500, sx({ market: 500, low: 490, high: 510 }), { tcgpMarket: null, ebay1d: 50 }), 'reduce_only');
+});
+
+test('scoreConfidence: a SPIKE is corroborated only by eBay, never the cross-feed', () => {
+  // both TCGplayer feeds jump to 900, eBay flat at 100 → reduce_only (cross-feed agreement can't un-gate a spike)
+  assert.equal(scoreConfidence(900, sx({ market: 900, day1Pct: 800 }), { tcgpMarket: 900, ebay1d: 100 }), 'reduce_only');
+  // only Scrydex jumps, tcgpl + eBay flat at 100 → reduce_only
+  assert.equal(scoreConfidence(900, sx({ market: 900, day1Pct: 800 }), { tcgpMarket: 100, ebay1d: 100 }), 'reduce_only');
+  // all three jump to 900 (eBay confirms) → tradeable, adopted
+  assert.equal(scoreConfidence(900, sx({ market: 900, day1Pct: 800 }), { tcgpMarket: 900, ebay1d: 900 }), 'tradeable');
+});
+
+test('scoreConfidence: no corroborator → lean permissive on a tight spread', () => {
+  assert.equal(scoreConfidence(500, sx({ market: 500, low: 480, high: 520 }), { tcgpMarket: null, ebay1d: null }), 'tradeable');
+  assert.equal(scoreConfidence(500, sx({ market: 500, low: 100, high: 900 }), { tcgpMarket: null, ebay1d: null }), 'reduce_only');
+});
+
+// --- combinePrice (price source order + FX) ---
+test('combinePrice: Scrydex market anchors the price; tcgpl TCGplayer is only the fallback', () => {
+  assert.equal(combinePrice(sx({ market: 100 }), { tcgpMarket: 80, ebay1d: 100 }, null).priceUsd, 100); // Scrydex wins
+  const fb = combinePrice(null, { tcgpMarket: 80, ebay1d: 80 }, null); // Scrydex miss → tcgpl TCGplayer
+  assert.equal(fb.priceUsd, 80);
+  assert.equal(fb.tier, 'tradeable'); // eBay 80 within band of 80
+  assert.equal(combinePrice(null, { tcgpMarket: null, ebay1d: 100 }, null).tier, 'halted'); // no price source (eBay never prices)
+});
+
+test('combinePrice: JP printing is converted to USD via the FX rate; no rate → halt', () => {
+  const jp = combinePrice(sx({ market: 1500, low: 1400, high: 1600, currency: 'JPY' }), { tcgpMarket: null, ebay1d: null }, 0.0067);
+  assert.equal(jp.priceUsd, 10.05); // 1500 × 0.0067, $0.01 tick
+  assert.equal(jp.tier, 'tradeable'); // spread tight, no corroborator → permissive
+  const noRate = combinePrice(sx({ market: 1500, currency: 'JPY' }), { tcgpMarket: null, ebay1d: null }, null);
+  assert.equal(noRate.priceUsd, 0);
+  assert.equal(noRate.tier, 'halted'); // can't price a yen number as USD without a rate
 });
