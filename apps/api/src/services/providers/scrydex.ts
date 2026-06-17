@@ -1,6 +1,11 @@
+import { toE6 } from '@pokex/pricing';
 import { config } from '../../config.ts';
 import type { Db } from '../../db/client.ts';
+import type { OracleCard } from '../oracle.ts';
+import { getJpyUsd } from './fx.ts';
 import { ProviderLimiter, sleep, type ProviderPriority } from './limiter.ts';
+import { formatDisplayName } from './display.ts';
+import { fromTplCard, getDefaultClient, tplCrossCheck, type TplCard, type TrackedMarket } from './tcgpricelookup.ts';
 
 /**
  * Scrydex provider (Growth plan; spec docs/scrydex-pricing-build-spec.md). Primary RAW price source
@@ -32,6 +37,12 @@ export interface ScrydexMarketplace {
   name?: string; // 'tcgplayer'
   product_id?: string | number; // the TCGplayer product id — our join key
 }
+export interface ScrydexImage {
+  type?: string; // 'front' | 'back'
+  small?: string;
+  medium?: string;
+  large?: string;
+}
 export interface ScrydexVariant {
   name?: string; // 'holofoil' | 'normal' | …
   marketplaces?: ScrydexMarketplace[];
@@ -42,7 +53,9 @@ export interface ScrydexCard {
   name?: string;
   number?: string;
   printed_number?: string;
+  rarity?: string;
   language_code?: string; // 'EN' | 'JA' | …
+  images?: ScrydexImage[]; // card-level art (used when tcgpl drops the card and Scrydex carries display)
   expansion?: { id?: string; name?: string } | null;
   variants?: ScrydexVariant[];
 }
@@ -60,6 +73,7 @@ export function scrydexSlug(game: string): string | null {
 }
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+export const SCRYDEX_BATCH_SIZE = 100; // max ids per request = pageSize max = 1 credit (spec §3a)
 
 export class ScrydexClient {
   private limiter: ProviderLimiter;
@@ -106,6 +120,21 @@ export class ScrydexClient {
     const json = await this.request(`/${slug}/v1/cards/${encodeURIComponent(id)}?include=prices`, priority);
     const card = json?.data ?? json;
     return card && typeof card === 'object' && 'id' in card ? (card as ScrydexCard) : null;
+  }
+
+  /** Batch card lookup by id — 1 credit per chunk of ≤SCRYDEX_BATCH_SIZE. The batch query is an id-OR
+   *  (`id:a OR id:b OR …`); the field is REPEATED per id — the grouped form `id:(a OR b)` silently
+   *  returns nothing (confirmed live 2026-06-17, spec §3a). Each id matches ≤1 card, so a ≤100-id chunk
+   *  fits one `pageSize=100` page with no intra-chunk pagination. */
+  async getCardsByIds(slug: string, ids: string[], priority: ProviderPriority): Promise<ScrydexCard[]> {
+    const out: ScrydexCard[] = [];
+    for (let i = 0; i < ids.length; i += SCRYDEX_BATCH_SIZE) {
+      const chunk = ids.slice(i, i + SCRYDEX_BATCH_SIZE);
+      const q = chunk.map((id) => `id:${id}`).join(' OR ');
+      const page = await this.searchCards(slug, { q, pageSize: SCRYDEX_BATCH_SIZE }, priority);
+      out.push(...page.data);
+    }
+    return out;
   }
 
   /** One paced+retried GET. Throws on non-retryable errors or when attempts are exhausted. */
@@ -217,7 +246,9 @@ export function scoreConfidence(price: number, sx: ScrydexRaw | null, x: CrossCh
   const ebay = x.ebay1d != null && x.ebay1d > 0 ? x.ebay1d : null;
   const cross = sx != null && x.tcgpMarket != null && x.tcgpMarket > 0 ? x.tcgpMarket : null;
   const ebayAgrees = ebay != null && ebayInBand(ebay, price);
-  const crossAgrees = cross != null && sx != null && Math.abs(sx.market / cross - 1) <= CROSSFEED_TOL;
+  // `cross != null` implies `sx != null` and (extractRaw guarantees a positive market) `price` is the
+  // Scrydex anchor — so compare against `price`, the same rounded base the eBay band uses.
+  const crossAgrees = cross != null && Math.abs(price / cross - 1) <= CROSSFEED_TOL;
   const day1 = sx?.day1Pct ?? null;
   // 2. uncorroborated day-1 spike → reduce_only (manipulation gate; only eBay corroborates a move).
   if (day1 != null && Math.abs(day1) > SPIKE_PCT && !ebayAgrees) return 'reduce_only';
@@ -266,4 +297,131 @@ let defaultClient: ScrydexClient | null = null;
 /** Process-wide client (one ProviderLimiter, shared with the priority queue). */
 export function getDefaultScrydexClient(db: Db): ScrydexClient {
   return (defaultClient ??= new ScrydexClient(db));
+}
+
+// ---------------------------------------------------------------------------
+// OracleCard fetcher (P2b) — re-prices the tracked universe, Scrydex-primary
+// ---------------------------------------------------------------------------
+
+/** A tracked market re-priced by the Scrydex feed. Identity (game/symbol/card_id) and the join keys
+ *  come from OUR market row, never the provider — Scrydex sets the price, tcgpl cross-checks. */
+export interface ScrydexTracked {
+  scrydex_card_id: string;
+  provider_card_id: string | null; // tcgpl id — present for the whole discovery-built universe
+  symbol: string;
+  card_id: string;
+  game: string;
+  tcgplayer_id: number | null; // the join key: Scrydex variant marketplace product_id == this
+  featured: boolean;
+}
+
+const EMPTY_CROSS: CrossCheck = { tcgpMarket: null, ebay1d: null };
+
+/** Display/identity OracleCard built from a SCRYDEX card — the fallback for when tcgpl has dropped the
+ *  card but Scrydex still prices it (Scrydex-primary keeps it tradeable instead of letting it go stale).
+ *  Identity stays from OUR market row. `rawE6`/`confident` are placeholders the fetcher overwrites with
+ *  the combined price/tier. */
+export function fromScrydexCard(c: ScrydexCard, t: ScrydexTracked): OracleCard {
+  const front = (c.images ?? []).find((i) => i.type === 'front') ?? (c.images ?? [])[0];
+  const want = t.tcgplayer_id != null ? String(t.tcgplayer_id) : null;
+  const variant = (c.variants ?? []).find((v) =>
+    (v.marketplaces ?? []).some((m) => m.product_id != null && want != null && String(m.product_id) === want),
+  );
+  return {
+    game: t.game,
+    symbol: t.symbol,
+    cardId: t.card_id,
+    tcgplayerId: t.tcgplayer_id,
+    providerCardId: t.provider_card_id,
+    displayName: formatDisplayName(c.name ?? t.card_id, c.number ?? null),
+    variant: variant?.name ?? null,
+    imageSmall: front?.small ?? null,
+    imageLarge: front?.large ?? front?.small ?? null,
+    metadata: { setName: c.expansion?.name ?? null, setSlug: c.expansion?.id ?? null, rarity: c.rarity ?? null },
+    rawE6: 0n, // overwritten by the fetcher (combinePrice)
+    confident: false, // overwritten by the fetcher
+    observedAt: null, // no per-card Scrydex price timestamp here → pass wall-clock (hybrid dedup re-stamps moves)
+    featured: t.featured,
+  };
+}
+
+/** Live fetcher behind ORACLE_PRIMARY=scrydex: Scrydex sets the TCGplayer price, tcgpl runs alongside for
+ *  the eBay/cross-feed confidence check, joined per market by tcgplayer_id (spec §4). Identity/display
+ *  prefer the tcgpl card (its mapping already exists) and fall back to the Scrydex card when tcgpl drops
+ *  one. A card neither feed prices gets no print — the staleness halt covers it, same as the tcgpl path. */
+export async function fetchScrydexTrackedCards(
+  db: Db,
+  sxClient?: ScrydexClient,
+  tplClient?: ReturnType<typeof getDefaultClient>,
+  fx: () => Promise<number | null> = getJpyUsd, // injectable so tests stay hermetic (no live FX call)
+): Promise<OracleCard[]> {
+  const sx = sxClient ?? getDefaultScrydexClient(db);
+  const tpl = tplClient ?? getDefaultClient(db);
+  const tracked = await db.query<ScrydexTracked>(
+    `SELECT scrydex_card_id, provider_card_id, symbol, card_id, game, tcgplayer_id, featured FROM markets
+      WHERE kind = 'card' AND scrydex_card_id IS NOT NULL AND status != 'delisted'`,
+  );
+  if (tracked.rows.length === 0) return [];
+
+  // 1. Scrydex (the price anchor): batch by scrydex_card_id, per game slug (the endpoint is per-game).
+  const sxIdsByGame = new Map<string, string[]>();
+  for (const t of tracked.rows) {
+    const slug = scrydexSlug(t.game);
+    if (!slug) continue; // a game Scrydex doesn't cover → no anchor; the tcgpl fallback still prices it
+    const list = sxIdsByGame.get(slug) ?? [];
+    list.push(t.scrydex_card_id);
+    sxIdsByGame.set(slug, list);
+  }
+  const sxById = new Map<string, ScrydexCard>();
+  for (const [slug, ids] of sxIdsByGame) {
+    // Dedup: variant-markets of one card share a scrydex_card_id; a dup straddling a chunk burns a credit.
+    for (const c of await sx.getCardsByIds(slug, [...new Set(ids)], 'refresh')) sxById.set(c.id, c);
+  }
+
+  // 2. tcgpl (the cross-check + the identity/display source): batch by provider_card_id.
+  const tplIds = tracked.rows.map((t) => t.provider_card_id).filter((id): id is string => id != null);
+  const tplById = new Map<string, TplCard>();
+  for (const c of await tpl.getCardsByIds(tplIds, 'refresh')) tplById.set(c.id, c);
+
+  // 3. FX once per pass — only JP (JPY) Scrydex prices use it (decision #3).
+  const fxJpyUsd = await fx();
+
+  return tracked.rows.flatMap((t) => {
+    const sxCard = sxById.get(t.scrydex_card_id);
+    const tplCard = t.provider_card_id ? tplById.get(t.provider_card_id) : undefined;
+    const sxRaw = sxCard ? extractRaw(sxCard, t.tcgplayer_id) : null;
+    const cross = tplCard ? tplCrossCheck(tplCard) : EMPTY_CROSS;
+    const combined = combinePrice(sxRaw, cross, fxJpyUsd);
+    if (!(combined.priceUsd > 0)) return []; // neither feed priced it — no print, staleness halt covers it
+
+    // Identity/display from the tcgpl card (existing mapping) or the Scrydex card if tcgpl dropped it.
+    let base: OracleCard | null = null;
+    if (tplCard) {
+      const identity: TrackedMarket = { provider_card_id: t.provider_card_id ?? '', symbol: t.symbol, card_id: t.card_id, game: t.game, featured: t.featured };
+      base = fromTplCard(tplCard, identity);
+    } else if (sxCard) {
+      base = fromScrydexCard(sxCard, t);
+    }
+    if (!base) return []; // priced but nothing to describe it — skip rather than upsert a null display
+
+    return [
+      {
+        ...base,
+        rawE6: toE6(combined.priceUsd),
+        confident: combined.tier === 'tradeable',
+        payload: {
+          scrydex: {
+            id: sxCard?.id ?? null,
+            market: sxRaw?.market ?? null,
+            currency: sxRaw?.currency ?? null,
+            condition: sxRaw?.condition ?? null,
+            day1Pct: sxRaw?.day1Pct ?? null,
+            tier: combined.tier,
+            fxJpyUsd,
+          },
+          tcgpricelookup: { cross, prices: tplCard?.prices ?? null },
+        },
+      },
+    ];
+  });
 }

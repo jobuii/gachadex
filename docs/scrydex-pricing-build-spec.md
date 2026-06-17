@@ -86,10 +86,19 @@ Scrydex search is by name/Lucene DSL, not by our `tcgplayer_id`. We still **pers
 one-time backfill stores `markets.scrydex_card_id` **alongside** `tcgplayer_id` / `provider_card_id`
 (store BOTH, so a card is matchable from either feed). But the steady-state refresh **fetches in batches
 of ≤100 cards per request** (1 credit each), NOT one-by-one (by-id ≈ 90k credits/mo, over the 50k plan).
-Batch via the list/search endpoint (per expansion, or a multi-id query if the DSL supports one — confirm
-an id/ids filter; the DSL is known to support `language:`/`types:`/`subtypes:`). Unmatched cards → NULL →
-tcgpl fallback. **With webhooks (§8) as the primary update path, this batch poll is the backfill/reconcile,
-not the hot loop.**
+Batch via the list/search endpoint with an id-OR query. **Confirmed against the live API 2026-06-17**
+(`api.scrydex.com`, docs `scrydex.com/docs/pokemon/cards`):
+
+- Batch-by-id query is `q=id:<a> OR id:<b> OR …` — **repeat the `id:` field per id**. The grouped form
+  `id:(a OR b)` silently returns `{"data":[]}` (Lucene-ish, but the `id` field doesn't honour a bare
+  value-group); the explicit per-field OR works and returns each match with the right `count`. Ids are
+  hyphenated (e.g. `tcgp-B2b-9`) and need no quoting.
+- `page_size` max **100** (snake_case or camelCase both accepted); each id matches ≤1 card, so a ≤100-id
+  batch fits one page with no intra-batch pagination. `include=prices` is opt-in. Search envelope is
+  `{data, page, page_size, count, total_count}` (snake_case in the real response).
+
+Unmatched cards → NULL → tcgpl fallback. **With webhooks (§8) as the primary update path, this batch poll
+is the backfill/reconcile, not the hot loop.**
 
 ## 4. Provider orchestration
 

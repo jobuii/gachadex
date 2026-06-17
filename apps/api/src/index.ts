@@ -53,9 +53,10 @@ function startOracleLoop(db: Db, log: FastifyBaseLogger) {
 }
 
 /** Weekly featured rebalance (P4 discovery, P5 wiring). Inert until the tcgpricelookup cutover: the
- *  crawl prices via tcgpricelookup, and pre-cutover the pokemontcg feed owns pokemon's featured set. */
+ *  crawl prices via tcgpricelookup (which also runs alongside under ORACLE_PRIMARY=scrydex), and
+ *  pre-cutover the pokemontcg feed owns pokemon's featured set. */
 function startDiscoveryLoop(db: Db, log: FastifyBaseLogger) {
-  if (config.oraclePrimary !== 'tcgpricelookup') return;
+  if (config.oraclePrimary !== 'tcgpricelookup' && config.oraclePrimary !== 'scrydex') return;
   const client = getDefaultClient(db); // the SAME instance as the refresh path — in-process priority preemption works across loops
   const run = async () => {
     try {

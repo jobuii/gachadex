@@ -233,6 +233,20 @@ export function rawPriceUsd(card: Pick<TplCard, 'prices'>): number {
   return priceCard(card).usd;
 }
 
+/** The cross-check signals for the Scrydex combine (NOT a price source): the TCGplayer market (same
+ *  venue as the Scrydex anchor — a freshness/agreement check) and the eBay 1-day average (the only
+ *  genuinely independent venue). Read from the best available raw condition; either may be null. */
+export function tplCrossCheck(card: Pick<TplCard, 'prices'>): { tcgpMarket: number | null; ebay1d: number | null } {
+  for (const cond of CONDITION_ORDER) {
+    const c = card.prices?.raw?.[cond];
+    if (!c) continue;
+    const tcgpMarket = c.tcgplayer?.market != null && c.tcgplayer.market > 0 ? c.tcgplayer.market : null;
+    const ebay1d = c.ebay?.avg_1d != null && c.ebay.avg_1d > 0 ? c.ebay.avg_1d : null;
+    if (tcgpMarket != null || ebay1d != null) return { tcgpMarket, ebay1d };
+  }
+  return { tcgpMarket: null, ebay1d: null };
+}
+
 /** The provider serializes tcgplayer_id as a STRING (verified live) — normalize in ONE place. */
 export function tplTcgplayerId(c: TplCard): number | null {
   return c.tcgplayer_id != null && c.tcgplayer_id !== '' ? Number(c.tcgplayer_id) : null;

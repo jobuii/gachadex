@@ -7,6 +7,7 @@ import { upsertCardMarket, upsertIndexMarket, getMarketById, type CardUpsert } f
 import { recomputeMark } from './marks.ts';
 import { pokemontcgFetcher } from './providers/pokemontcg.ts';
 import { fetchTrackedCards } from './providers/tcgpricelookup.ts';
+import { fetchScrydexTrackedCards } from './providers/scrydex.ts';
 
 /**
  * Provider-agnostic card snapshot — the seam between price providers and the oracle (P2 of the
@@ -126,7 +127,14 @@ async function recordOracle(
 
 /** The flag-selected live fetcher (ORACLE_PRIMARY): cutover/rollback is an env flip + restart, no code deploy. */
 function primaryFetcher(db: Db): CardFetcher {
-  return config.oraclePrimary === 'tcgpricelookup' ? () => fetchTrackedCards(db) : pokemontcgFetcher;
+  switch (config.oraclePrimary) {
+    case 'scrydex':
+      return () => fetchScrydexTrackedCards(db);
+    case 'tcgpricelookup':
+      return () => fetchTrackedCards(db);
+    default:
+      return pokemontcgFetcher;
+  }
 }
 
 /** Ingest a price snapshot: upsert card markets, record prints, recompute marks, rebuild indices. */

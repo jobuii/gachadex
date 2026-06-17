@@ -267,13 +267,15 @@ if (config.adlPnlFactorBps > 0 && config.maxPnlFactorBps > 0 && config.adlPnlFac
 
 // Search-and-bet has TWO tiers, gated separately (route registration reads both):
 //  - catalogSearchEnabled: the READ-ONLY catalogue search (`/catalog/search`). It only browses the
-//    provider catalogue — no risk, no money — so it needs just the feature flag + the tcgpricelookup
-//    provider that can serve it. NOT gated on the NAV caps.
+//    provider catalogue — no risk, no money — so it needs just the feature flag + a provider that can
+//    serve it. tcgpl serves the search under BOTH ORACLE_PRIMARY=tcgpricelookup and =scrydex (scrydex
+//    runs tcgpl alongside for the cross-check). NOT gated on the NAV caps.
 //  - searchAndBetActive: on-demand LISTING (`/markets/ensure`), which CREATES a real-money-tradeable
 //    market. Under REAL funds it also needs all three NAV gates armed (the pool defenses a long-tail
 //    market leans on). A missing gate disables LISTING only — search keeps working — and never
 //    crashes the API (custody/trading have their own protections). Play money is exempt (gates ~ 0).
-export const catalogSearchEnabled = config.searchAndBet && config.oraclePrimary === 'tcgpricelookup';
+export const catalogSearchEnabled =
+  config.searchAndBet && (config.oraclePrimary === 'tcgpricelookup' || config.oraclePrimary === 'scrydex');
 const navGatesArmed = config.maxPnlFactorBps > 0 && config.adlPnlFactorBps > 0 && config.oiCapNavBps > 0;
 export const searchAndBetActive = catalogSearchEnabled && (!config.realFunds || navGatesArmed);
 if (catalogSearchEnabled && config.realFunds && !navGatesArmed) {

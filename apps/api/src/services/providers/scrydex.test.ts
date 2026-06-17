@@ -8,8 +8,10 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 
 const { getDb, closeDb } = await import('../../db/client.ts');
 const { initDb } = await import('../../db/init.ts');
-const { ScrydexClient, extractRaw, scrydexSlug, scoreConfidence, combinePrice } = await import('./scrydex.ts');
+const { ScrydexClient, extractRaw, scrydexSlug, scoreConfidence, combinePrice, fromScrydexCard, fetchScrydexTrackedCards, SCRYDEX_BATCH_SIZE } =
+  await import('./scrydex.ts');
 const { ProviderLimiter } = await import('./limiter.ts');
+const { upsertCardMarket } = await import('../markets.ts');
 
 await initDb();
 const db = await getDb();
@@ -150,4 +152,116 @@ test('combinePrice: JP printing is converted to USD via the FX rate; no rate →
   const noRate = combinePrice(sx({ market: 1500, currency: 'JPY' }), { tcgpMarket: null, ebay1d: null }, null);
   assert.equal(noRate.priceUsd, 0);
   assert.equal(noRate.tier, 'halted'); // can't price a yen number as USD without a rate
+});
+
+// --- getCardsByIds (the batch query construction) ---
+test('getCardsByIds builds an id-OR query (field repeated, not grouped) and chunks at the batch max', async () => {
+  // one chunk: the q is `id:a OR id:b OR id:c` (NOT `id:(a OR b)` — that returns nothing, spec §3a)
+  const one = clientWith([json({ data: [{ id: 'a' }, { id: 'b' }], total_count: 2 })]);
+  await one.client.getCardsByIds('pokemon', ['a', 'b'], 'refresh');
+  const q = decodeURIComponent(one.calls[0]).replace(/\+/g, ' '); // decode %3A→':'; '+' is the encoded space
+  assert.match(q, /q=id:a OR id:b/);
+  assert.doesNotMatch(q, /id:\(/, 'must not use the grouped id:(…) form');
+
+  // chunking: SCRYDEX_BATCH_SIZE + 2 ids → two requests, all cards collected
+  const ids = Array.from({ length: SCRYDEX_BATCH_SIZE + 2 }, (_, i) => `id-${i}`);
+  const many = clientWith([
+    json({ data: ids.slice(0, SCRYDEX_BATCH_SIZE).map((id) => ({ id })), total_count: SCRYDEX_BATCH_SIZE }),
+    json({ data: ids.slice(SCRYDEX_BATCH_SIZE).map((id) => ({ id })), total_count: 2 }),
+  ]);
+  const cards = await many.client.getCardsByIds('pokemon', ids, 'refresh');
+  assert.equal(cards.length, ids.length);
+  assert.equal(many.calls.length, 2);
+});
+
+// --- fromScrydexCard (display fallback when tcgpl drops a card) ---
+const sxFullCard = (id: string, productId: number, market: number, currency = 'USD'): CardT => ({
+  id,
+  name: 'Charizard',
+  number: '6',
+  rarity: 'Rare Holo',
+  language_code: currency === 'JPY' ? 'JA' : 'EN',
+  images: [{ type: 'front', small: `img/${id}/s`, large: `img/${id}/l` }],
+  expansion: { id: 'base1', name: 'Base' },
+  variants: [
+    {
+      name: 'holofoil',
+      marketplaces: [{ name: 'tcgplayer', product_id: productId }],
+      prices: [raw('NM', market, { low: market * 0.9, high: market * 1.1, currency, trends: { days_1: { percent_change: 0 } } })],
+    },
+  ],
+});
+
+test('fromScrydexCard maps Scrydex art/expansion/variant onto OUR market identity', () => {
+  const oc = fromScrydexCard(sxFullCard('sx-1', 111, 50), {
+    scrydex_card_id: 'sx-1', provider_card_id: 'tpl-1', symbol: 'sym-1', card_id: 'card-1', game: 'pokemon', tcgplayer_id: 111, featured: true,
+  });
+  assert.equal(oc.symbol, 'sym-1'); // identity is OURS, not the provider's
+  assert.equal(oc.cardId, 'card-1');
+  assert.equal(oc.displayName, 'Charizard #6');
+  assert.equal(oc.variant, 'holofoil'); // the variant matched by tcgplayer_id
+  assert.equal(oc.imageSmall, 'img/sx-1/s');
+  assert.deepEqual(oc.metadata, { setName: 'Base', setSlug: 'base1', rarity: 'Rare Holo' });
+  assert.equal(oc.featured, true);
+});
+
+// --- fetchScrydexTrackedCards (the orchestration: Scrydex anchor + tcgpl cross-check, joined per market) ---
+type TplCardT = import('./tcgpricelookup.ts').TplCard;
+const tplCardFor = (id: string, market: number, ebay1d: number): TplCardT => ({
+  id, tcgplayer_id: null, name: 'Test', number: '6', rarity: null, variant: 'holofoil', image_url: `tpl/${id}`,
+  last_price_update: '2026-06-16T00:00:00Z', updated_at: '2026-06-16T00:00:00Z',
+  set: { slug: 'base1', name: 'Base' }, game: { slug: 'pokemon', name: 'Pokémon' },
+  prices: { raw: { near_mint: { tcgplayer: { market }, ebay: { avg_1d: ebay1d, avg_7d: ebay1d } } } },
+});
+
+test('fetchScrydexTrackedCards: Scrydex anchors price; tcgpl fallback + Scrydex-only fallback both keep a card priced', async () => {
+  // m1: both feeds present — Scrydex 100 anchors, eBay 100 agrees → tradeable
+  const m1 = await upsertCardMarket(db, { symbol: 's-both', cardId: 's-both', displayName: 'Both', variant: 'holofoil', imageSmall: 'i1', providerCardId: 'tpl-1', tcgplayerId: 111 });
+  // m2: Scrydex MISSING this pass — falls back to tcgpl TCGplayer market (80), eBay 80 agrees → tradeable
+  const m2 = await upsertCardMarket(db, { symbol: 's-sxmiss', cardId: 's-sxmiss', displayName: 'SxMiss', variant: 'holofoil', imageSmall: 'i2', providerCardId: 'tpl-2', tcgplayerId: 222 });
+  // m3: tcgpl DROPPED the card — Scrydex still prices it (50, tight spread, no corroborator → tradeable)
+  const m3 = await upsertCardMarket(db, { symbol: 's-tpldrop', cardId: 's-tpldrop', displayName: 'TplDrop', variant: 'holofoil', imageSmall: 'i3', providerCardId: 'tpl-3', tcgplayerId: 333 });
+  // m4: a JP printing — Scrydex reports JPY, converted to USD via the injected FX rate
+  const m4 = await upsertCardMarket(db, { symbol: 's-jp', cardId: 's-jp', displayName: 'JP', variant: 'holofoil', imageSmall: 'i4', providerCardId: 'tpl-4', tcgplayerId: 444 });
+  await db.query(
+    `UPDATE markets SET scrydex_card_id = CASE id WHEN $1 THEN 'sx-1' WHEN $2 THEN 'sx-2' WHEN $3 THEN 'sx-3' WHEN $4 THEN 'sx-4' END WHERE id IN ($1,$2,$3,$4)`,
+    [m1, m2, m3, m4],
+  );
+
+  const sxStub = { getCardsByIds: async () => [sxFullCard('sx-1', 111, 100), sxFullCard('sx-3', 333, 50), sxFullCard('sx-4', 444, 1500, 'JPY')] } as unknown as Parameters<typeof fetchScrydexTrackedCards>[1];
+  const tplStub = { getCardsByIds: async () => [tplCardFor('tpl-1', 95, 100), tplCardFor('tpl-2', 80, 80)] } as unknown as Parameters<typeof fetchScrydexTrackedCards>[2];
+
+  const cards = await fetchScrydexTrackedCards(db, sxStub, tplStub, async () => 0.0067); // stub FX — no live call
+  const by = new Map(cards.map((c) => [c.symbol, c]));
+  assert.equal(cards.length, 4);
+
+  assert.equal(by.get('s-both')!.rawE6, 100_000_000n); // Scrydex anchor, not tcgpl's 95
+  assert.equal(by.get('s-both')!.confident, true);
+  assert.equal(by.get('s-both')!.displayName, 'Test #6'); // identity/display from the tcgpl card
+
+  assert.equal(by.get('s-sxmiss')!.rawE6, 80_000_000n); // tcgpl TCGplayer fallback
+  assert.equal(by.get('s-sxmiss')!.confident, true);
+
+  assert.equal(by.get('s-tpldrop')!.rawE6, 50_000_000n); // Scrydex-only, kept alive
+  assert.equal(by.get('s-tpldrop')!.confident, true);
+  assert.equal(by.get('s-tpldrop')!.displayName, 'Charizard #6'); // display from the Scrydex card (tcgpl gone)
+
+  assert.equal(by.get('s-jp')!.rawE6, 10_050_000n); // 1500 JPY × 0.0067 = $10.05, converted via the injected FX
+
+  // clean up so the shared-db count assertions don't see these rows
+  await db.query(`DELETE FROM markets WHERE id IN ($1,$2,$3,$4)`, [m1, m2, m3, m4]);
+});
+
+test('fetchScrydexTrackedCards: a scrydex_card_id shared by two variant-markets is fetched once (no wasted credit)', async () => {
+  const a = await upsertCardMarket(db, { symbol: 'd-a', cardId: 'd-a', displayName: 'A', variant: 'holofoil', imageSmall: 'i', providerCardId: 'tpl-a', tcgplayerId: 11 });
+  const b = await upsertCardMarket(db, { symbol: 'd-b', cardId: 'd-b', displayName: 'B', variant: 'reverse', imageSmall: 'i', providerCardId: 'tpl-b', tcgplayerId: 12 });
+  await db.query(`UPDATE markets SET scrydex_card_id = 'shared-1' WHERE id IN ($1,$2)`, [a, b]);
+
+  let seen: string[] = [];
+  const sxStub = { getCardsByIds: async (_slug: string, ids: string[]) => { seen = ids; return []; } } as unknown as Parameters<typeof fetchScrydexTrackedCards>[1];
+  const tplStub = { getCardsByIds: async () => [] } as unknown as Parameters<typeof fetchScrydexTrackedCards>[2];
+  await fetchScrydexTrackedCards(db, sxStub, tplStub, async () => null);
+  assert.deepEqual(seen, ['shared-1'], 'the shared Scrydex id is requested once, not per market');
+
+  await db.query(`DELETE FROM markets WHERE id IN ($1,$2)`, [a, b]);
 });
