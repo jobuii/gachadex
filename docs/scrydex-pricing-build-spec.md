@@ -11,10 +11,42 @@ Replace the median-of-three (which lets tcgpl's eBay outvote the correct TCGplay
 confidence gate** that keeps every existing safety layer and adds a real cross-venue check.
 
 **In scope:** raw card pricing + confidence; the Scrydex adapter; provider orchestration (Scrydex primary,
-tcgpl secondary); fallbacks; tests; flag-gated rollout.
-**Out of scope (follow-on phases, noted §11):** graded via Scrydex ladder + pop reports; sealed products;
-webhooks (replace the cron); Vision. The mark engine, hybrid dedup, staleness breaker, manual pin, and
-engine gap controls are unchanged.
+tcgpl secondary); **webhooks as the primary update path** (see §1a, §8); fallbacks; tests; flag-gated rollout.
+**Out of scope (follow-on phases, §14):** graded via Scrydex ladder + pop reports; sealed products; Vision.
+The mark engine, hybrid dedup, staleness breaker, manual pin, and engine gap controls are unchanged.
+
+## 1a. QA + best-practice validation (2026-06-17)
+
+QA of this spec + a best-practice review (sources below) before build. **Verdict: the design is sound and
+defensible — not a naive spot oracle.** Why: TCGplayer "Market Price" is itself a ~7-day, outlier-excluded
+aggregate of *sold* listings, so our price is already smoothed/sales-based; layered with corroboration
+(eBay-sold, cross-feed, spread, spike) + engine gap controls it matches IOSCO's illiquid-benchmark guidance
+and single-source DeFi practice. It is **not** a Mango-style naive last-trade oracle.
+
+**Scrydex facts verified (vs the spec's assumptions):**
+- Rate limit **100 req/s, all plans**; credits: **$99 "Growth" = 50,000/month**, 1 credit per `/cards`
+  request (price-history 3, Vision 5), overage $0.002/cr; monitor via `GET /account/v1/usage`.
+- A list/search returns **up to 100 cards per 1 credit**; a card-by-id fetch is 1 credit each.
+- **Webhooks exist**, HMAC-SHA256 signed (`whsec_…`, `X-Scrydex-Signature`), retried 4×:
+  `<game>.expansions.prices.raw_updated` / `graded_updated` / `pop_reports.updated`.
+- Currency: Japanese cards' raw prices are **all JPY** (USD for US market; EUR "coming").
+- Scrydex `market` is documented as "average across various sources" but **matched tcgpl's TCGplayer
+  number exactly** on our sample — treat as TCGplayer-equivalent (single-venue framing holds); confirm.
+
+**Clear corrections folded into this spec (this revision):**
+1. **Fetch in BATCHES of 100, not by-id.** By-id ≈ 751 cr/pass × ~4 passes/day ≈ **90k/mo > the 50k plan**;
+   batch ≈ ~1k/mo. Still store `scrydex_card_id` for matching. (Revises §3a / decision #5.)
+2. **Webhooks are the primary update path** — push = near-zero credits, real-time, and structurally fixes
+   the freshness/dedup gap (§8). Batch-poll is the backfill/reconcile.
+3. **Confidence rubric reworked into an explicit decision tree** (§6) — the old point-sum couldn't make a
+   no-eBay/no-cross-feed card "tradeable" (maxed at 3 < the ≥4 bar), contradicting the lean-permissive
+   decision.
+
+**Decisions this round:** liquidity-tiered leverage/OI = **leave as-is** (decision #8); time-persistence
+guard on the mark = **PENDING operator decision** (decision #7, the one real gap the review found — see §13).
+
+**Sources:** Deribit Index (capped median), Binance mark (median-of-3, ±5% clamp), Uniswap v3 / Cube TWAP,
+IOSCO Principles for Financial Benchmarks, TCGplayer Market Price help, Mango Markets post-mortem.
 
 ## 2. Architecture / data flow
 
@@ -44,21 +76,20 @@ per tracked card:
 - **Parse:** prices live under `variants[]` → match the variant whose `marketplaces[].product_id ==
   tcgplayer_id`; in that variant's `prices[]`, take `type=raw`, condition NM→LP→MP, fields
   `market/low/mid/high`, `currency`, `trends.days_1.percent_change`.
-- **Rate/credits:** confirm the $99 plan's credit cost per request + daily/rate budget (docs: "API
-  Credits", "Rate Limits") and size the refresh to it. Retry on 429 with backoff (mirror the tcgpl
-  client).
+- **Rate/credits (verified §1a):** 100 req/s; $99 Growth = 50,000 credits/mo, 1 credit per `/cards`
+  request. **Batch-fetch (≤100 cards/request) → ~1k credits/mo**; by-id would be ~90k/mo (over budget).
+  Monitor via `/account/v1/usage`. Retry on 429 with backoff (mirror the tcgpl client).
 
-### 3a. The fetch-by-our-ids problem — DECIDED: store the Scrydex id (decision #5)
+### 3a. Fetch strategy — BATCH-fetch (decision #5, revised §1a)
 
-Scrydex search is by name/Lucene DSL, not by our `tcgplayer_id`, so we **persist the match**: a one-time
-backfill (like the chart-history seeder) searches each tracked card by name, matches the variant whose
-`product_id == tcgplayer_id`, and stores `markets.scrydex_card_id` **alongside** the existing
-`tcgplayer_id` / `provider_card_id` (store BOTH ids, so the card is matchable from either feed).
-Steady-state refresh then fetches Scrydex by the stored id; unmatched cards → NULL → fall back to tcgpl.
-- **Batch optimisation to verify (not blocking):** if the Scrydex DSL supports a tcgplayer/external-id
-  filter (e.g. `q=tcgplayer:<id>` or a batch ids param — DSL is known to support `language:`/`types:`/
-  `subtypes:`, confirm an id filter), use it to refresh many cards per request instead of one-by-one.
-  The stored-id model stands either way.
+Scrydex search is by name/Lucene DSL, not by our `tcgplayer_id`. We still **persist the match** — a
+one-time backfill stores `markets.scrydex_card_id` **alongside** `tcgplayer_id` / `provider_card_id`
+(store BOTH, so a card is matchable from either feed). But the steady-state refresh **fetches in batches
+of ≤100 cards per request** (1 credit each), NOT one-by-one (by-id ≈ 90k credits/mo, over the 50k plan).
+Batch via the list/search endpoint (per expansion, or a multi-id query if the DSL supports one — confirm
+an id/ids filter; the DSL is known to support `language:`/`types:`/`subtypes:`). Unmatched cards → NULL →
+tcgpl fallback. **With webhooks (§8) as the primary update path, this batch poll is the backfill/reconcile,
+not the hot loop.**
 
 ## 4. Provider orchestration
 
@@ -76,31 +107,36 @@ condition order) → operator manual pin → keep-last (and flag stale) / unpric
 price input.** Round to the $0.01 tick (`cents`). Currency: use USD entries; a JP-only printing is
 **converted to USD via FX (Frankfurter JPY→USD)** — decision #3.
 
-## 6. Confidence rubric (Option B) — `scoreConfidence`
+## 6. Confidence tier — `scoreConfidence` (decision tree)
 
-Each check contributes; **starting thresholds, tunable.** Inputs: `price` (chosen), `sxMarket`,
-`tcgpMarket`, `ebay1d`, Scrydex `low`/`high`, `trends.days_1`.
+Inputs: `price` (chosen), `sxMarket`, `tcgpMarket`, `ebay1d`, Scrydex `low`/`high`, `trends.days_1`. The
+checks (tunable thresholds):
+- **C1 cross-feed agree** — Scrydex & tcgpl TCGplayer both present and within ±15%. *(A freshness /
+  one-feed-glitch check — NOT an independent venue: both are TCGplayer.)*
+- **C2 eBay corroborates** — eBay `avg_1d` present and within **0.5×–1.5×** of price (decision #1).
+  *(The only genuinely independent venue.)*
+- **C3 spread tight** — Scrydex `(high − low) / market` ≤ 0.5.
+- **C4 no uncorroborated spike** — `|trends.days_1| ≤ 40%`, OR a corroborator moved with it.
+- **C5 fresh** — priced from a live fetch/webhook this cycle.
 
-| # | Check | Condition | Points |
-|---|---|---|---|
-| C1 | Cross-feed stability | both Scrydex & tcgpl TCGplayer present and within ±15% | +2 |
-| C2 | Cross-venue (eBay) | eBay `avg_1d` present and within **0.5×–1.5×** of price (decision #1) | +2 |
-| C3 | Spread tightness | Scrydex `(high−low)/market` ≤ 0.5 | +1 |
-| C4 | Trend sanity | `|days_1| ≤ 40%`, OR a corroborator moved with it | +1 |
-| C5 | Freshness | priced from a live fetch this pass | +1 |
+Evaluate in order, first match wins:
+1. No usable price → **HALTED**.
+2. **C4 fails** (uncorroborated day-1 spike) → **REDUCE_ONLY** (manipulation gate; overrides the rest).
+3. **C2 passes OR C1 passes** (a corroborator confirms the price) → **TRADEABLE**.
+4. A corroborator is present but **disagrees** (C1 or C2 available and failing) → **REDUCE_ONLY** (a
+   thin/exotic price nothing else confirms).
+5. **No corroborator available** (no eBay AND no cross-feed) → **LEAN PERMISSIVE** (decision #2):
+   **TRADEABLE if C3 (spread tight) + C5 (fresh)**, else REDUCE_ONLY.
 
-**Override:** an **uncorroborated day-1 spike** (`|days_1| > 40%` and neither eBay nor cross-feed moved
-similarly) → force **reduce_only** regardless of score (the manipulation gate).
+This replaces an additive point-sum that could not lift a no-eBay/no-cross-feed card to "tradeable" (it
+maxed at 3, below the ≥4 bar) — which contradicted decision #2. Keep a numeric score only as an optional
+tuning aid; the tree is authoritative. Worked cards: Pikachu (C2 passes → tradeable), Sheoldred (C2 fails
+but C1 passes → tradeable $1,247), Apprentice (C1 passes → tradeable $1), spike (C4 fails → reduce_only),
+no-eBay single feed (step 5 → tradeable iff spread tight).
 
-**Tier mapping:** score **≥ 4 → tradeable**; **2–3 → reduce_only**; **< 2 or no usable price → halted**.
-
-**No-corroborator default — LEAN PERMISSIVE** (decision #2). When only TCGplayer is present (~30% of
-cards have no eBay), C1/C2 are unavailable, so lean on C3 (spread tight) + C5: **tradeable if the spread
-is tight, else reduce_only.**
-
-Map to existing state: `tradeable ⇒ low_confidence=false`; `reduce_only/halted ⇒ low_confidence=true`
-(reuse `applyConfidence`, which already logs flips to `market_restriction_events`). The staleness breaker
-still owns the `reduce_only` status for feed-down separately.
+Map to existing state: `TRADEABLE ⇒ low_confidence=false`; `REDUCE_ONLY/HALTED ⇒ low_confidence=true`
+(reuse `applyConfidence`, which logs flips to `market_restriction_events`). The 36h staleness breaker
+still owns the feed-down `reduce_only` separately.
 
 ## 7. Fallbacks & coverage
 
@@ -111,18 +147,27 @@ still owns the `reduce_only` status for feed-down separately.
   Unlimited has price only at DM). Define the per-condition order once.
 - **JP-only:** convert to USD via FX (Frankfurter JPY→USD) — decision #3 (see §5).
 
-## 8. Freshness / dedup / staleness
+## 8. Freshness / dedup / staleness — WEBHOOKS primary (§1a)
 
-Scrydex exposes no per-price provider timestamp (only `trends`). So for the Scrydex path use the **ingest
-wall-clock** as `observedAt`; the **hybrid dedup** (record on new timestamp OR changed value) then writes
-a print whenever the Scrydex value moves — unchanged code. The **36h staleness breaker** keys on "did a
-print land" as today; a card Scrydex stops returning (and tcgpl can't cover) ages into reduce_only
-correctly. The chart 24h-change can additionally surface Scrydex `trends.days_1` directly.
+Scrydex exposes no per-price provider timestamp, so polling-with-wall-clock would record a flat print
+every pass (clutter) or need value-dedup (which broke the staleness breaker before). **Webhooks resolve
+this:** subscribe to `<game>.expansions.prices.raw_updated` — Scrydex POSTs (HMAC-SHA256 signed; verify
+the `X-Scrydex-Signature` against the `whsec_…` secret) exactly when a card's raw price changes. A print
+then lands precisely on a real move → no clutter, no staleness ambiguity, near-zero credits. The receiver
+must ack in < 2s (Scrydex times out at 10s, retries 4× with backoff).
+- **Dedup:** a webhook event IS the "value changed" signal → record the print. The hybrid dedup still
+  applies on the batch-poll path.
+- **Staleness breaker (36h):** keep it, but feed it a **"last successfully refreshed"** signal (last
+  webhook OR last batch-poll that returned the card), NOT just "last print" — a flat-but-live card must
+  not age into reduce_only.
+- **Backfill:** the batch poll (§3a) runs on a slow cadence to catch missed webhooks + new cards — the
+  reconcile, not the hot loop.
+- **24h change:** surface Scrydex `trends.days_1` directly.
 
 ## 9. Schema changes (`apps/api/src/db/schema.sql`, idempotent)
 
 - `ALTER TABLE markets ADD COLUMN IF NOT EXISTS scrydex_card_id TEXT;` — the matched Scrydex id (for
-  fetch-by-id). Index if we query by it.
+  matching + the batch poll). Index if we query by it.
 - Optional: persist the confidence components on the oracle print's `raw_payload` (audit) — no column
   needed.
 
@@ -135,7 +180,7 @@ and the rubric thresholds as live-tunable knobs (`liveKnob`) so confidence can b
 ## 11. Tests (`apps/api/src/services/providers/scrydex.test.ts` + pricing tests)
 
 - Adapter: parse the `variants[]→prices[]` shape; match by product_id; currency; NM→LP→MP fallback; 429
-  retry; the 3 game slugs.
+  retry; the 3 game slugs; **batch (≤100) list parse; webhook payload HMAC-SHA256 signature verification.**
 - `combinePrice`: price source order (Scrydex→tcgpl→pin); eBay never sets price.
 - `scoreConfidence`: the four worked cards — Pikachu (all agree → tradeable), Sheoldred (eBay low,
   TCGplayer self-consistent → tradeable at $1,247), Apprentice (eBay high → tradeable at $1), spike
@@ -145,7 +190,8 @@ and the rubric thresholds as live-tunable knobs (`liveKnob`) so confidence can b
 ## 12. Rollout & reversibility
 
 1. Land behind `PRICE_PRIMARY=tcgpricelookup` (no behaviour change) + run the one-time `scrydex_card_id`
-   match backfill; log match rate + unmatched list.
+   match backfill (log match rate + unmatched list) + register the `raw_updated` webhook (§8) and the
+   batch-poll backfill (§3a).
 2. Flip `PRICE_PRIMARY=scrydex` in a non-prod/observe window; diff new vs current marks across the
    universe (expect the §12 corrections — Sheoldred, Apprentice, etc.).
 3. Cut over prod; the hybrid dedup re-prices the universe on the first pass. Reversible by flipping the
@@ -159,15 +205,25 @@ and the rubric thresholds as live-tunable knobs (`liveKnob`) so confidence can b
 3. ✅ **JP-only printings: convert to USD via FX** (Frankfurter JPY→USD).
 4. ✅ **Coverage misses: tcgpl fallback** (price from tcgpl TCGplayer; manual pin / halt only when both
    feeds miss).
-5. ✅ **Fetch strategy: store the Scrydex id.** Persist `markets.scrydex_card_id` **alongside** the
-   existing `tcgplayer_id` / `provider_card_id` (store BOTH) so a card is matchable from either feed;
-   fetch Scrydex by the stored id each pass.
+5. ✅ **Fetch strategy: store `scrydex_card_id` for matching; fetch in BATCHES of ≤100 (NOT by-id).**
+   Stored alongside `tcgplayer_id` / `provider_card_id` (both ids). By-id ≈ 90k credits/mo > the 50k
+   plan; batch ≈ ~1k/mo. **Webhooks (§8) are the primary update path; the batch poll is backfill.**
+   (Revised 2026-06-17 after the credit check — §1a.)
 6. ✅ **Single-source raw (TCGplayer only): ACCEPTED.** Price stays TCGplayer-only; eBay / cross-feed /
    spread / trend are the confidence/manipulation guards and the engine gap controls (leverage, ADL,
    insurance, OI caps) are the backstop. Revisit only if Scrydex exposes a second venue (Cardmarket).
+7. ⏳ **Time-persistence guard on the MARK (for liquidations): PENDING operator decision.** The
+   best-practice review's one real gap — the gate protects *opens*, not the mark that *liquidates*
+   existing positions on a single bad print. Fix: require a large, uncorroborated jump to persist across
+   N updates before it can trigger liquidations (engine-side; uses the card's own recent marks, not a
+   cross-signal median — eBay is too unreliable for that). Not the dropped ±25% price clamp (this affects
+   only the liquidation trigger, not the displayed price). Operator may accept the risk in testing.
+8. ✅ **Liquidity-tiered leverage / OI caps: LEAVE AS-IS.** The review flagged that "20x everywhere" is
+   aggressive for thin cards; operator chose to keep the current flat risk config for now.
 
 ## 14. Follow-on phases (after raw pricing is live)
 
 - Graded via Scrydex PSA/BGS/CGC ladder + population reports (replace JustTCG).
 - Sealed products (opens the gated sealed index).
-- Webhooks (push price/pop updates → retire the 6h cron, fix staleness structurally).
+- (Webhooks moved to core — §8.) Revisit single-venue (decision #6) if Scrydex exposes Cardmarket / EUR.
+- If approved, the §13 #7 mark-persistence guard (engine-side liquidation protection).
