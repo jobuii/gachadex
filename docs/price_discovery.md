@@ -371,7 +371,7 @@ TCGplayer, e.g. Charizard δ tcgpl $599 vs Scrydex $4,000) and adds trends, seal
 | eBay as a price source | 🔄 eBay as a confidence cross-check only | fixes the outvote bug |
 | freshness / dedup | 🔄 **webhooks-primary** | Scrydex push (`raw_updated`) fixes staleness; batch-poll backfill — build spec §8 |
 | 36h staleness breaker | ✅ KEEP | fed by whether Scrydex still returns the card |
-| mark = index × (1+premium) (skew) | ✅ KEEP | unchanged |
+| mark = index × (1+premium) (skew) | 🔄 + **mark guard** | one guarded mark: uncorroborated >25% jump clamps to ≤25%/update (liquidation protection) — build spec §6a |
 | 24h change from marks | 🔄 can use Scrydex `trends.days_1` natively | the 24h we never had |
 | manual pin, engine gap controls | ✅ KEEP | unchanged |
 | graded via tcgpl/JustTCG | 🔄 Scrydex PSA/BGS/CGC ladder + pop reports | upgrade |

@@ -42,8 +42,8 @@ and single-source DeFi practice. It is **not** a Mango-style naive last-trade or
    no-eBay/no-cross-feed card "tradeable" (maxed at 3 < the ≥4 bar), contradicting the lean-permissive
    decision.
 
-**Decisions this round:** liquidity-tiered leverage/OI = **leave as-is** (decision #8); time-persistence
-guard on the mark = **PENDING operator decision** (decision #7, the one real gap the review found — see §13).
+**Decisions this round:** liquidity-tiered leverage/OI = **leave as-is** (decision #8); the mark guard =
+**single guarded mark, 25% corroboration-clamp** (decision #7, resolved — the review's one real gap; §6a).
 
 **Sources:** Deribit Index (capped median), Binance mark (median-of-3, ±5% clamp), Uniswap v3 / Cube TWAP,
 IOSCO Principles for Financial Benchmarks, TCGplayer Market Price help, Mango Markets post-mortem.
@@ -60,8 +60,8 @@ per tracked card:
                                        ├─ price  = Scrydex TCGplayer market (NM→LP→MP) ?? tcgpl TCGplayer ?? pin
                                        └─ tier   = trust score → tradeable | reduce_only | halted
                                               │
-                                              ▼  (unchanged downstream)
-                                     recordOracle (hybrid dedup) ─▶ recomputeMark ─▶ mark ─▶ chart/24h
+                                              ▼  (downstream)
+                                     recordOracle (hybrid dedup) ─▶ recomputeMark ─▶ MARK GUARD (§6a clamp) ─▶ mark ─▶ chart/24h
                                      applyConfidence (low_confidence ⇔ tier != tradeable)
 ```
 
@@ -138,6 +138,35 @@ Map to existing state: `TRADEABLE ⇒ low_confidence=false`; `REDUCE_ONLY/HALTED
 (reuse `applyConfidence`, which logs flips to `market_restriction_events`). The 36h staleness breaker
 still owns the feed-down `reduce_only` separately.
 
+## 6a. Mark guard — single guarded mark (decision #7, resolved 2026-06-17)
+
+Protects EXISTING positions from a wrongful liquidation on a single bad/uncorroborated print — the gap
+the best-practice review found (the §6 confidence gate governs OPENS, not the mark that *liquidates*).
+We use **ONE mark, no hidden second price**: displayed = traded = liquidation mark, guarded by a
+corroboration-clamp. Engine-side, in the mark recompute / liquidation path.
+
+Mechanism (per update):
+- Compute the candidate mark from the new index as usual (`index × (1 + premium)`).
+- **Corroborated move** — eBay `avg_1d` OR the cross-feed TCGplayer moved the same direction by a
+  comparable amount → **adopt the candidate immediately.**
+- **Uncorroborated jump > X = 25%** vs the last mark → the mark moves **at most 25% toward** the
+  candidate this update (clamped creep). A one-print glitch reverts next update (no wrongful
+  liquidation); a persistent real move fully adopts over ~3 updates. X is tunable — tighter than §6's
+  40% spike-gate because this protects money, not just opens; raise toward pool-protection, lower toward
+  user-protection.
+
+**Trade-off (accepted):** the single displayed price **creeps** on a genuine *uncorroborated* >25% move
+(a few updates to fully reflect it) rather than jumping; corroborated moves jump immediately. In
+exchange there is no hidden value — what's on the chart is exactly what liquidates you.
+
+**Visibility (REQUIRED — never a silent guard):**
+- Persist `markets.mark_clamped` (+ clamp %, `clamped_since`, candidate-vs-adopted) each update.
+- A **"price stabilizing"** badge on the market while clamped (admin + customer).
+- Admin **"mark guards" panel** (beside the restrictions/transitions panel): every currently-clamped
+  market — candidate vs adopted mark, gap %, duration, trigger.
+- **Clamp events log** (mirror `market_restriction_events`): engage/disengage history.
+- Liquidation records note the mark was guarded at the time.
+
 ## 7. Fallbacks & coverage
 
 - **Scrydex misses the card** (unmatched product_id / promo / serialized): price from tcgpl TCGplayer;
@@ -168,6 +197,9 @@ must ack in < 2s (Scrydex times out at 10s, retries 4× with backoff).
 
 - `ALTER TABLE markets ADD COLUMN IF NOT EXISTS scrydex_card_id TEXT;` — the matched Scrydex id (for
   matching + the batch poll). Index if we query by it.
+- **Mark guard (§6a):** `ALTER TABLE markets ADD COLUMN IF NOT EXISTS mark_clamped BOOLEAN NOT NULL
+  DEFAULT false` (+ `clamped_since TIMESTAMPTZ`); a `mark_clamp_events` table mirroring
+  `market_restriction_events` for the engage/disengage log.
 - Optional: persist the confidence components on the oracle print's `raw_payload` (audit) — no column
   needed.
 
@@ -186,6 +218,9 @@ and the rubric thresholds as live-tunable knobs (`liveKnob`) so confidence can b
   TCGplayer self-consistent → tradeable at $1,247), Apprentice (eBay high → tradeable at $1), spike
   (uncorroborated day-1 → reduce_only); plus no-eBay default and no-price→halt.
 - Fallback: Scrydex miss → tcgpl price; both miss → halt.
+- **Mark guard (§6a):** an uncorroborated >25% jump clamps to a ≤25% step + sets `mark_clamped` (and a
+  glitch reverts next update → no liquidation); a corroborated jump adopts immediately; clamp engage/
+  disengage is logged.
 
 ## 12. Rollout & reversibility
 
@@ -212,12 +247,12 @@ and the rubric thresholds as live-tunable knobs (`liveKnob`) so confidence can b
 6. ✅ **Single-source raw (TCGplayer only): ACCEPTED.** Price stays TCGplayer-only; eBay / cross-feed /
    spread / trend are the confidence/manipulation guards and the engine gap controls (leverage, ADL,
    insurance, OI caps) are the backstop. Revisit only if Scrydex exposes a second venue (Cardmarket).
-7. ⏳ **Time-persistence guard on the MARK (for liquidations): PENDING operator decision.** The
-   best-practice review's one real gap — the gate protects *opens*, not the mark that *liquidates*
-   existing positions on a single bad print. Fix: require a large, uncorroborated jump to persist across
-   N updates before it can trigger liquidations (engine-side; uses the card's own recent marks, not a
-   cross-signal median — eBay is too unreliable for that). Not the dropped ±25% price clamp (this affects
-   only the liquidation trigger, not the displayed price). Operator may accept the risk in testing.
+7. ✅ **Mark guard: SINGLE guarded mark, 25% corroboration-clamp** (resolved 2026-06-17; full design §6a).
+   The best-practice review's one real gap — the gate protects *opens*, not the mark that *liquidates*.
+   Decision: one visible mark (no hidden liquidation price); an uncorroborated >25% jump clamps to ≤25%
+   per update (corroborated moves jump immediately), with a "price stabilizing" badge + admin "mark
+   guards" panel + clamp events log. Engine-side. Trade-off accepted: the displayed price creeps on an
+   uncorroborated big move.
 8. ✅ **Liquidity-tiered leverage / OI caps: LEAVE AS-IS.** The review flagged that "20x everywhere" is
    aggressive for thin cards; operator chose to keep the current flat risk config for now.
 
