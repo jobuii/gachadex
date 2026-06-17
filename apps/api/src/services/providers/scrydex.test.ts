@@ -314,9 +314,18 @@ test('backfillScrydexIds matches by tcgplayer product_id and stores scrydex_card
         : { data: [], total_count: 0, page: 1, page_size: 100 },
   } as unknown as InstanceType<typeof ScrydexClient>;
 
-  const res = await backfillScrydexIds(db, { client: stub });
-  assert.equal(res.matched, 1);
-  assert.ok(res.unmatched.includes(miss), 'the unmatched market is reported');
+  // dry run (default): reports the proposed match + the miss, writes nothing
+  const dry = await backfillScrydexIds(db, { client: stub });
+  assert.equal(dry.matched, 1);
+  assert.equal(dry.applied, 0, 'dry run writes nothing');
+  assert.deepEqual(dry.matches[0], { id: hit, name: 'Charizard #4', scrydexCardId: 'base1-4', scrydexExpansionId: 'base1' });
+  assert.ok(dry.unmatched.some((u) => u.id === miss), 'the unmatched market is reported');
+  const stillNull = await db.query<{ c: string | null }>(`SELECT scrydex_card_id AS c FROM markets WHERE id=$1`, [hit]);
+  assert.equal(stillNull.rows[0].c, null, 'dry run left the column untouched');
+
+  // apply: persists scrydex_card_id + scrydex_expansion_id
+  const applied = await backfillScrydexIds(db, { client: stub, apply: true });
+  assert.equal(applied.applied, 1);
   const row = await db.query<{ c: string | null; e: string | null }>(`SELECT scrydex_card_id AS c, scrydex_expansion_id AS e FROM markets WHERE id=$1`, [hit]);
   assert.equal(row.rows[0].c, 'base1-4');
   assert.equal(row.rows[0].e, 'base1'); // sxFullCard sets expansion.id = 'base1'

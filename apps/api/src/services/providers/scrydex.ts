@@ -492,9 +492,11 @@ function searchNameOf(displayName: string): string {
 }
 
 export interface BackfillResult {
-  scanned: number; // markets considered this run
-  matched: number; // markets that gained a scrydex_card_id
-  unmatched: string[]; // market ids we could not match (left null -> tcgpl fallback)
+  total: number; // markets considered this run
+  matched: number; // markets we found a Scrydex card for
+  applied: number; // rows actually written (0 unless apply=true)
+  matches: { id: string; name: string; scrydexCardId: string; scrydexExpansionId: string | null }[]; // proposed/written
+  unmatched: { id: string; name: string }[]; // no match — stays null → tcgpl fallback
 }
 
 /** One-time (slow-cadence) reconcile: for each tracked market with a tcgplayer_id but no
@@ -502,13 +504,16 @@ export interface BackfillResult {
  *  our tcgplayer_id, then persist scrydex_card_id + scrydex_expansion_id. Scrydex has no by-product_id
  *  filter (verified live), so this is name-search + exact product_id match. Bounded by `limit` (markets)
  *  and `maxPages` (pages scanned per card) to cap credits; unmatched markets stay null and fall back to
- *  tcgpl. Idempotent — re-running only revisits still-unmatched markets. */
+ *  tcgpl. **Dry-run by default** (reports the proposed matches, writes nothing) — pass `apply: true` to
+ *  persist. Idempotent under apply — re-running only revisits still-unmatched markets. */
 export async function backfillScrydexIds(
   db: Db,
-  opts: { limit?: number; maxPages?: number; client?: ScrydexClient } = {},
+  opts: { limit?: number; maxPages?: number; client?: ScrydexClient; apply?: boolean; log?: (msg: string) => void } = {},
 ): Promise<BackfillResult> {
   const limit = opts.limit ?? 200;
   const maxPages = opts.maxPages ?? 5;
+  const apply = opts.apply ?? false;
+  const log = opts.log ?? (() => {});
   const sx = opts.client ?? getDefaultScrydexClient(db);
   const todo = await db.query<{ id: string; display_name: string; game: string; tcgplayer_id: number }>(
     `SELECT id, display_name, game, tcgplayer_id FROM markets
@@ -518,11 +523,11 @@ export async function backfillScrydexIds(
     [limit],
   );
 
-  const result: BackfillResult = { scanned: todo.rows.length, matched: 0, unmatched: [] };
+  const result: BackfillResult = { total: todo.rows.length, matched: 0, applied: 0, matches: [], unmatched: [] };
   for (const m of todo.rows) {
     const slug = scrydexSlug(m.game);
     if (!slug) {
-      result.unmatched.push(m.id);
+      result.unmatched.push({ id: m.id, name: m.display_name });
       continue;
     }
     const want = String(m.tcgplayer_id);
@@ -536,15 +541,16 @@ export async function backfillScrydexIds(
       if (res.data.length === 0 || page * SCRYDEX_BATCH_SIZE >= res.total_count) break; // no more pages
     }
     if (!found) {
-      result.unmatched.push(m.id);
+      result.unmatched.push({ id: m.id, name: m.display_name });
       continue;
     }
-    await db.query(`UPDATE markets SET scrydex_card_id = $1, scrydex_expansion_id = $2 WHERE id = $3`, [
-      found.id,
-      found.expansion?.id ?? null,
-      m.id,
-    ]);
+    const expId = found.expansion?.id ?? null;
     result.matched++;
+    result.matches.push({ id: m.id, name: m.display_name, scrydexCardId: found.id, scrydexExpansionId: expId });
+    log(`${apply ? 'write' : 'would write'}  ${m.display_name}  ->  ${found.id} (${expId ?? '?'})`);
+    if (!apply) continue;
+    await db.query(`UPDATE markets SET scrydex_card_id = $1, scrydex_expansion_id = $2 WHERE id = $3`, [found.id, expId, m.id]);
+    result.applied++;
   }
   return result;
 }
