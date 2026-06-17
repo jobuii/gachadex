@@ -43,3 +43,6 @@ mockups/
 
 # agent tool runtime state (do not commit)
 .omc/
+
+# read-only live-DB query helpers (prod access tooling; never commit — see memory: live-db-readonly-access)
+apps/api/.ro-*
