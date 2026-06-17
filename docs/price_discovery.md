@@ -369,7 +369,7 @@ TCGplayer, e.g. Charizard δ tcgpl $599 vs Scrydex $4,000) and adds trends, seal
 | price = median([eBay 1d, TCGP, eBay 7d]) | 🔄 price = TCGplayer market (Scrydex→tcgpl) | eBay is NO longer a price input |
 | confident = ≥2 signals within 2× | 🔄 trust SCORE → tradeable/reduce-only/halted | richer, fewer false flags |
 | eBay as a price source | 🔄 eBay as a confidence cross-check only | fixes the outvote bug |
-| hybrid dedup (timestamp OR value) | ✅ KEEP | Scrydex has no provider ts → wall-clock + value-dedup |
+| freshness / dedup | 🔄 **webhooks-primary** | Scrydex push (`raw_updated`) fixes staleness; batch-poll backfill — build spec §8 |
 | 36h staleness breaker | ✅ KEEP | fed by whether Scrydex still returns the card |
 | mark = index × (1+premium) (skew) | ✅ KEEP | unchanged |
 | 24h change from marks | 🔄 can use Scrydex `trends.days_1` natively | the 24h we never had |
