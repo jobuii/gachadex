@@ -480,21 +480,31 @@ export function verifyScrydexSignature(rawBody: string, header: string | undefin
 // Backfill (P4) — match each tracked market to its Scrydex card id, one time
 // ---------------------------------------------------------------------------
 
-/** Strip the trailing display suffix ("Charizard #4" -> "Charizard") and escape Lucene quote/backslash
- *  so a name like `Farfetch"d` can't break out of the quoted `name:"…"` term. The product_id match
- *  (below) disambiguates the printing, so an approximate name is fine. */
+// Lucene/Scrydex query specials. We can't safely embed these in a `name:"…"` term — Scrydex 400s on
+// some even inside quotes (e.g. `[Finalist]`) — so we strip them rather than escape.
+const LUCENE_SPECIALS = /[+\-!(){}[\]^"~*?:\\/]/g;
+
+/** The card name to search Scrydex by, derived from our display name. Strips the trailing "#number"
+ *  suffix and the parenthetical/bracketed PRINTING qualifiers ("(Serial Numbered)", "[Finalist]") that
+ *  aren't part of the Scrydex card name, then drops the remaining Lucene specials so the query can't be
+ *  malformed (a 400) or break out of the quoted term. The product_id match disambiguates the printing,
+ *  so an approximate name is fine; returns '' when nothing usable remains (caller skips → unmatched). */
 function searchNameOf(displayName: string): string {
   return displayName
-    .replace(/\s*#.*$/, '')
-    .trim()
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"');
+    .replace(/\s*#.*$/, '') // trailing "#87/160" display suffix
+    .replace(/\([^)]*\)/g, ' ') // "(Serial Numbered)", "(CS 2023 Top Players Pack)"
+    .replace(/\[[^\]]*\]/g, ' ') // "[Finalist]"
+    .replace(LUCENE_SPECIALS, ' ') // any remaining specials (embedded quotes, hyphens, …)
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 export interface BackfillResult {
   total: number; // markets considered this run
   matched: number; // markets we found a Scrydex card for
   applied: number; // rows actually written (0 unless apply=true)
+  failures: number; // per-card search ERRORS (a Scrydex 400/outage) — a subset of unmatched; lets a caller
+  // tell an outage (high failures) apart from genuine zero-coverage (high unmatched, zero failures)
   matches: { id: string; name: string; scrydexCardId: string; scrydexExpansionId: string | null }[]; // proposed/written
   unmatched: { id: string; name: string }[]; // no match — stays null → tcgpl fallback
 }
@@ -523,7 +533,7 @@ export async function backfillScrydexIds(
     [limit],
   );
 
-  const result: BackfillResult = { total: todo.rows.length, matched: 0, applied: 0, matches: [], unmatched: [] };
+  const result: BackfillResult = { total: todo.rows.length, matched: 0, applied: 0, failures: 0, matches: [], unmatched: [] };
   for (const m of todo.rows) {
     const slug = scrydexSlug(m.game);
     if (!slug) {
@@ -531,14 +541,24 @@ export async function backfillScrydexIds(
       continue;
     }
     const want = String(m.tcgplayer_id);
-    const q = `name:"${searchNameOf(m.display_name)}"`;
+    const name = searchNameOf(m.display_name);
     let found: ScrydexCard | undefined;
-    for (let page = 1; page <= maxPages && !found; page++) {
-      const res = await sx.searchCards(slug, { q, page, pageSize: SCRYDEX_BATCH_SIZE }, 'discovery');
-      found = res.data.find((c) =>
-        (c.variants ?? []).some((v) => (v.marketplaces ?? []).some((mk) => mk.product_id != null && String(mk.product_id) === want)),
-      );
-      if (res.data.length === 0 || page * SCRYDEX_BATCH_SIZE >= res.total_count) break; // no more pages
+    if (name) {
+      // Tolerate a per-card search failure (a Scrydex 400 on an odd name, a transient error): mark the
+      // card unmatched and keep going — one bad name must never abort the whole reconcile.
+      try {
+        const q = `name:"${name}"`;
+        for (let page = 1; page <= maxPages && !found; page++) {
+          const res = await sx.searchCards(slug, { q, page, pageSize: SCRYDEX_BATCH_SIZE }, 'discovery');
+          found = res.data.find((c) =>
+            (c.variants ?? []).some((v) => (v.marketplaces ?? []).some((mk) => mk.product_id != null && String(mk.product_id) === want)),
+          );
+          if (res.data.length === 0 || page * SCRYDEX_BATCH_SIZE >= res.total_count) break; // no more pages
+        }
+      } catch (e) {
+        result.failures++;
+        log(`search failed  ${m.display_name}: ${(e as Error).message}`);
+      }
     }
     if (!found) {
       result.unmatched.push({ id: m.id, name: m.display_name });
