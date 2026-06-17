@@ -285,3 +285,14 @@ if (catalogSearchEnabled && config.realFunds && !navGatesArmed) {
       'redeploy) to enable listing new markets.',
   );
 }
+
+// Scrydex webhooks are the PRIMARY price-update path (§8); without the secret the receiver deny-alls
+// every event (safe, but the feed falls back to the slower batch poll). Warn so a cutover doesn't run
+// blind on stale prices — not a throw, since polling still updates prices.
+if (config.oraclePrimary === 'scrydex' && !config.scrydexWebhookSecret) {
+  console.warn(
+    '[config] ORACLE_PRIMARY=scrydex but SCRYDEX_WEBHOOK_SECRET is unset: the price webhook will reject ' +
+      'every event and prices update only via the slower batch poll. Set the whsec_ secret to enable the ' +
+      'primary (webhook) update path.',
+  );
+}

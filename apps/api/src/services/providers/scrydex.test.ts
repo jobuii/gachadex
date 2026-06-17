@@ -1,5 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 
 process.env.PGLITE_DIR = 'memory://';
 process.env.DATABASE_URL = '';
@@ -8,7 +9,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 
 const { getDb, closeDb } = await import('../../db/client.ts');
 const { initDb } = await import('../../db/init.ts');
-const { ScrydexClient, extractRaw, scrydexSlug, scoreConfidence, combinePrice, fromScrydexCard, fetchScrydexTrackedCards, SCRYDEX_BATCH_SIZE } =
+const { ScrydexClient, extractRaw, scrydexSlug, scoreConfidence, combinePrice, fromScrydexCard, fetchScrydexTrackedCards, SCRYDEX_BATCH_SIZE, verifyScrydexSignature, backfillScrydexIds } =
   await import('./scrydex.ts');
 const { ProviderLimiter } = await import('./limiter.ts');
 const { upsertCardMarket } = await import('../markets.ts');
@@ -264,4 +265,61 @@ test('fetchScrydexTrackedCards: a scrydex_card_id shared by two variant-markets 
   assert.deepEqual(seen, ['shared-1'], 'the shared Scrydex id is requested once, not per market');
 
   await db.query(`DELETE FROM markets WHERE id IN ($1,$2)`, [a, b]);
+});
+
+test('fetchScrydexTrackedCards scopes to the given Scrydex expansions (the webhook re-price path)', async () => {
+  const a1 = await upsertCardMarket(db, { symbol: 'x-a1', cardId: 'x-a1', displayName: 'A1', variant: 'holofoil', imageSmall: 'i', providerCardId: 'tpl-a1', tcgplayerId: 901 });
+  const b1 = await upsertCardMarket(db, { symbol: 'x-b1', cardId: 'x-b1', displayName: 'B1', variant: 'holofoil', imageSmall: 'i', providerCardId: 'tpl-b1', tcgplayerId: 902 });
+  await db.query(
+    `UPDATE markets SET scrydex_card_id = CASE id WHEN $1 THEN 'sx-a1' WHEN $2 THEN 'sx-b1' END,
+            scrydex_expansion_id = CASE id WHEN $1 THEN 'expA' WHEN $2 THEN 'expB' END WHERE id IN ($1,$2)`,
+    [a1, b1],
+  );
+  const sxStub = { getCardsByIds: async (_slug: string, ids: string[]) => ids.map((id) => sxFullCard(id, id === 'sx-a1' ? 901 : 902, 100)) } as unknown as Parameters<typeof fetchScrydexTrackedCards>[1];
+  const tplStub = { getCardsByIds: async () => [] } as unknown as Parameters<typeof fetchScrydexTrackedCards>[2];
+
+  const cards = await fetchScrydexTrackedCards(db, sxStub, tplStub, async () => null, ['expA']);
+  assert.deepEqual(cards.map((c) => c.symbol), ['x-a1'], 'only the expA market is re-priced');
+
+  await db.query(`DELETE FROM markets WHERE id IN ($1,$2)`, [a1, b1]);
+});
+
+// --- verifyScrydexSignature (Stripe-style HMAC, spec §8) ---
+const SECRET = 'whsec_test_secret_value';
+const NOW = 1_700_000_000;
+const sign = (body: string, secret = SECRET, t = NOW) => `t=${t},v1=${createHmac('sha256', secret).update(`${t}.${body}`).digest('hex')}`;
+
+test('verifyScrydexSignature accepts a genuine signature and rejects tampering/replay/bad secret', () => {
+  const body = '{"id":"evt_1","name":"pokemon.expansions.prices.raw_updated","data":{"expansion_ids":["base1"]}}';
+  assert.equal(verifyScrydexSignature(body, sign(body), SECRET, NOW), true);
+  assert.equal(verifyScrydexSignature(body + ' ', sign(body), SECRET, NOW), false, 'tampered body (extra byte) → reject');
+  assert.equal(verifyScrydexSignature(body, sign(body, 'whsec_other'), SECRET, NOW), false, 'wrong secret → reject');
+  assert.equal(verifyScrydexSignature(body, sign(body, SECRET, NOW - 400), SECRET, NOW), false, 'timestamp outside the 5-min window → reject (replay)');
+  assert.equal(verifyScrydexSignature(body, sign(body, SECRET, NOW + 60), SECRET, NOW), true, 'a recent (clock-skew) timestamp is accepted');
+  assert.equal(verifyScrydexSignature(body, 't=abc,v1=zz', SECRET, NOW), false, 'non-numeric t → reject');
+  assert.equal(verifyScrydexSignature(body, undefined, SECRET, NOW), false, 'missing header → reject');
+  assert.equal(verifyScrydexSignature(body, sign(body), '', NOW), false, 'unconfigured secret → reject');
+  assert.equal(verifyScrydexSignature(body, `t=${NOW},v1=deadbeef`, SECRET, NOW), false, 'wrong-length digest → reject (no throw)');
+});
+
+// --- backfillScrydexIds (name search + product_id match → store scrydex ids) ---
+test('backfillScrydexIds matches by tcgplayer product_id and stores scrydex_card_id + expansion_id; misses stay null', async () => {
+  const hit = await upsertCardMarket(db, { symbol: 'bf-hit', cardId: 'bf-hit', displayName: 'Charizard #4', variant: 'holofoil', imageSmall: 'i', tcgplayerId: 42382 });
+  const miss = await upsertCardMarket(db, { symbol: 'bf-miss', cardId: 'bf-miss', displayName: 'Nothing #1', variant: 'holofoil', imageSmall: 'i', tcgplayerId: 555 });
+
+  const stub = {
+    searchCards: async (_slug: string, params: { q?: string }) =>
+      (params.q ?? '').includes('Charizard')
+        ? { data: [sxFullCard('base1-4', 42382, 100)], total_count: 1, page: 1, page_size: 100 }
+        : { data: [], total_count: 0, page: 1, page_size: 100 },
+  } as unknown as InstanceType<typeof ScrydexClient>;
+
+  const res = await backfillScrydexIds(db, { client: stub });
+  assert.equal(res.matched, 1);
+  assert.ok(res.unmatched.includes(miss), 'the unmatched market is reported');
+  const row = await db.query<{ c: string | null; e: string | null }>(`SELECT scrydex_card_id AS c, scrydex_expansion_id AS e FROM markets WHERE id=$1`, [hit]);
+  assert.equal(row.rows[0].c, 'base1-4');
+  assert.equal(row.rows[0].e, 'base1'); // sxFullCard sets expansion.id = 'base1'
+
+  await db.query(`DELETE FROM markets WHERE id IN ($1,$2)`, [hit, miss]);
 });

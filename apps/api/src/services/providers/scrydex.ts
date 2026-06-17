@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { toE6 } from '@pokex/pricing';
 import { config } from '../../config.ts';
 import type { Db } from '../../db/client.ts';
@@ -356,12 +357,15 @@ export async function fetchScrydexTrackedCards(
   sxClient?: ScrydexClient,
   tplClient?: ReturnType<typeof getDefaultClient>,
   fx: () => Promise<number | null> = getJpyUsd, // injectable so tests stay hermetic (no live FX call)
+  expansionIds?: string[], // when set, scope to markets in these Scrydex expansions (the webhook re-price path, §8)
 ): Promise<OracleCard[]> {
   const sx = sxClient ?? getDefaultScrydexClient(db);
   const tpl = tplClient ?? getDefaultClient(db);
   const tracked = await db.query<ScrydexTracked>(
     `SELECT scrydex_card_id, provider_card_id, symbol, card_id, game, tcgplayer_id, featured FROM markets
-      WHERE kind = 'card' AND scrydex_card_id IS NOT NULL AND status != 'delisted'`,
+      WHERE kind = 'card' AND scrydex_card_id IS NOT NULL AND status != 'delisted'
+      ${expansionIds ? 'AND scrydex_expansion_id = ANY($1)' : ''}`,
+    expansionIds ? [expansionIds] : [],
   );
   if (tracked.rows.length === 0) return [];
 
@@ -427,4 +431,120 @@ export async function fetchScrydexTrackedCards(
       },
     ];
   });
+}
+
+// ---------------------------------------------------------------------------
+// Webhooks (P4) — prices.raw_updated is the primary update path (spec §8)
+// ---------------------------------------------------------------------------
+
+/** A Scrydex price webhook event: `{ id, name, data: { expansion_ids } }`. The payload names the
+ *  EXPANSIONS that re-priced (not the cards) — we map them to our tracked markets and re-price. */
+export interface ScrydexWebhookEvent {
+  id?: string;
+  name?: string; // '<game>.expansions.prices.raw_updated' | '*.graded_updated' | '*.pop_reports.updated'
+  data?: { expansion_ids?: string[] };
+}
+
+const WEBHOOK_REPLAY_WINDOW_SEC = 5 * 60; // §8: reject events whose timestamp is outside a 5-minute window
+
+/** Verify a Scrydex webhook signature (Stripe-style; confirmed live against scrydex.com/docs 2026-06-17).
+ *  The `X-Scrydex-Signature` header is `t=<unix>,v1=<hmac-hex>`; the signed string is `${t}.${rawBody}`
+ *  HMAC-SHA256'd with the `whsec_` secret, hex. Returns true only when v1 matches (constant-time) AND t
+ *  is within the replay window. `rawBody` MUST be the exact received bytes — a re-stringified JSON
+ *  (different spacing/key order) will not match (Scrydex sends minified UTF-8). */
+export function verifyScrydexSignature(rawBody: string, header: string | undefined, secret: string, nowSec?: number): boolean {
+  if (!secret || !header) return false;
+  let t: string | undefined;
+  let v1: string | undefined;
+  for (const part of header.split(',')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    const k = part.slice(0, eq).trim();
+    const val = part.slice(eq + 1).trim();
+    if (k === 't') t = val;
+    else if (k === 'v1') v1 = val;
+  }
+  if (!t || !v1) return false;
+  const ts = Number(t);
+  if (!Number.isFinite(ts)) return false;
+  const now = nowSec ?? Math.floor(Date.now() / 1000);
+  if (Math.abs(now - ts) > WEBHOOK_REPLAY_WINDOW_SEC) return false; // stale / replay
+  // Decode v1 from hex and compare the raw 32-byte digests: a malformed v1 (odd length / non-hex)
+  // decodes to the wrong length and is rejected by the length guard before the constant-time compare.
+  const got = Buffer.from(v1, 'hex');
+  const expected = createHmac('sha256', secret).update(`${t}.${rawBody}`).digest();
+  return got.length === expected.length && timingSafeEqual(got, expected); // timingSafeEqual throws on length mismatch
+}
+
+// ---------------------------------------------------------------------------
+// Backfill (P4) — match each tracked market to its Scrydex card id, one time
+// ---------------------------------------------------------------------------
+
+/** Strip the trailing display suffix ("Charizard #4" -> "Charizard") and escape Lucene quote/backslash
+ *  so a name like `Farfetch"d` can't break out of the quoted `name:"…"` term. The product_id match
+ *  (below) disambiguates the printing, so an approximate name is fine. */
+function searchNameOf(displayName: string): string {
+  return displayName
+    .replace(/\s*#.*$/, '')
+    .trim()
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
+}
+
+export interface BackfillResult {
+  scanned: number; // markets considered this run
+  matched: number; // markets that gained a scrydex_card_id
+  unmatched: string[]; // market ids we could not match (left null -> tcgpl fallback)
+}
+
+/** One-time (slow-cadence) reconcile: for each tracked market with a tcgplayer_id but no
+ *  scrydex_card_id, search Scrydex by name and match the card+variant whose marketplace product_id ==
+ *  our tcgplayer_id, then persist scrydex_card_id + scrydex_expansion_id. Scrydex has no by-product_id
+ *  filter (verified live), so this is name-search + exact product_id match. Bounded by `limit` (markets)
+ *  and `maxPages` (pages scanned per card) to cap credits; unmatched markets stay null and fall back to
+ *  tcgpl. Idempotent — re-running only revisits still-unmatched markets. */
+export async function backfillScrydexIds(
+  db: Db,
+  opts: { limit?: number; maxPages?: number; client?: ScrydexClient } = {},
+): Promise<BackfillResult> {
+  const limit = opts.limit ?? 200;
+  const maxPages = opts.maxPages ?? 5;
+  const sx = opts.client ?? getDefaultScrydexClient(db);
+  const todo = await db.query<{ id: string; display_name: string; game: string; tcgplayer_id: number }>(
+    `SELECT id, display_name, game, tcgplayer_id FROM markets
+      WHERE kind = 'card' AND tcgplayer_id IS NOT NULL AND scrydex_card_id IS NULL AND status != 'delisted'
+      ORDER BY featured DESC, display_name
+      LIMIT $1`,
+    [limit],
+  );
+
+  const result: BackfillResult = { scanned: todo.rows.length, matched: 0, unmatched: [] };
+  for (const m of todo.rows) {
+    const slug = scrydexSlug(m.game);
+    if (!slug) {
+      result.unmatched.push(m.id);
+      continue;
+    }
+    const want = String(m.tcgplayer_id);
+    const q = `name:"${searchNameOf(m.display_name)}"`;
+    let found: ScrydexCard | undefined;
+    for (let page = 1; page <= maxPages && !found; page++) {
+      const res = await sx.searchCards(slug, { q, page, pageSize: SCRYDEX_BATCH_SIZE }, 'discovery');
+      found = res.data.find((c) =>
+        (c.variants ?? []).some((v) => (v.marketplaces ?? []).some((mk) => mk.product_id != null && String(mk.product_id) === want)),
+      );
+      if (res.data.length === 0 || page * SCRYDEX_BATCH_SIZE >= res.total_count) break; // no more pages
+    }
+    if (!found) {
+      result.unmatched.push(m.id);
+      continue;
+    }
+    await db.query(`UPDATE markets SET scrydex_card_id = $1, scrydex_expansion_id = $2 WHERE id = $3`, [
+      found.id,
+      found.expansion?.id ?? null,
+      m.id,
+    ]);
+    result.matched++;
+  }
+  return result;
 }

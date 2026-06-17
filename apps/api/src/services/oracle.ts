@@ -184,6 +184,28 @@ export async function applyConfidence(q: Queryer, marketId: string, confident: b
   }
 }
 
+/** Ingest a SUBSET of cards (the webhook re-price path, §8): upsert + print + mark + confidence per
+ *  card, reusing ingestCard (so the mark guard runs). Deliberately skips the index rebuild — a webhook
+ *  re-prices the named cards; the index baskets are rebuilt by the next full `ingest` poll, never from a
+ *  partial set (that would mutate a basket from a handful of constituents). Returns the count priced. */
+export async function ingestScopedCards(db: Db, cards: OracleCard[]): Promise<number> {
+  const priced = cards.filter((c) => c.rawE6 > 0n);
+  if (priced.length === 0) return 0;
+  const pinnedRows = await db.query<{ id: string }>(`SELECT id FROM markets WHERE price_pinned`);
+  const pinned = new Set(pinnedRows.rows.map((r) => r.id));
+  const at = new Date();
+  for (const c of priced) await ingestCard(db, c, at, pinned);
+  return priced.length;
+}
+
+/** Re-price every tracked market in the given Scrydex expansions (the prices.raw_updated webhook, §8):
+ *  scoped Scrydex+tcgpl fetch joined by tcgplayer_id, then ingestScopedCards. Returns cards re-priced. */
+export async function repriceExpansions(db: Db, expansionIds: string[]): Promise<number> {
+  if (expansionIds.length === 0) return 0;
+  const cards = await fetchScrydexTrackedCards(db, undefined, undefined, undefined, expansionIds);
+  return ingestScopedCards(db, cards);
+}
+
 export async function ingest(
   db: Db,
   fetcher?: CardFetcher,

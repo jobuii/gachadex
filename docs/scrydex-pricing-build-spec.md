@@ -239,6 +239,20 @@ must ack in < 2s (Scrydex times out at 10s, retries 4× with backoff).
   reconcile, not the hot loop.
 - **24h change:** surface Scrydex `trends.days_1` directly.
 
+**Implementation (build, confirmed live 2026-06-17):** the payload is `{ id, name, data: { expansion_ids } }`
+— it names the EXPANSIONS that re-priced, NOT the cards. So `markets.scrydex_expansion_id` (set by the
+backfill) maps an event to our tracked markets; `POST /webhooks/scrydex` verifies the **Stripe-style**
+`X-Scrydex-Signature: t=…,v1=…` (HMAC-SHA256 of `${t}.${rawBody}`, hex, 5-min replay window, constant-time
+compare — over the RAW body via an encapsulated content-type parser), acks 200 immediately, and
+re-prices the affected expansions' markets in the background (`repriceExpansions` → scoped
+`fetchScrydexTrackedCards` → `ingestScopedCards`, which runs per-card ingest incl. the mark guard but
+SKIPS the index rebuild — baskets rebuild on the next full poll, never from a partial set). **Backfill:**
+Scrydex has no by-product_id filter (verified), so `backfillScrydexIds` searches by name and matches the
+variant whose `marketplaces[].product_id == tcgplayer_id`, storing `scrydex_card_id` +
+`scrydex_expansion_id`; unmatched markets stay null → tcgpl fallback. The 36h staleness breaker
+(`haltStaleMarkets`, keyed on `oracle_prices.ingested_at`) is already fed by the batch poll's flat prints
+as long as the poll runs within the window — no extra column needed.
+
 ## 9. Schema changes (`apps/api/src/db/schema.sql`, idempotent)
 
 - `ALTER TABLE markets ADD COLUMN IF NOT EXISTS scrydex_card_id TEXT;` — the matched Scrydex id (for

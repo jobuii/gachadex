@@ -253,6 +253,7 @@ CREATE TABLE IF NOT EXISTS markets (
   tcgplayer_id       BIGINT,
   provider_card_id   TEXT,
   scrydex_card_id    TEXT,                            -- Scrydex card id (ORACLE_PRIMARY=scrydex); matched once, then the batch poll fetches by it
+  scrydex_expansion_id TEXT,                          -- Scrydex expansion id of the matched card; the prices.raw_updated webhook (§8) carries expansion_ids, so this maps an event to our tracked markets
   -- Featured = index-constituent eligible (the discovery top-250 per game). The TRACKED universe
   -- (everything priced) and the INDEX basket (featured only) are deliberately distinct sets, so
   -- on-demand long-tail markets (P6 search-and-bet) can never mutate the Top-100/250 baskets.
@@ -264,6 +265,10 @@ CREATE INDEX IF NOT EXISTS idx_markets_kind ON markets(kind, status);
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS image_large TEXT;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS game TEXT NOT NULL DEFAULT 'pokemon';
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS scrydex_card_id TEXT;
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS scrydex_expansion_id TEXT;
+-- The prices.raw_updated webhook (§8) carries expansion_ids; this index makes "which tracked markets are
+-- in these expansions" a fast lookup on the hot webhook path.
+CREATE INDEX IF NOT EXISTS idx_markets_scrydex_expansion ON markets(scrydex_expansion_id) WHERE scrydex_expansion_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_markets_game ON markets(game, kind, status);
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS set_logo TEXT;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS metadata JSONB;
