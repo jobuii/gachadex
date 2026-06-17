@@ -48,17 +48,17 @@ per tracked card:
   Credits", "Rate Limits") and size the refresh to it. Retry on 429 with backoff (mirror the tcgpl
   client).
 
-### 3a. The fetch-by-our-ids problem (key decision)
+### 3a. The fetch-by-our-ids problem — DECIDED: store the Scrydex id (decision #5)
 
-Scrydex search is by name/Lucene DSL, not by our `tcgplayer_id`. Two ways to fetch prices for our ~751
-specific cards efficiently:
-- **Recommended: one-time match → store `scrydex_card_id`.** A backfill (like the chart-history seeder)
-  searches each tracked card by name, matches the variant `product_id == tcgplayer_id`, and stores
-  `markets.scrydex_card_id`. Steady-state refresh then fetches by that id. Unmatched cards → NULL → fall
-  back to tcgpl.
-- **Verify first:** does the Scrydex DSL support a tcgplayer/external-id filter (e.g. `q=tcgplayer:<id>`
-  or a batch ids param)? If yes, skip the stored-id step and batch-fetch by our ids. (DSL is known to
-  support `language:`, `types:`, `subtypes:` — confirm an id filter.)
+Scrydex search is by name/Lucene DSL, not by our `tcgplayer_id`, so we **persist the match**: a one-time
+backfill (like the chart-history seeder) searches each tracked card by name, matches the variant whose
+`product_id == tcgplayer_id`, and stores `markets.scrydex_card_id` **alongside** the existing
+`tcgplayer_id` / `provider_card_id` (store BOTH ids, so the card is matchable from either feed).
+Steady-state refresh then fetches Scrydex by the stored id; unmatched cards → NULL → fall back to tcgpl.
+- **Batch optimisation to verify (not blocking):** if the Scrydex DSL supports a tcgplayer/external-id
+  filter (e.g. `q=tcgplayer:<id>` or a batch ids param — DSL is known to support `language:`/`types:`/
+  `subtypes:`, confirm an id filter), use it to refresh many cards per request instead of one-by-one.
+  The stored-id model stands either way.
 
 ## 4. Provider orchestration
 
@@ -73,8 +73,8 @@ specific cards efficiently:
 
 `priceUsd` = first non-null of: Scrydex TCGplayer `market` (NM→LP→MP) → tcgpl TCGplayer `market` (same
 condition order) → operator manual pin → keep-last (and flag stale) / unpriced→halt. **eBay is never a
-price input.** Round to the $0.01 tick (`cents`). Currency: use USD entries; a JP-only printing →
-FX (Frankfurter JPY→USD) if enabled, else flag low-confidence and prefer tcgpl USD.
+price input.** Round to the $0.01 tick (`cents`). Currency: use USD entries; a JP-only printing is
+**converted to USD via FX (Frankfurter JPY→USD)** — decision #3.
 
 ## 6. Confidence rubric (Option B) — `scoreConfidence`
 
@@ -84,7 +84,7 @@ Each check contributes; **starting thresholds, tunable.** Inputs: `price` (chose
 | # | Check | Condition | Points |
 |---|---|---|---|
 | C1 | Cross-feed stability | both Scrydex & tcgpl TCGplayer present and within ±15% | +2 |
-| C2 | Cross-venue (eBay) | eBay `avg_1d` present and within **0.5×–1.3×** of price | +2 |
+| C2 | Cross-venue (eBay) | eBay `avg_1d` present and within **0.5×–1.5×** of price (decision #1) | +2 |
 | C3 | Spread tightness | Scrydex `(high−low)/market` ≤ 0.5 | +1 |
 | C4 | Trend sanity | `|days_1| ≤ 40%`, OR a corroborator moved with it | +1 |
 | C5 | Freshness | priced from a live fetch this pass | +1 |
@@ -94,9 +94,9 @@ similarly) → force **reduce_only** regardless of score (the manipulation gate)
 
 **Tier mapping:** score **≥ 4 → tradeable**; **2–3 → reduce_only**; **< 2 or no usable price → halted**.
 
-**No-corroborator default** (only TCGplayer present — ~30% of cards have no eBay): C1/C2 unavailable, so
-lean on C3 (spread tight) + C5 → tradeable if the spread is tight, else reduce_only. *(Decision: confirm
-this lean-permissive default vs lean-conservative.)*
+**No-corroborator default — LEAN PERMISSIVE** (decision #2). When only TCGplayer is present (~30% of
+cards have no eBay), C1/C2 are unavailable, so lean on C3 (spread tight) + C5: **tradeable if the spread
+is tight, else reduce_only.**
 
 Map to existing state: `tradeable ⇒ low_confidence=false`; `reduce_only/halted ⇒ low_confidence=true`
 (reuse `applyConfidence`, which already logs flips to `market_restriction_events`). The staleness breaker
@@ -109,7 +109,7 @@ still owns the `reduce_only` status for feed-down separately.
 - **Both miss / no price:** keep-last + halt (the Mew★δ case), or manual pin.
 - **Vintage (no NM):** condition fallback NM→LP→MP (Scrydex prices lower grades; e.g. Black Lotus
   Unlimited has price only at DM). Define the per-condition order once.
-- **JP-only:** FX or flag (see §5).
+- **JP-only:** convert to USD via FX (Frankfurter JPY→USD) — decision #3 (see §5).
 
 ## 8. Freshness / dedup / staleness
 
@@ -151,15 +151,20 @@ and the rubric thresholds as live-tunable knobs (`liveKnob`) so confidence can b
 3. Cut over prod; the hybrid dedup re-prices the universe on the first pass. Reversible by flipping the
    flag back to `tcgpricelookup`.
 
-## 13. Open decisions (carry from the evaluation)
+## 13. Decisions (resolved 2026-06-17)
 
-1. Corroboration band width (C2 `0.5×–1.3×`) — tighter = safer, more reduce_only.
-2. No-corroborator default (§6) — lean permissive (spread-tight ⇒ tradeable) vs conservative.
-3. JP-only printings — FX to USD vs flag + prefer tcgpl.
-4. Coverage misses — tcgpl fallback (default) vs manual pin vs halt.
-5. Fetch strategy (§3a) — stored `scrydex_card_id` vs a DSL id-filter batch (verify the API first).
-6. Single-source raw (TCGplayer only): accept, with C1/C2/C4 as the manipulation guard + engine gap
-   controls; revisit if a second venue (Cardmarket) becomes available from Scrydex.
+1. ✅ **Corroboration band (C2): `0.5×–1.5×`.** eBay within 0.5–1.5× of the price corroborates.
+2. ✅ **No-corroborator default: LEAN PERMISSIVE.** Only-TCGplayer cards are tradeable when the spread
+   (C3) is tight + fresh (C5); reduce_only otherwise.
+3. ✅ **JP-only printings: convert to USD via FX** (Frankfurter JPY→USD).
+4. ✅ **Coverage misses: tcgpl fallback** (price from tcgpl TCGplayer; manual pin / halt only when both
+   feeds miss).
+5. ✅ **Fetch strategy: store the Scrydex id.** Persist `markets.scrydex_card_id` **alongside** the
+   existing `tcgplayer_id` / `provider_card_id` (store BOTH) so a card is matchable from either feed;
+   fetch Scrydex by the stored id each pass.
+6. ✅ **Single-source raw (TCGplayer only): ACCEPTED.** Price stays TCGplayer-only; eBay / cross-feed /
+   spread / trend are the confidence/manipulation guards and the engine gap controls (leverage, ADL,
+   insurance, OI caps) are the backstop. Revisit only if Scrydex exposes a second venue (Cardmarket).
 
 ## 14. Follow-on phases (after raw pricing is live)
 
