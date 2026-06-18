@@ -15,20 +15,58 @@ export const SIDES = ['long', 'short'];
 export const ORDER_KINDS = ['market', 'reduce_only'];
 export const MARKET_STATUS = ['active', 'reduce_only', 'halted', 'delisted'];
 
-export const INDEX_SLUGS = ['top-250', 'top-100', 'graded', 'sealed'];
-
-/** Per-game index catalogue. `tradeable:false` = data source pending (shown but gated). Pokémon is
- * computed live from the ingest; One Piece + MTG are listed but gated until scrydex card data lands. */
-export const INDEX_CATALOG = [
-  { game: 'pokemon', slug: 'top-100', name: 'Top 100', tracks: 'Top 100 cards by market price', tradeable: true, topN: 100 },
-  { game: 'pokemon', slug: 'top-250', name: 'Top 250', tracks: 'Top 250 cards by market price', tradeable: true, topN: 250 },
-  { game: 'pokemon', slug: 'graded', name: 'Graded (PSA 10)', tracks: 'PSA 10 graded cards', tradeable: false, topN: null },
-  { game: 'pokemon', slug: 'sealed', name: 'Sealed', tracks: 'Sealed product', tradeable: false, topN: null },
-  { game: 'onepiece', slug: 'top-100', name: 'Top 100', tracks: 'Top 100 cards by market price', tradeable: false, topN: 100 },
-  { game: 'onepiece', slug: 'top-250', name: 'Top 250', tracks: 'Top 250 cards by market price', tradeable: false, topN: 250 },
-  { game: 'mtg', slug: 'top-100', name: 'Top 100', tracks: 'Top 100 cards by market price', tradeable: false, topN: 100 },
-  { game: 'mtg', slug: 'top-250', name: 'Top 250', tracks: 'Top 250 cards by market price', tradeable: false, topN: 250 },
+// --- index catalogue --------------------------------------------------------
+// Three index methodologies (series) over the SAME per-game baskets (docs/index-series-spec.md):
+//   GJ      — price-weighted (Dow Jones). The original indices, renamed; the slug stays bare so the
+//             market symbol — and thus its history/divisor/open positions — survives the rename.
+//   G&P     — equal-weight (S&P 500 Equal Weight): each card contributes its % change equally.
+//   Pokedaq — capped price-weight (Nasdaq-100): price-weighted, every card capped at 5%.
+// Constituent price = the canonical per-card price (same value the card market uses); eBay is never a
+// price input. `weighting` selects the math in the oracle; `tradeable:false` is listed-but-gated until
+// the basket's data flows (the ingest flips it live once constituents exist; Sealed has no feed).
+const INDEX_TIERS = [
+  { tier: 'top-100', topN: 100, top: 'Top 100', num: '100', tracks: 'Top 100 cards by market price' },
+  { tier: 'top-250', topN: 250, top: 'Top 250', num: '250', tracks: 'Top 250 cards by market price' },
+  { tier: 'graded', topN: null, top: 'Graded (PSA 10)', num: 'Graded (PSA 10)', tracks: 'PSA 10 graded cards', pokemonOnly: true },
+  { tier: 'sealed', topN: null, top: 'Sealed', num: 'Sealed', tracks: 'Sealed product', pokemonOnly: true, gjOnly: true, gated: true },
 ];
+/** Pokedaq per-card weight cap (Nasdaq-100 style), in basis points — the single source of truth. */
+export const DEFAULT_CAP_BPS = 500; // 5%
+const INDEX_SERIES = [
+  { series: 'gj', label: 'GJ', weighting: 'price', slugPrefix: '', useNum: false },
+  { series: 'gp', label: 'G&P', weighting: 'equal', slugPrefix: 'gp-', useNum: false },
+  { series: 'pdq', label: 'Pokedaq', weighting: 'capped', capBps: DEFAULT_CAP_BPS, slugPrefix: 'pdq-', useNum: true },
+];
+
+export const INDEX_SERIES_LABELS = { gj: 'GJ', gp: 'G&P', pdq: 'Pokedaq' };
+
+/** Which series an index slug belongs to (the web groups by this; the API returns only `indexSlug`). */
+export function indexSeries(slug) {
+  if (typeof slug === 'string' && slug.startsWith('gp-')) return 'gp';
+  if (typeof slug === 'string' && slug.startsWith('pdq-')) return 'pdq';
+  return 'gj';
+}
+
+export const INDEX_CATALOG = GAMES.flatMap((game) =>
+  INDEX_SERIES.flatMap((s) =>
+    INDEX_TIERS.filter((t) => !(t.pokemonOnly && game !== 'pokemon') && !(t.gjOnly && s.series !== 'gj')).map((t) => ({
+      game,
+      series: s.series,
+      tier: t.tier,
+      slug: s.slugPrefix + t.tier, // GJ: bare tier (preserves the existing symbol); others: prefixed
+      name: `${s.label} ${s.useNum ? t.num : t.top}`,
+      tracks: t.tracks,
+      weighting: s.weighting,
+      ...(s.capBps ? { capBps: s.capBps } : {}),
+      // gated by default unless it's a Pokémon top-N basket (live today); the rest light up via the ingest.
+      tradeable: !t.gated && game === 'pokemon' && (t.tier === 'top-100' || t.tier === 'top-250'),
+      topN: t.topN,
+    })),
+  ),
+);
+
+/** Valid index slugs (drives MarketSchema.indexSlug) — derived from the catalogue. */
+export const INDEX_SLUGS = [...new Set(INDEX_CATALOG.map((i) => i.slug))];
 
 export const MAX_LEVERAGE = 20;
 

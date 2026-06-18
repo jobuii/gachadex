@@ -1382,6 +1382,9 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 
 /* Sidebar whole-catalog search section (search-and-bet) */
 .catalog-divider { display: flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.6rem 0.3rem; color: var(--gold); font-size: 0.45rem; letter-spacing: 0.05em; border-top: 1px solid var(--border); margin-top: 0.4rem; }
+/* Index series group label (GJ / G&P / Pokedaq) in the indices sidebar. */
+.series-header { padding: 0.45rem 0.6rem 0.2rem; color: var(--text-muted); font-size: 0.45rem; letter-spacing: 0.08em; text-transform: uppercase; border-top: 1px solid var(--border); margin-top: 0.3rem; }
+.series-header:first-child { border-top: none; margin-top: 0; }
 .catalog-item.market-item-static { cursor: default; }
 .catalog-item .market-item-right { align-items: flex-end; }
 .catalog-state { font-size: 0.4rem; color: var(--text-muted); }
