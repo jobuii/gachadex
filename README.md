@@ -133,6 +133,15 @@ A restricted market is **close-only** until its signals recover — or until an 
 price, which is treated as trusted and clears the gate. Indices aggregate many cards, so they're robust
 by construction and never gated.
 
+> **In flight — pricing correctness.** On the current `tcgpricelookup` feed, the eBay 1-day / 7-day
+> averages can come back low-quality (sometimes identical, off-card), and because the median runs
+> **2 eBay : 1 TCGplayer** those two reads can outvote the one good TCGplayer price — so a few live
+> markets are visibly mispriced and many thin cards sit reduce-only. Two queued fixes: a free change to
+> stop blending eBay into the *price* median (keep eBay only as a confidence cross-check), and the
+> **Scrydex cutover** (`ORACLE_PRIMARY=scrydex`) for a fresher TCGplayer-anchored price. The Scrydex path
+> is already built + merged and **dormant** behind the flag — the remaining step is the flip. See
+> `docs/scrydex-pricing-build-spec.md`.
+
 ### How a card's price is calculated (the customer explanation)
 
 > Every market settles against a **fair value** we compute for each card from multiple real markets —
@@ -400,6 +409,7 @@ applied on boot (`db/migrate.ts`).
 | `GET /wallet/deposit-address` · `POST /wallet/withdraw/nonce` · `POST /wallet/withdraw` · `GET /wallet/transactions` | yes | Real-funds custody: deposit address, withdraw (wallet step-up), wallet history |
 | `/admin/markets/:id/price` · `/admin/treasury` · `/admin/insurance/*` · `/admin/custody-limits` · `/admin/withdrawals/*` · `/admin/freeze` · `/admin/customers` · `/admin/chat/*` · live knobs `/admin/{fee,liq-fee,funding-factor,mark-clamp}` · `/admin/{restrictions,mark-guards}` | admin key | Operator ops (manual pricing always; custody ops under real funds) + Customers & CHAT view, the live-tunable engine knobs, and the price-confidence / mark-guard panels — see [docs/ops-runbook.md](docs/ops-runbook.md) |
 | `GET /chat` · `POST /chat` · `/chat/messages/:id/react` · `/chat/ranks` · `/chat/profile/:id` · `GET /chat/drop/pot` · `POST /chat/drop/tip` · mod routes | mixed | Live chat: read/post, reactions, rank map, profile card, DROP pot tips (real USDC), mod actions |
+| `POST /webhooks/scrydex` | HMAC | Scrydex push re-pricing (Stripe-style `t=,v1=` signature over the raw body); active only under `ORACLE_PRIMARY=scrydex` |
 | `GET /health` | public | Health check |
 
 **WebSocket** `GET /ws` — subscribe to `mark:{id}`, `stats:{id}`, `oi:{id}`, `funding:{id}` and the
@@ -422,9 +432,12 @@ to the browser). Copy `apps/api/.env.example` → `apps/api/.env`; every key has
 | `PGLITE_DIR` | `./.pglite` | Local embedded-DB dir (use `memory://` for ephemeral) |
 | `JWT_SECRET` | dev default | **Must** be a strong ≥32-char value in production (boot refuses otherwise) |
 | `MAX_DELEGATED_KEYS` / `DELEGATE_MAX_TTL_DAYS` | `4` / `180` | Per-account cap + max lifetime for delegated trading keys |
-| `ORACLE_PRIMARY` | `pokemontcg` | Active price feed: `pokemontcg` or `tcgpricelookup` (prod runs `tcgpricelookup`); flip at boot, no deploy |
+| `ORACLE_PRIMARY` | `pokemontcg` | Active price feed: `pokemontcg`, `tcgpricelookup`, or `scrydex` (prod runs `tcgpricelookup`; the Scrydex-primary path is built + merged but **dormant** until the cutover flips this); flip at boot, no deploy |
 | `TCGPRICELOOKUP_API_KEY` | _(empty)_ | Trader-plan key for the multi-game raw+graded feed; a DB-backed limiter paces 1 req/s + `TCGPRICELOOKUP_DAILY_CAP` (10k/day) across instances |
 | `POKEMONTCG_API_KEY` | _(empty)_ | Legacy fallback feed; optional, keyless works at lower rate limits |
+| `SCRYDEX_API_KEY` · `SCRYDEX_TEAM_ID` | _(empty)_ | Scrydex auth (`X-Api-Key` + `X-Team-ID`) — the TCGplayer-anchored primary raw feed under `ORACLE_PRIMARY=scrydex` (dormant until cutover) |
+| `SCRYDEX_WEBHOOK_SECRET` · `SCRYDEX_DAILY_CAP` | _(empty)_ / `1600` | `whsec_…` HMAC secret for `POST /webhooks/scrydex` push re-pricing · daily Scrydex request guard |
+| `FX_BASE` | `https://api.frankfurter.dev` | ECB FX source (Frankfurter) for JPY→USD on Japan-priced cards (Scrydex path) |
 | `ORACLE_REFRESH_MS` / `ORACLE_PAGE_SIZE` | `6h` / `250` | Ingest cadence; page size (pokemontcg caps at 250 upstream) |
 | `DISCOVERY_INTERVAL_MS` / `RETIRE_AFTER_DAYS` | `7d` / `30` | Weekly featured-set rebalance; cull dead long-tail markets (no OI/volume) |
 | `SEARCH_AND_BET` | `true` | Catalogue search + on-demand listing (tcgpricelookup only; real-funds listing also needs the NAV caps) |
