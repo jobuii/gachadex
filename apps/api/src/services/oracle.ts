@@ -200,9 +200,22 @@ export async function ingestScopedCards(db: Db, cards: OracleCard[]): Promise<nu
 
 /** Re-price every tracked market in the given Scrydex expansions (the prices.raw_updated webhook, §8):
  *  scoped Scrydex+tcgpl fetch joined by tcgplayer_id, then ingestScopedCards. Returns cards re-priced. */
-export async function repriceExpansions(db: Db, expansionIds: string[]): Promise<number> {
-  if (expansionIds.length === 0) return 0;
-  const cards = await fetchScrydexTrackedCards(db, undefined, undefined, undefined, expansionIds);
+export async function repriceExpansions(
+  db: Db,
+  expansionIds: string[],
+  // injectable clients/fx for tests (the route passes none); mirror fetchScrydexTrackedCards's params
+  opts: {
+    sxClient?: Parameters<typeof fetchScrydexTrackedCards>[1];
+    tplClient?: Parameters<typeof fetchScrydexTrackedCards>[2];
+    fx?: Parameters<typeof fetchScrydexTrackedCards>[3];
+  } = {},
+): Promise<number> {
+  // Gate on the active feed: a Scrydex webhook drives pricing ONLY under ORACLE_PRIMARY=scrydex, so the
+  // flag is the SINGLE on/off and a rollback (flag → tcgpricelookup) cleanly stops webhook-driven
+  // re-prices. The webhook route still 200-acks every (validly-signed) event — it just doesn't apply
+  // Scrydex pricing here when Scrydex isn't the primary feed.
+  if (config.oraclePrimary !== 'scrydex' || expansionIds.length === 0) return 0;
+  const cards = await fetchScrydexTrackedCards(db, opts.sxClient, opts.tplClient, opts.fx, expansionIds);
   return ingestScopedCards(db, cards);
 }
 

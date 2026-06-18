@@ -29,7 +29,8 @@ const post = (payload: string, headers: Record<string, string>) =>
   app.inject({ method: 'POST', url: '/webhooks/scrydex', headers: { 'content-type': 'application/json', ...headers }, payload });
 
 test('POST /webhooks/scrydex acks a genuinely-signed raw_updated event with 200', async () => {
-  // an expansion no market tracks → repriceExpansions short-circuits (0 rows) → no live API call
+  // repriceExpansions short-circuits before any fetch — the §6a flag gate fires first (test env
+  // ORACLE_PRIMARY=pokemontcg ≠ scrydex), and the expansion matches no market anyway → no live API call
   const body = JSON.stringify({ id: 'evt_1', name: 'pokemon.expansions.prices.raw_updated', data: { expansion_ids: ['no-such-expansion'] } });
   const res = await post(body, { 'x-scrydex-signature': signed(body) });
   assert.equal(res.statusCode, 200);
