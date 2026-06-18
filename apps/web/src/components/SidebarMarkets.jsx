@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { formatUsd } from '@pokex/pricing';
+import { indexSeries, INDEX_SERIES_LABELS } from '@pokex/shared-types';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { useAuth } from '../auth/AuthContext';
 import * as api from '../lib/api.js';
 
 const TABS = ['indices', 'cards'];
+const SERIES_ORDER = { gj: 0, gp: 1, pdq: 2 }; // GJ (Dow) → G&P (equal-weight) → Pokedaq (capped)
 
 // Game filter (icon-only identity dots). Fixed brand colours, independent of the skin:
 // gold = Pokémon, red = One Piece, violet = Magic.
@@ -134,9 +136,13 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
   const list = useMemo(() => {
     const mine = markets.filter((m) => m.kind === (tab === 'indices' ? 'index' : 'card') && inGame(m));
     if (tab === 'indices') {
+      // group by series (GJ → G&P → Pokedaq), tradeable first within each series
       return mine
         .filter((m) => m.displayName.toLowerCase().includes(q.toLowerCase()))
-        .sort((a, b) => Number(b.tradeable) - Number(a.tradeable));
+        .sort((a, b) => {
+          const d = (SERIES_ORDER[indexSeries(a.indexSlug)] ?? 9) - (SERIES_ORDER[indexSeries(b.indexSlug)] ?? 9);
+          return d !== 0 ? d : Number(b.tradeable) - Number(a.tradeable);
+        });
     }
     // Default (no search) = the featured top-250. Fall back to ALL cards when nothing is featured —
     // an API build that predates the `featured` field (deploy race / rollback) or a transient data
@@ -223,28 +229,35 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
           const ch = m.change24hPct || 0;
           const up = ch >= 0;
           const price = livePrice(m);
+          // on the indices tab, label each series group once (GJ / G&P / Pokedaq)
+          const seriesHead =
+            tab === 'indices' && (i === 0 || indexSeries(list[i - 1].indexSlug) !== indexSeries(m.indexSlug))
+              ? INDEX_SERIES_LABELS[indexSeries(m.indexSlug)]
+              : null;
           return (
-            <div
-              key={m.id}
-              className={`market-item ${selected?.id === m.id ? 'selected' : ''} ${m.tradeable ? '' : 'market-item-disabled'}`}
-              onClick={() => onSelect(m)}
-              title={m.tradeable ? '' : 'Data source pending'}
-            >
-              <div className="market-item-left">
-                <span className="market-index">{i + 1}.</span>
-                {m.imageSmall ? <img src={m.imageSmall} alt="" className="market-thumb" /> : <span className="market-thumb idx-thumb">IDX</span>}
-                <div className="market-item-info">
-                  <span className="market-item-name">{m.displayName}</span>
-                  <span className="market-item-set">{marketSubtitle(m)}</span>
+            <Fragment key={m.id}>
+              {seriesHead && <div className="series-header">{seriesHead}</div>}
+              <div
+                className={`market-item ${selected?.id === m.id ? 'selected' : ''} ${m.tradeable ? '' : 'market-item-disabled'}`}
+                onClick={() => onSelect(m)}
+                title={m.tradeable ? '' : 'Data source pending'}
+              >
+                <div className="market-item-left">
+                  <span className="market-index">{i + 1}.</span>
+                  {m.imageSmall ? <img src={m.imageSmall} alt="" className="market-thumb" /> : <span className="market-thumb idx-thumb">IDX</span>}
+                  <div className="market-item-info">
+                    <span className="market-item-name">{m.displayName}</span>
+                    <span className="market-item-set">{marketSubtitle(m)}</span>
+                  </div>
+                </div>
+                <div className="market-item-right">
+                  <span className="market-item-price">{price ? formatUsd(BigInt(price)) : '—'}</span>
+                  <span className={`market-item-change ${up ? 'up' : 'down'}`}>
+                    {up ? '▲' : '▼'} {Math.abs(ch).toFixed(2)}%
+                  </span>
                 </div>
               </div>
-              <div className="market-item-right">
-                <span className="market-item-price">{price ? formatUsd(BigInt(price)) : '—'}</span>
-                <span className={`market-item-change ${up ? 'up' : 'down'}`}>
-                  {up ? '▲' : '▼'} {Math.abs(ch).toFixed(2)}%
-                </span>
-              </div>
-            </div>
+            </Fragment>
           );
         })}
 
