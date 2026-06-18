@@ -2,11 +2,19 @@ import { unrealizedPnl } from '@pokex/pricing';
 import type { Db } from '../db/client.ts';
 import { lpShareValue } from './lp.ts';
 
+// Ledger reasons that move EXTERNAL capital in/out of a user's collateral — everything that is NOT a
+// trading result. Subtracted from (cash + LP value) to leave pure realized PnL; the ledger's natural
+// signs net (deposits/faucet/referral/reversals are +, withdrawals/tips are -). NB this is deliberately
+// NOT history.ts's "Transfer" set: LP_DEPOSIT/LP_WITHDRAW are EXCLUDED (LP capital is valued separately
+// via lpValue), and DROP_TIP is INCLUDED (a tip is capital leaving collateral). If a new external-flow
+// reason is added to the ledger, add it here too — otherwise the leaderboard silently counts it as PnL.
+const EXTERNAL_CAPITAL_REASONS = ['FAUCET', 'REFERRAL_BONUS', 'DEPOSIT', 'WITHDRAWAL', 'WITHDRAWAL_REVERSAL', 'DROP_TIP'];
+
 export interface LeaderboardRow {
   rank: number;
   userId: string;
   pubkey: string;
-  realizedPnlUusdc: string; // net booked PnL: (cash + LP value) - net deposits  (fees & funding included)
+  realizedPnlUusdc: string; // net booked PnL: (cash + LP value) - net external capital in  (fees & funding included)
   equityUusdc: string; // cash + LP value + unrealized PnL
   volumeUusdc: string; // Σ notional traded across all fills
 }
@@ -14,10 +22,12 @@ export interface LeaderboardRow {
 /**
  * Trader leaderboard, ranked by net realized PnL. All figures are derived from the ledger so they
  * reconcile with balances:
- *   net deposits   = Σ faucet + referral credits to the user's collateral
+ *   net capital in = Σ external collateral flows that ARE NOT a trading result — faucet, referral,
+ *                    real deposits, minus withdrawals and DROP tips (the ledger's natural signs net)
  *   cash           = collateral balance + locked margin
  *   LP value       = current worth of the user's LP shares (shares * NAV / total shares)
- *   realized PnL   = cash + LP value - net deposits   (trading/fees/funding + LP yield)
+ *   realized PnL   = cash + LP value - net capital in   (deposits/withdrawals/tips net out; what is
+ *                    left is pure trading/fees/funding + LP yield)
  *   equity         = cash + LP value + unrealized PnL on open positions (marked to latest)
  * LP value must be included: providing to the pool moves capital out of collateral into the
  * LP_POOL system account, so without it a pure LP provider would look like a big trading loss.
@@ -34,18 +44,21 @@ interface RankedEntry {
 /** The full field, ranked by net realized PnL (tie-broken by equity). The heavy part: a set of
  *  set-based queries + in-memory aggregation. Shared by getLeaderboard (top-N + viewer) and rankMap. */
 async function computeRanked(db: Db): Promise<RankedEntry[]> {
-  const [users, balances, deposits, volume, positions, marks, pool, lpShares] = await Promise.all([
+  const [users, balances, netCapital, volume, positions, marks, pool, lpShares] = await Promise.all([
     db.query<{ id: string; solana_pubkey: string }>(`SELECT id, solana_pubkey FROM users`),
     db.query<{ user_id: string; type: string; amt: string }>(
       `SELECT a.user_id, a.type, COALESCE(b.amount_uusdc, 0)::text AS amt
        FROM accounts a LEFT JOIN balances b ON b.account_id = a.id
        WHERE a.user_id IS NOT NULL AND a.type IN ('USER_COLLATERAL', 'USER_POSITION_MARGIN')`,
     ),
+    // Σ external capital into each user's collateral (EXTERNAL_CAPITAL_REASONS) — subtracted from value
+    // to leave pure realized PnL; the ledger's natural signs net deposits-in against withdrawals/tips-out.
     db.query<{ user_id: string; amt: string }>(
       `SELECT a.user_id, COALESCE(SUM(le.amount_uusdc), 0)::text AS amt
        FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
-       WHERE a.type = 'USER_COLLATERAL' AND le.reason IN ('FAUCET', 'REFERRAL_BONUS')
+       WHERE a.type = 'USER_COLLATERAL' AND le.reason = ANY($1::text[])
        GROUP BY a.user_id`,
+      [EXTERNAL_CAPITAL_REASONS],
     ),
     db.query<{ user_id: string; vol: string }>(
       `SELECT o.user_id, COALESCE(SUM(f.qty_e6 * f.exec_price_e6), 0)::text AS vol
@@ -70,8 +83,8 @@ async function computeRanked(db: Db): Promise<RankedEntry[]> {
   const cash = new Map<string, bigint>(); // collateral + locked margin
   for (const r of balances.rows) cash.set(r.user_id, (cash.get(r.user_id) ?? 0n) + BigInt(r.amt));
 
-  const deposited = new Map<string, bigint>();
-  for (const r of deposits.rows) deposited.set(r.user_id, BigInt(r.amt));
+  const netCapitalIn = new Map<string, bigint>(); // external collateral flows (signed); subtracted from value
+  for (const r of netCapital.rows) netCapitalIn.set(r.user_id, BigInt(r.amt));
 
   // value each user's LP shares at the current share price, using lp.ts's canonical formula
   const nav = BigInt(pool.rows[0]?.nav ?? '0');
@@ -96,7 +109,7 @@ async function computeRanked(db: Db): Promise<RankedEntry[]> {
   return users.rows
     .map((u) => {
       const c = (cash.get(u.id) ?? 0n) + (lpValue.get(u.id) ?? 0n); // total cash incl. LP position value
-      const realized = c - (deposited.get(u.id) ?? 0n);
+      const realized = c - (netCapitalIn.get(u.id) ?? 0n);
       return {
         userId: u.id,
         pubkey: u.solana_pubkey,
