@@ -90,3 +90,13 @@ test('importTcgplPrices: stores ≥$10 and MERGES onto the same product row as S
   assert.ok(merged.tcgpl_prices, 'full tcgpl payload stored');
   assert.equal(await row(2002), undefined, 'sub-$10 tcgpl card not stored');
 });
+
+test('importTcgplPrices: resumes the crawl from a saved checkpoint and clears it on completion', async () => {
+  await db.query(`INSERT INTO settings(key, value) VALUES('price_index_tcgpl_pokemon', '50') ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value`);
+  const offsets: number[] = [];
+  const stub = { searchCards: async (p: { offset: number }) => { offsets.push(p.offset); return { data: [], total: 50, limit: 100, offset: p.offset }; } } as unknown as TplClient;
+  await importTcgplPrices(db, { client: stub, games: ['pokemon'] });
+  assert.equal(offsets[0], 50, 'resumed from the checkpointed offset, not 0');
+  const cp = await db.query(`SELECT 1 FROM settings WHERE key = 'price_index_tcgpl_pokemon'`);
+  assert.equal(cp.rows.length, 0, 'checkpoint cleared on game completion');
+});

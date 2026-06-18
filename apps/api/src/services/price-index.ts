@@ -151,8 +151,25 @@ function* scrydexProducts(card: ScrydexCard): Generator<[number, NonNullable<Scr
   }
 }
 
+// Per-game crawl checkpoint (offset) for the slow tcgpl crawl, so an interruption resumes instead of
+// re-crawling from zero. Cleared on game completion (a fresh rebuild then restarts that game).
+const tcgplCheckpointKey = (game: string) => `price_index_tcgpl_${game}`;
+async function loadTcgplCheckpoint(db: Db, game: string): Promise<number> {
+  const r = await db.query<{ value: string }>(`SELECT value FROM settings WHERE key = $1`, [tcgplCheckpointKey(game)]);
+  const n = r.rows[0] ? Number(r.rows[0].value) : 0;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+async function saveTcgplCheckpoint(db: Db, game: string, offset: number): Promise<void> {
+  await db.query(
+    `INSERT INTO settings(key, value) VALUES($1, $2) ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    [tcgplCheckpointKey(game), String(offset)],
+  );
+}
+const clearTcgplCheckpoint = (db: Db, game: string) => db.query(`DELETE FROM settings WHERE key = $1`, [tcgplCheckpointKey(game)]);
+
 /** Crawl each game's full tcgpl catalog and upsert the tcgpl side for every card whose raw TCGplayer
- *  market is ≥ minUsd. Slow (the provider paces 1 req/s) — runs at 'discovery' priority so it yields. */
+ *  market is ≥ minUsd. Slow (the provider paces 1 req/s) — runs at 'discovery' priority so it yields.
+ *  Resumable: an interrupted game resumes from its last checkpointed offset. */
 export async function importTcgplPrices(
   db: Db,
   opts: { client?: TcgPriceLookupClient; minUsd?: number; games?: string[]; log?: (m: string) => void } = {},
@@ -163,7 +180,8 @@ export async function importTcgplPrices(
   const result: ImportResult = { scanned: 0, stored: 0 };
 
   for (const game of opts.games ?? GAMES) {
-    let offset = 0;
+    let offset = await loadTcgplCheckpoint(db, game); // resume a previously-interrupted crawl
+    if (offset > 0) log(`tcgpl ${game}: resuming from offset ${offset}`);
     for (;;) {
       const res = await tpl.searchCards({ game, limit: 100, offset }, 'discovery');
       for (const card of res.data) {
@@ -179,9 +197,11 @@ export async function importTcgplPrices(
         result.stored++;
       }
       offset += res.data.length;
+      await saveTcgplCheckpoint(db, game, offset); // checkpoint each page so a crash resumes here
       if (res.data.length === 0 || offset >= res.total) break;
       if (offset % 1000 < 100) log(`tcgpl ${game}: ${offset}/${res.total} scanned, ${result.stored} stored`);
     }
+    await clearTcgplCheckpoint(db, game); // game complete — a future rebuild starts it fresh
   }
   return result;
 }

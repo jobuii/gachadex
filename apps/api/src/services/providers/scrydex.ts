@@ -81,10 +81,11 @@ export class ScrydexClient {
   private fetchFn: typeof fetch;
   private retryBaseMs: number;
   private maxAttempts: number;
+  private requestTimeoutMs: number;
 
   constructor(
     db: Db,
-    opts: { fetchFn?: typeof fetch; limiter?: ProviderLimiter; retryBaseMs?: number; maxAttempts?: number } = {},
+    opts: { fetchFn?: typeof fetch; limiter?: ProviderLimiter; retryBaseMs?: number; maxAttempts?: number; requestTimeoutMs?: number } = {},
   ) {
     this.limiter =
       opts.limiter ??
@@ -95,6 +96,7 @@ export class ScrydexClient {
     this.fetchFn = opts.fetchFn ?? fetch;
     this.retryBaseMs = opts.retryBaseMs ?? 500;
     this.maxAttempts = opts.maxAttempts ?? 4;
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
   }
 
   /** GET /{slug}/v1/cards — paginated search (Lucene-ish `q`), prices included. ≤100 cards per credit. */
@@ -144,16 +146,21 @@ export class ScrydexClient {
       await this.limiter.acquire(priority); // every attempt is a real request — pace them all
       let res: Response | null = null;
       let err: Error;
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), this.requestTimeoutMs); // a stalled socket must not hang forever
       try {
         res = await this.fetchFn(`${config.scrydexBase}${path}`, {
           headers: { 'X-Api-Key': config.scrydexApiKey, 'X-Team-ID': config.scrydexTeamId },
+          signal: ac.signal,
         });
-        if (res.ok) return res.json();
+        if (res.ok) return await res.json(); // await so the timeout also covers the body read
         if (!RETRYABLE_STATUS.has(res.status)) throw new Error(`scrydex ${res.status} on ${path}`);
         err = new Error(`scrydex ${res.status} on ${path}`);
       } catch (e) {
-        if (res != null) throw e; // the non-retryable throw above — propagate as-is
-        err = e as Error; // network error — retryable
+        if (res != null && !ac.signal.aborted) throw e; // genuine non-retryable status throw — propagate as-is
+        err = e as Error; // network error OR request timeout (abort) — retryable
+      } finally {
+        clearTimeout(timer);
       }
       if (attempt + 1 >= this.maxAttempts) throw err; // exhausted: fail now, no pointless final sleep
       await this.backoff(attempt, res?.headers.get('retry-after') ?? null);

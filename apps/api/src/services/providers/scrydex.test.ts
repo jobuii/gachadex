@@ -70,6 +70,18 @@ test('429 is retried then succeeds; a non-retryable status throws immediately', 
   assert.equal(bad.calls.length, 1);
 });
 
+test('a stalled request times out (AbortController) and is retried — never hangs forever', async () => {
+  let calls = 0;
+  const hangingFetch = ((_url: unknown, opts: { signal?: AbortSignal }) =>
+    new Promise<Response>((_resolve, reject) => {
+      calls++;
+      opts.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+    })) as unknown as typeof fetch;
+  const client = new ScrydexClient(db, { fetchFn: hangingFetch, limiter: instantLimiter, retryBaseMs: 1, maxAttempts: 2, requestTimeoutMs: 20 });
+  await assert.rejects(client.searchCards('pokemon', { q: 'x' }, 'refresh')); // resolves (throws), does not hang
+  assert.equal(calls, 2, 'each stalled attempt aborted at the timeout and was retried up to maxAttempts');
+});
+
 // --- extractRaw (the parse) ---
 const card = (variants: NonNullable<CardT['variants']>): CardT => ({ id: 'x', name: 'Test', language_code: 'EN', variants });
 const raw = (condition: string, market: number, extra: Record<string, unknown> = {}) => ({ type: 'raw', condition, market, ...extra });
