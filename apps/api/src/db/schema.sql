@@ -368,6 +368,35 @@ CREATE TABLE IF NOT EXISTS chart_seed (
   PRIMARY KEY (market_id, day)
 );
 
+-- Cross-provider price data lake (docs/scrydex-pricing-build-spec.md §15): one row per TCGplayer
+-- product (the globally-unique cross-provider join key), holding the raw TCGplayer market price + the
+-- FULL price payload from BOTH feeds for every card whose raw market is ≥ the listing floor in either
+-- feed. Built by scripts/build-price-index.ts (Scrydex enum + tcgpl crawl). NOT the live trading
+-- universe — it's the analysis/derivation substrate (rank top-N per game by best-available price) and
+-- the on-demand listing-eligibility set. Re-runnable; full payloads stored so re-derivation never
+-- needs a re-fetch.
+CREATE TABLE IF NOT EXISTS price_index (
+  tcgplayer_id         BIGINT PRIMARY KEY,        -- TCGplayer product id (unique across all products/games)
+  game                 TEXT NOT NULL,             -- 'pokemon' | 'onepiece' | 'mtg'
+  name                 TEXT,
+  -- Scrydex side (raw = TCGplayer ungraded market, FX→USD if the printing is JPY)
+  scrydex_card_id      TEXT,
+  scrydex_expansion_id TEXT,
+  scrydex_variant      TEXT,
+  scrydex_raw_usd      NUMERIC,
+  scrydex_prices       JSONB,                     -- full variant prices[] (raw + graded + trends)
+  -- tcgpricelookup side (TCGplayer market is USD; eBay averages kept for cross-check/refinement)
+  tcgpl_card_id        TEXT,                      -- the tcgpl card UUID (= markets.provider_card_id)
+  tcgpl_set            TEXT,
+  tcgpl_number         TEXT,
+  tcgpl_raw_usd        NUMERIC,
+  tcgpl_ebay_7d        NUMERIC,
+  tcgpl_prices         JSONB,                     -- full prices object (raw {tcgplayer,ebay} + graded)
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_price_index_game_scrydex ON price_index(game, scrydex_raw_usd DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_price_index_game_tcgpl   ON price_index(game, tcgpl_raw_usd   DESC NULLS LAST);
+
 -- =========================================================================
 -- Positions / orders / fills
 -- =========================================================================

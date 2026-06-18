@@ -85,6 +85,25 @@ test('attempts are bounded: persistent 5xx exhausts retries and throws', async (
   assert.equal(calls.length, 4); // maxAttempts default
 });
 
+test('a stalled request times out (AbortController) and is retried — never hangs forever', async () => {
+  let calls = 0;
+  const hangingFetch = ((_url: unknown, opts: { signal?: AbortSignal }) =>
+    new Promise<Response>((_resolve, reject) => {
+      calls++;
+      opts.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+    })) as unknown as typeof fetch;
+  const client = new TcgPriceLookupClient(db, { fetchFn: hangingFetch, limiter: instantLimiter, retryBaseMs: 1, maxAttempts: 2, requestTimeoutMs: 20 });
+  await assert.rejects(client.searchCards({ q: 'x' }, 'search')); // resolves (throws), does not hang
+  assert.equal(calls, 2, 'each stalled attempt aborted at the timeout and was retried up to maxAttempts');
+});
+
+test('a response that arrives within the timeout succeeds', async () => {
+  const slowOk = ((_url: unknown) =>
+    new Promise<Response>((resolve) => setTimeout(() => resolve(json({ data: [], total: 0 })), 5))) as unknown as typeof fetch;
+  const client = new TcgPriceLookupClient(db, { fetchFn: slowOk, limiter: instantLimiter, retryBaseMs: 1, requestTimeoutMs: 200 });
+  assert.equal((await client.searchCards({ q: 'x' }, 'search')).total, 0);
+});
+
 // ---------------------------------------------------------------------------
 // OracleCard fetcher (P3)
 // ---------------------------------------------------------------------------
