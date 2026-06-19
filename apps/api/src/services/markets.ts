@@ -39,13 +39,15 @@ export interface MarketRow {
   mark_clamped: boolean; // mark guard engaged right now (§6a) — the prior-state input to recomputeMark's clamp
   featured: boolean;
   requires_scrydex: boolean; // priced only by Scrydex (JP + Scrydex-only EN) → hidden until ORACLE_PRIMARY=scrydex
+  rarity: string | null; // metadata->>'rarity' — surfaced for the screener's Rarity column/filter
 }
 
 const COLS = `id, kind, game, symbol, display_name, card_id, variant, index_slug, image_small, set_logo, status, tradeable,
   max_leverage_e2, init_margin_bps, maint_margin_bps,
   max_oi_long_uusdc::text AS max_oi_long_uusdc, max_oi_short_uusdc::text AS max_oi_short_uusdc,
   skew_k_e6::text AS skew_k_e6, premium_cap_e6::text AS premium_cap_e6, max_dev_bps,
-  min_qty_e6::text AS min_qty_e6, qty_step_e6::text AS qty_step_e6, price_tick_e6::text AS price_tick_e6, price_pinned, low_confidence, mark_clamped, featured, requires_scrydex`;
+  min_qty_e6::text AS min_qty_e6, qty_step_e6::text AS qty_step_e6, price_tick_e6::text AS price_tick_e6, price_pinned, low_confidence, mark_clamped, featured, requires_scrydex,
+  metadata->>'rarity' AS rarity`;
 
 export async function getMarketById(q: Queryer, id: string): Promise<MarketRow | null> {
   const r = await q.query<MarketRow>(`SELECT ${COLS} FROM markets WHERE id = $1`, [id]);
@@ -150,6 +152,8 @@ export interface MarketView {
   restricted: boolean; // low price confidence -> reduce-only (no new positions); see priceCard
   markStabilizing: boolean; // §6a mark guard engaged: the mark is creeping toward an uncorroborated jump (price stabilizing)
   featured: boolean; // top-250-by-price member (the sidebar's default card list)
+  volume24hUsd: number; // 24h traded notional (USD) — the screener Volume column + Top-Volume sort
+  rarity: string | null; // card rarity (from metadata) — the screener Rarity column + By-Rarity filter
 }
 
 /** Per-market details (card metadata + graded prices) for the detail panel. */
@@ -226,6 +230,14 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
     }
   }
 
+  // 24h traded notional (USD) per market — same qty×price/1e12 as the candle volume — for the
+  // screener's Volume column + Top-Volume sort. Markets with no fills in the window default to 0.
+  const vol = await db.query<{ market_id: string; vol: number }>(
+    `SELECT market_id, (sum(qty_e6::numeric * exec_price_e6::numeric) / 1000000000000)::float8 AS vol
+       FROM fills WHERE created_at > now() - interval '24 hours' GROUP BY market_id`,
+  );
+  const volMap = new Map(vol.rows.map((r) => [r.market_id, Number(r.vol)]));
+
   // Scrydex-only markets (the JP set + Scrydex-only EN) have no mark under tcgpl-primary — hide them
   // until ORACLE_PRIMARY=scrydex, then they auto-reveal. config.oraclePrimary is read synchronously at boot.
   return markets.rows
@@ -257,6 +269,8 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
         restricted: m.low_confidence,
         markStabilizing: m.mark_clamped, // §6a mark guard engaged — show the "price stabilizing" badge
         featured: m.featured,
+        volume24hUsd: volMap.get(m.id) ?? 0,
+        rarity: m.rarity,
       };
     });
 }
