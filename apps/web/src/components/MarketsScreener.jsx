@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { formatUsd } from '@pokex/pricing';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
 
@@ -19,6 +19,13 @@ const SORTS = [
   { id: 'gainers', label: 'Gainers' },
   { id: 'losers', label: 'Losers' },
 ];
+// Top-mover sort comparators, keyed off the REST snapshot (same set as SidebarMarkets' CARD_SORTS).
+const CARD_SORTS = {
+  top: (a, b) => Number(b.markE6 ?? 0) - Number(a.markE6 ?? 0),
+  volume: (a, b) => (b.volume24hUsd ?? 0) - (a.volume24hUsd ?? 0),
+  gainers: (a, b) => (b.change24hPct ?? 0) - (a.change24hPct ?? 0),
+  losers: (a, b) => (a.change24hPct ?? 0) - (b.change24hPct ?? 0),
+};
 
 // Live price cell — its own component so the live-mark subscription re-renders just this <td>.
 function PriceCell({ market }) {
@@ -41,23 +48,29 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
   const [showJpy, setShowJpy] = useState(false); // JP cards hidden by default — the main 250/game is English
 
   const cards = useMemo(() => (markets || []).filter((m) => m.kind === 'card'), [markets]);
-  const rarities = useMemo(() => [...new Set(cards.map((c) => c.rarity).filter(Boolean))].sort(), [cards]);
-
-  const rows = useMemo(() => {
+  // The game + JPY filters bound which rarities can appear, so derive the dropdown options from THAT
+  // view (not the whole card list) — otherwise it offers rarities that only exist on hidden cards and
+  // yield an empty table.
+  const scoped = useMemo(() => {
     let r = cards;
     if (!showJpy) r = r.filter((c) => !c.jpy);
     if (game !== 'all') r = r.filter((c) => c.game === game);
+    return r;
+  }, [cards, showJpy, game]);
+  const rarities = useMemo(() => [...new Set(scoped.map((c) => c.rarity).filter(Boolean))].sort(), [scoped]);
+  // If the selected rarity leaves the current view (game/JPY changed), fall back to All rather than
+  // silently showing zero rows against an option the dropdown no longer lists.
+  useEffect(() => {
+    if (rarity !== 'all' && !rarities.includes(rarity)) setRarity('all');
+  }, [rarities, rarity]);
+
+  const rows = useMemo(() => {
+    let r = scoped;
     if (rarity !== 'all') r = r.filter((c) => c.rarity === rarity);
     const q = search.trim().toLowerCase();
     if (q) r = r.filter((c) => c.displayName.toLowerCase().includes(q));
-    const by = {
-      top: (a, b) => Number(b.markE6 ?? 0) - Number(a.markE6 ?? 0),
-      volume: (a, b) => (b.volume24hUsd ?? 0) - (a.volume24hUsd ?? 0),
-      gainers: (a, b) => (b.change24hPct ?? 0) - (a.change24hPct ?? 0),
-      losers: (a, b) => (a.change24hPct ?? 0) - (b.change24hPct ?? 0),
-    };
-    return [...r].sort(by[sort]);
-  }, [cards, game, rarity, search, sort, showJpy]);
+    return [...r].sort(CARD_SORTS[sort] ?? CARD_SORTS.top);
+  }, [scoped, rarity, search, sort]);
 
   return (
     <div className="screener">
