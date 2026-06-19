@@ -231,34 +231,34 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
   return markets.rows
     .filter((m) => !m.requires_scrydex || config.oraclePrimary === 'scrydex')
     .map((m) => {
-    const l = latestMap.get(m.id);
-    return {
-      id: m.id,
-      kind: m.kind,
-      game: m.game,
-      symbol: m.symbol,
-      displayName: m.display_name,
-      cardId: m.card_id,
-      indexSlug: m.index_slug,
-      imageSmall: m.image_small,
-      setLogo: m.set_logo,
-      status: m.status,
-      tradeable: m.tradeable,
-      maxLeverage: Math.round(m.max_leverage_e2 / 100),
-      maintMarginBps: m.maint_margin_bps,
-      feeBps: getFeeBps(), // live trading fee (same global knob for every market); lets clients preview the real fee
-      fundingFactorBps: getFundingFactorBps(), // live funding factor; the client estimates the rate from live OI skew
-      qtyStepE6: m.qty_step_e6,
-      minQtyE6: m.min_qty_e6,
-      markE6: l?.mark_e6 ?? null,
-      indexE6: l?.index_e6 ?? null,
-      change24hPct: changeMap.get(m.id) ?? 0,
-      pricePinned: m.price_pinned,
-      restricted: m.low_confidence,
-      markStabilizing: m.mark_clamped, // §6a mark guard engaged — show the "price stabilizing" badge
-      featured: m.featured,
-    };
-  });
+      const l = latestMap.get(m.id);
+      return {
+        id: m.id,
+        kind: m.kind,
+        game: m.game,
+        symbol: m.symbol,
+        displayName: m.display_name,
+        cardId: m.card_id,
+        indexSlug: m.index_slug,
+        imageSmall: m.image_small,
+        setLogo: m.set_logo,
+        status: m.status,
+        tradeable: m.tradeable,
+        maxLeverage: Math.round(m.max_leverage_e2 / 100),
+        maintMarginBps: m.maint_margin_bps,
+        feeBps: getFeeBps(), // live trading fee (same global knob for every market); lets clients preview the real fee
+        fundingFactorBps: getFundingFactorBps(), // live funding factor; the client estimates the rate from live OI skew
+        qtyStepE6: m.qty_step_e6,
+        minQtyE6: m.min_qty_e6,
+        markE6: l?.mark_e6 ?? null,
+        indexE6: l?.index_e6 ?? null,
+        change24hPct: changeMap.get(m.id) ?? 0,
+        pricePinned: m.price_pinned,
+        restricted: m.low_confidence,
+        markStabilizing: m.mark_clamped, // §6a mark guard engaged — show the "price stabilizing" badge
+        featured: m.featured,
+      };
+    });
 }
 
 export interface Candle {
