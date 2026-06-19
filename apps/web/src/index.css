@@ -645,6 +645,10 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
   overflow: hidden;
   text-overflow: ellipsis;
   display: block;
+  /* Press Start 2P glyphs sit high; without leading the `overflow:hidden` (for the ellipsis) clips
+     their tops. A line-height + matching vertical padding gives the line box room. */
+  line-height: 1.5;
+  padding-top: 1px;
   margin-bottom: 3px;
 }
 .market-item-set {
@@ -654,6 +658,8 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
   overflow: hidden;
   text-overflow: ellipsis;
   display: block;
+  line-height: 1.5;
+  padding-top: 1px;
 }
 
 .market-item-right { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
