@@ -237,17 +237,20 @@ test('fetchScrydexTrackedCards: Scrydex anchors price; tcgpl fallback + Scrydex-
   const m3 = await upsertCardMarket(db, { symbol: 's-tpldrop', cardId: 's-tpldrop', displayName: 'TplDrop', variant: 'holofoil', imageSmall: 'i3', providerCardId: 'tpl-3', tcgplayerId: 333 });
   // m4: a JP printing — Scrydex reports JPY, converted to USD via the injected FX rate
   const m4 = await upsertCardMarket(db, { symbol: 's-jp', cardId: 's-jp', displayName: 'JP', variant: 'holofoil', imageSmall: 'i4', providerCardId: 'tpl-4', tcgplayerId: 444 });
+  // m5: tcgpl-ONLY — NO scrydex_card_id at all (e.g. most One Piece). Pre-broaden it wasn't even selected →
+  // no print under scrydex-primary → stale. Now selected + priced off the tcgpl TCGplayer market (70).
+  const m5 = await upsertCardMarket(db, { symbol: 's-nosx', cardId: 's-nosx', displayName: 'NoSx', variant: 'holofoil', imageSmall: 'i5', providerCardId: 'tpl-5', tcgplayerId: 555 });
   await db.query(
     `UPDATE markets SET scrydex_card_id = CASE id WHEN $1 THEN 'sx-1' WHEN $2 THEN 'sx-2' WHEN $3 THEN 'sx-3' WHEN $4 THEN 'sx-4' END WHERE id IN ($1,$2,$3,$4)`,
-    [m1, m2, m3, m4],
+    [m1, m2, m3, m4], // m5 deliberately left with scrydex_card_id NULL
   );
 
   const sxStub = { getCardsByIds: async () => [sxFullCard('sx-1', 111, 100), sxFullCard('sx-3', 333, 50), sxFullCard('sx-4', 444, 1500, 'JPY')] } as unknown as Parameters<typeof fetchScrydexTrackedCards>[1];
-  const tplStub = { getCardsByIds: async () => [tplCardFor('tpl-1', 95, 100), tplCardFor('tpl-2', 80, 80)] } as unknown as Parameters<typeof fetchScrydexTrackedCards>[2];
+  const tplStub = { getCardsByIds: async () => [tplCardFor('tpl-1', 95, 100), tplCardFor('tpl-2', 80, 80), tplCardFor('tpl-5', 70, 70)] } as unknown as Parameters<typeof fetchScrydexTrackedCards>[2];
 
   const cards = await fetchScrydexTrackedCards(db, sxStub, tplStub, async () => 0.0067); // stub FX — no live call
   const by = new Map(cards.map((c) => [c.symbol, c]));
-  assert.equal(cards.length, 4);
+  assert.equal(cards.length, 5);
 
   assert.equal(by.get('s-both')!.rawE6, 100_000_000n); // Scrydex anchor, not tcgpl's 95
   assert.equal(by.get('s-both')!.confident, true);
@@ -262,8 +265,11 @@ test('fetchScrydexTrackedCards: Scrydex anchors price; tcgpl fallback + Scrydex-
 
   assert.equal(by.get('s-jp')!.rawE6, 10_050_000n); // 1500 JPY × 0.0067 = $10.05, converted via the injected FX
 
+  assert.equal(by.get('s-nosx')!.rawE6, 70_000_000n); // tcgpl-only (no scrydex_card_id) — priced off tcgpl via the broaden-poll fix
+  assert.equal(by.get('s-nosx')!.confident, true);
+
   // clean up so the shared-db count assertions don't see these rows
-  await db.query(`DELETE FROM markets WHERE id IN ($1,$2,$3,$4)`, [m1, m2, m3, m4]);
+  await db.query(`DELETE FROM markets WHERE id IN ($1,$2,$3,$4,$5)`, [m1, m2, m3, m4, m5]);
 });
 
 test('fetchScrydexTrackedCards: a scrydex_card_id shared by two variant-markets is fetched once (no wasted credit)', async () => {

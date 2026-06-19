@@ -316,7 +316,7 @@ export function getDefaultScrydexClient(db: Db): ScrydexClient {
 /** A tracked market re-priced by the Scrydex feed. Identity (game/symbol/card_id) and the join keys
  *  come from OUR market row, never the provider — Scrydex sets the price, tcgpl cross-checks. */
 export interface ScrydexTracked {
-  scrydex_card_id: string;
+  scrydex_card_id: string | null; // null for tcgpl-only markets (no Scrydex match) — they price off tcgpl fallback
   provider_card_id: string | null; // tcgpl id — present for the whole discovery-built universe
   symbol: string;
   card_id: string;
@@ -369,8 +369,11 @@ export async function fetchScrydexTrackedCards(
   const sx = sxClient ?? getDefaultScrydexClient(db);
   const tpl = tplClient ?? getDefaultClient(db);
   const tracked = await db.query<ScrydexTracked>(
+    // Full tracked universe: Scrydex-matched cards price off Scrydex; tcgpl-only cards (no scrydex_card_id —
+    // e.g. most of One Piece) have no anchor but still price off the tcgpl TCGplayer market via combinePrice's
+    // fallback. Without this OR, those markets get no print under scrydex-primary and go stale.
     `SELECT scrydex_card_id, provider_card_id, symbol, card_id, game, tcgplayer_id, featured FROM markets
-      WHERE kind = 'card' AND scrydex_card_id IS NOT NULL AND status != 'delisted'
+      WHERE kind = 'card' AND (scrydex_card_id IS NOT NULL OR provider_card_id IS NOT NULL) AND status != 'delisted'
       ${expansionIds ? 'AND scrydex_expansion_id = ANY($1)' : ''}`,
     expansionIds ? [expansionIds] : [],
   );
@@ -379,6 +382,7 @@ export async function fetchScrydexTrackedCards(
   // 1. Scrydex (the price anchor): batch by scrydex_card_id, per game slug (the endpoint is per-game).
   const sxIdsByGame = new Map<string, string[]>();
   for (const t of tracked.rows) {
+    if (!t.scrydex_card_id) continue; // tcgpl-only market → no Scrydex anchor; the tcgpl fallback prices it
     const slug = scrydexSlug(t.game);
     if (!slug) continue; // a game Scrydex doesn't cover → no anchor; the tcgpl fallback still prices it
     const list = sxIdsByGame.get(slug) ?? [];
@@ -400,7 +404,7 @@ export async function fetchScrydexTrackedCards(
   const fxJpyUsd = await fx();
 
   return tracked.rows.flatMap((t) => {
-    const sxCard = sxById.get(t.scrydex_card_id);
+    const sxCard = t.scrydex_card_id ? sxById.get(t.scrydex_card_id) : undefined;
     const tplCard = t.provider_card_id ? tplById.get(t.provider_card_id) : undefined;
     const sxRaw = sxCard ? extractRaw(sxCard, t.tcgplayer_id) : null;
     const cross = tplCard ? tplCrossCheck(tplCard) : EMPTY_CROSS;
