@@ -133,6 +133,9 @@ mismatches. The per-game tiebreak (§5) decides which feed's value defines the u
 3. **Separate tradeable set: JPY cards > $100.** Also listed/tradeable, surfaced via a JPY filter.
 4. **GachaDex list filters (new UI):** Top Volume · Top Gainers · Top Losers · By Rarity · JPY ON/OFF.
    With JPY ON, the >$100 JP cards appear among the listing.
+5. **UI layout — Option C (hybrid):** top-mover sort pills in the trading sidebar **+** a dedicated
+   "Markets" screener page (full sortable table: Price / 24h% / Volume / Rarity columns + top-mover
+   tabs + Rarity dropdown + JPY toggle). Mockup: `mockups/market-filters-options.html`.
 
 ---
 
