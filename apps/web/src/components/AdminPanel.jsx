@@ -590,13 +590,22 @@ export function AdminPanel({ onGoToMarket } = {}) {
           </div>
           <Stat label="…free" value={economics.freeE6} />
           <Stat label="…locked in trades" value={economics.lockedE6} />
-          {treasury && <Stat label="Pending withdrawals" value={treasury.pendingE6} />}
           <Stat label="Insurance fund" value={economics.insuranceE6} />
           <Stat label="Fees earned (house cut)" value={economics.feeRevenueE6} />
           <Stat label="LP's share of fees" value={bd?.feesLpE6} />
           <Stat label="Funding collected (customers paid in)" value={economics.fundingCollectedE6} />
           <Stat label="Funding earned (house net kept)" value={economics.fundingRevenueE6} />
           <Stat label="Customer LP in pool" value={economics.customerLpE6} />
+          {/* custody cash-flow group: deposits, withdrawals, then pending (flashing red when >0) immediately left of P/L */}
+          {treasury && <Stat label="Total deposits" value={economics.totalDepositsE6} />}
+          {treasury && <Stat label="Total withdrawals" value={economics.totalWithdrawalsE6} />}
+          {treasury && (
+            <Stat
+              label="Pending withdrawals"
+              value={treasury.pendingE6}
+              className={BigInt(treasury.pendingE6) > 0n ? 'pending-alert' : ''}
+            />
+          )}
           {treasury && <PnlStat label="P/L (treasury − customer funds − pending payouts)" value={pnlE6.toString()} />}
         </div>
       ) : (

@@ -78,7 +78,19 @@ export interface HouseEconomics {
   feeRevenueE6: string; // house cut of trading fees (FEE_REVENUE)
   fundingCollectedE6: string; // gross funding customers paid in
   fundingRevenueE6: string; // net funding the house kept
+  totalDepositsE6: string; // lifetime credited customer deposits (real-funds; 0 in play-money)
+  totalWithdrawalsE6: string; // lifetime confirmed customer withdrawals (real-funds; 0 in play-money)
   pnlBreakdown: HousePnlBreakdown;
+}
+
+/** Lifetime customer cash flows from the custody tables — credited deposits + confirmed withdrawals.
+ *  Empty (0) in play-money mode, where those tables aren't used. */
+async function customerFlowTotals(db: Db): Promise<{ deposits: bigint; withdrawals: bigint }> {
+  const [dep, wd] = await Promise.all([
+    db.query<{ s: string }>(`SELECT COALESCE(SUM(usdc_credited_e6), 0)::text AS s FROM deposits WHERE status = 'credited'`),
+    db.query<{ s: string }>(`SELECT COALESCE(SUM(amount_e6), 0)::text AS s FROM withdrawals WHERE status = 'confirmed'`),
+  ]);
+  return { deposits: BigInt(dep.rows[0].s), withdrawals: BigInt(wd.rows[0].s) };
 }
 
 /**
@@ -88,10 +100,11 @@ export interface HouseEconomics {
  * /admin/treasury endpoint and layer on top of this when present.
  */
 export async function houseEconomics(db: Db): Promise<HouseEconomics> {
-  const [cust, customerLp, bd] = await Promise.all([
+  const [cust, customerLp, bd, flows] = await Promise.all([
     customerFunds(db),
     customerLpTotal(db),
     housePnlBreakdown(db),
+    customerFlowTotals(db),
   ]);
   return {
     freeE6: cust.freeE6.toString(),
@@ -103,6 +116,8 @@ export async function houseEconomics(db: Db): Promise<HouseEconomics> {
     // holds — no race between two snapshots (the same approach treasuryState uses).
     fundingCollectedE6: bd.fundingGrossE6,
     fundingRevenueE6: bd.fundingNetE6,
+    totalDepositsE6: flows.deposits.toString(),
+    totalWithdrawalsE6: flows.withdrawals.toString(),
     pnlBreakdown: bd,
   };
 }
