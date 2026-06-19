@@ -170,4 +170,49 @@
      per-skin input rules in themes.css carry higher specificity than any flat selector here,
      and the floor must hold across every skin. */
   input[type='text'], input[type='number'] { font-size: 16px !important; }
+
+  /* ---- Markets screener → row-cards (Option A) ----
+     The desktop screener is a fixed-height pane with its own scrolling table. On mobile that
+     fights the single-column model, so the screener flows into the page scroll (the .app-container
+     padding-bottom above already clears the fixed tab bar) and each table row becomes a card:
+     [thumb name] on top, rarity under it, with price / 24h% / volume grouped on the right. */
+  .screener { height: auto; overflow: visible; }
+  .screener-table-wrap { overflow: visible; }
+
+  /* compact filter bar; the search drops to its own full-width row */
+  .screener-bar { padding: 0.45rem 0.5rem; gap: 0.32rem; }
+  .screener-spacer { display: none; }
+  .screener-bar .game-tab-btn,
+  .screener-bar .sidebar-tab-btn { font-size: 0.4rem; padding: 0.32rem 0.4rem; }
+  .screener-jpy { font-size: 0.4rem; padding: 0.32rem 0.45rem; }
+  .screener-select { font-size: 0.4rem; }
+  .screener-search { flex: 1 1 100%; width: auto; }
+
+  /* unbuild the table into a stack of grid cards */
+  .screener-table thead { display: none; }
+  .screener-table,
+  .screener-table tbody,
+  .screener-table tr,
+  .screener-table td { display: block; }
+  .screener-table tr.screener-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    grid-template-areas:
+      "ident  ident  price"
+      "rarity change vol";
+    align-items: center;
+    column-gap: 0.5rem;
+    row-gap: 0.25rem;
+    padding: 0.55rem 0.65rem;
+  }
+  .screener-row td { padding: 0; border: none; text-align: left; }
+  .screener-row td:nth-child(1) { display: none; }                  /* rank # — row order conveys it */
+  .screener-row td:nth-child(2) { grid-area: ident; min-width: 0; } /* thumb + name (stays a flex row) */
+  .screener-row td:nth-child(3) { grid-area: price; }  /* live price (right-aligned via .num) */
+  .screener-row td:nth-child(4) { grid-area: change; } /* 24h % — keeps its up/down colour */
+  .screener-row td:nth-child(5) { grid-area: vol; text-align: right; color: var(--text-muted); font-size: 0.42rem; }
+  .screener-row td:nth-child(6) { grid-area: rarity; }              /* rarity badge, under the name */
+  .screener-name { max-width: none; }
+  .screener-thumb { width: 26px; height: 36px; }
+  .screener-badge { font-size: 0.38rem; }
 }

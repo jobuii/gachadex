@@ -7,11 +7,12 @@ import { useRealtime, liveMarkE6 } from '../store/realtime';
 // off the 30s REST snapshot (markE6 / volume24hUsd / change24hPct) so the order doesn't thrash on every
 // live tick; the price cell subscribes to the live mark so only it re-renders. Row click → trade view.
 
+// Fixed brand dot colours, matching SidebarMarkets' game tabs (gold/red/violet); 'All' = neutral.
 const GAMES = [
-  { id: 'all', label: 'All' },
-  { id: 'pokemon', label: 'Pokémon' },
-  { id: 'onepiece', label: 'One Piece' },
-  { id: 'mtg', label: 'Magic' },
+  { id: 'all', label: 'All', color: '#8b949e' },
+  { id: 'pokemon', label: 'Pokémon', color: '#f0c040' },
+  { id: 'onepiece', label: 'One Piece', color: '#d4202a' },
+  { id: 'mtg', label: 'Magic', color: '#7c5cff' },
 ];
 const SORTS = [
   { id: 'top', label: 'Top' },
@@ -77,8 +78,8 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
       <div className="screener-bar">
         <div className="screener-games">
           {GAMES.map((g) => (
-            <button key={g.id} className={`game-tab-btn ${game === g.id ? 'active' : ''}`} onClick={() => setGame(g.id)}>
-              {g.label}
+            <button key={g.id} className={`game-tab-btn ${game === g.id ? 'on' : ''}`} style={{ '--dot': g.color }} onClick={() => setGame(g.id)}>
+              <span className="gdot" />{g.label}
             </button>
           ))}
         </div>
