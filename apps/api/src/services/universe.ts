@@ -183,8 +183,8 @@ export async function applyUniverse(
       `UPDATE markets SET featured=true,
          scrydex_card_id=COALESCE($2, scrydex_card_id), scrydex_expansion_id=COALESCE($3, scrydex_expansion_id),
          provider_card_id=COALESCE(provider_card_id, $4),
-         requires_scrydex=(COALESCE(provider_card_id, $4) IS NULL) WHERE tcgplayer_id=$1`,
-      [m.tcgplayerId, m.scrydexCardId, m.scrydexExpansionId, m.tcgplCardId],
+         requires_scrydex=(COALESCE(provider_card_id, $4) IS NULL), jpy=$5 WHERE tcgplayer_id=$1`,
+      [m.tcgplayerId, m.scrydexCardId, m.scrydexExpansionId, m.tcgplCardId, m.reason === 'jpy-floor'],
     );
     result.updated++;
   }
@@ -210,8 +210,8 @@ export async function applyUniverse(
         symbol: cardSymbol(game, providerId), card_id: providerId, game, tcgplayer_id: m.tcgplayerId, featured: true,
       };
       const id = await upsertCardMarket(db, { ...toCardUpsert(fromScrydexCard(card, t)), featured: true });
-      await db.query(`UPDATE markets SET scrydex_card_id=$2, scrydex_expansion_id=$3, requires_scrydex=(provider_card_id IS NULL) WHERE id=$1`,
-        [id, m.scrydexCardId, m.scrydexExpansionId]);
+      await db.query(`UPDATE markets SET scrydex_card_id=$2, scrydex_expansion_id=$3, requires_scrydex=(provider_card_id IS NULL), jpy=$4 WHERE id=$1`,
+        [id, m.scrydexCardId, m.scrydexExpansionId, m.reason === 'jpy-floor']);
       result.created++;
     }
   }
@@ -222,8 +222,8 @@ export async function applyUniverse(
       if (!c) { result.fetchFailures++; continue; }
       const t: TrackedMarket = { provider_card_id: c.id, symbol: cardSymbol(m.game, c.id), card_id: c.id, game: m.game, featured: true };
       const id = await upsertCardMarket(db, { ...toCardUpsert(fromTplCard(c, t)), featured: true });
-      await db.query(`UPDATE markets SET scrydex_card_id=COALESCE($2, scrydex_card_id), requires_scrydex=(provider_card_id IS NULL) WHERE id=$1`,
-        [id, m.scrydexCardId]);
+      await db.query(`UPDATE markets SET scrydex_card_id=COALESCE($2, scrydex_card_id), requires_scrydex=(provider_card_id IS NULL), jpy=$3 WHERE id=$1`,
+        [id, m.scrydexCardId, m.reason === 'jpy-floor']);
       result.created++;
     }
   }

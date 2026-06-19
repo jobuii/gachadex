@@ -1619,3 +1619,9 @@ td.addr:hover { text-decoration: underline; }
 /* sidebar top-mover sort pills (Option C) — a compact row below the search */
 .sidebar-sorts { display: flex; padding: 0 0.6rem 0.5rem; }
 .sidebar-sorts .sidebar-tab-btn { font-size: 0.42rem; padding: 0.32rem 0.3rem; }
+.sidebar-sorts .jpy-pill { margin-left: 0.4rem; } /* separate the JPY toggle from the exclusive sort pills */
+
+/* JPY on/off toggle in the screener bar — gold when on (showing Japanese-market cards) */
+.screener-jpy { background: var(--bg-3); border: var(--border-w) solid var(--border); color: var(--text-muted);
+  font-family: var(--font-base); font-size: 0.45rem; padding: 0.42rem 0.5rem; cursor: pointer; border-radius: var(--radius); }
+.screener-jpy.on { color: var(--gold); border-color: var(--gold); }

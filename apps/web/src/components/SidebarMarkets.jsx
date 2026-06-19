@@ -92,6 +92,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
   const [game, setGame] = useState('pokemon');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('top'); // cards top-mover sort: top|volume|gainers|losers
+  const [showJpy, setShowJpy] = useState(false); // JP cards hidden by default — the main 250/game is English
   const [catalog, setCatalog] = useState(null); // null = inactive; [] = no results
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState(false); // search failed/unavailable (≠ zero matches)
@@ -166,10 +167,11 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
     const featured = mine.filter((m) => m.featured);
     const base = q ? mine : featured.length ? featured : mine;
     return base
+      .filter((m) => showJpy || !m.jpy)
       .filter((m) => m.displayName.toLowerCase().includes(q.toLowerCase()))
       .sort(CARD_SORTS[sortMode] ?? CARD_SORTS.top);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [markets, tab, game, q, sortMode]);
+  }, [markets, tab, game, q, sortMode, showJpy]);
 
   // Catalog rows whose market is already shown above are noise — keep only new/unlisted cards
   // (and variant twins whose canonical market didn't match the local name filter).
@@ -232,6 +234,14 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
               {s.label}
             </button>
           ))}
+          <button
+            className={`sidebar-tab-btn jpy-pill ${showJpy ? 'active' : ''}`}
+            aria-pressed={showJpy}
+            onClick={() => setShowJpy((v) => !v)}
+            title="Show Japanese-market cards"
+          >
+            JPY
+          </button>
         </div>
       )}
 
