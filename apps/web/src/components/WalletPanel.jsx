@@ -89,7 +89,11 @@ export function WalletPanel({ onChanged }) {
       // server renders the exact message binding (amount, dest, nonce); the wallet signs it —
       // a stolen session alone can't move funds
       const r = await signAndSubmitWithdrawal({ amountE6, dest: to, signMessage });
-      setMsg(`Withdrawal of ${formatUsd(BigInt(amountE6))} ${r.status} — funds reserved, payout follows approval.`);
+      setMsg(
+        r.autoApprove
+          ? `Withdrawal of ${formatUsd(BigInt(amountE6))} approved — funds reserved, your payout is on its way.`
+          : `Withdrawal of ${formatUsd(BigInt(amountE6))} ${r.status} — funds reserved, payout follows approval.`,
+      );
       setAmount('');
       loadTxs();
       onChanged?.();

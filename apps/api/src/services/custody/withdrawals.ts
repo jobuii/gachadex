@@ -7,6 +7,7 @@ import { isValidPubkey, verifyWithdrawalStepUp } from '../auth.ts';
 import { usdc } from '../../money.ts';
 import type { CustodyLog } from './deposits.ts';
 import { withdrawalsFrozen } from './treasury.ts';
+import { getWithdrawalAutoProcess } from '../withdrawal-config.ts';
 
 /**
  * Withdrawal pipeline (custody P2). Lifecycle: requested -> signed -> broadcast -> confirmed,
@@ -241,6 +242,17 @@ export async function processWithdrawal(db: Db, chain: WithdrawChain, id: string
 /** The WITHDRAWAL_AUTO_PROCESS loop: process accepted withdrawals up to the auto-approve cap.
  *  Larger rows (and everything while frozen) sit debited until an operator runs
  *  processWithdrawal explicitly — the P3 velocity guard on automated payouts. */
+/** Whether a freshly-requested withdrawal of `amountE6` will be auto-processed by the worker: the admin
+ *  toggle is ON, it's within the auto-approve cap, and withdrawals aren't frozen (a PoR breach pauses even
+ *  auto-approval). Drives the client's request-confirmation message. */
+export async function willAutoApprove(db: Db, amountE6: bigint): Promise<boolean> {
+  return (
+    getWithdrawalAutoProcess() &&
+    amountE6 <= usdc(getLimits().withdrawalAutoApproveMaxUsd) &&
+    !(await withdrawalsFrozen(db))
+  );
+}
+
 export async function processAllRequested(
   db: Db,
   chain: WithdrawChain,

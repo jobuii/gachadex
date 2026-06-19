@@ -7,7 +7,7 @@ import { authenticate } from '../plugins/auth.ts';
 import { rl } from './_ratelimit.ts';
 import { lim } from './history.ts';
 import { getOrCreateDepositAddress } from '../services/custody/wallet.ts';
-import { requestWithdrawal } from '../services/custody/withdrawals.ts';
+import { requestWithdrawal, willAutoApprove } from '../services/custody/withdrawals.ts';
 import { createWithdrawalNonce } from '../services/auth.ts';
 import { getWalletTransactions } from '../services/history.ts';
 
@@ -37,11 +37,15 @@ export async function walletRoutes(app: FastifyInstance): Promise<void> {
   // Step 2: submit the signed message. Validates + debits atomically; payout follows on approval.
   app.post('/wallet/withdraw', rl(config.routeRateLimits.withdraw, { preHandler: authenticate, config: { scope: 'full' } }), async (req) => {
     const input = WithdrawRequest.parse(req.body);
-    const w = await requestWithdrawal(await getDb(), req.userId!, req.pubkey!, {
+    const db = await getDb();
+    const w = await requestWithdrawal(db, req.userId!, req.pubkey!, {
       ...input,
       amountE6: BigInt(input.amountE6),
     });
-    return { id: w.id, status: w.status, amountE6: w.amountE6.toString(), dest: w.dest, duplicate: w.duplicate ?? false };
+    // Tell the client whether the worker will auto-process this one (toggle on + under cap + not frozen),
+    // so it shows "approved, on its way" vs "follows approval".
+    const autoApprove = await willAutoApprove(db, w.amountE6);
+    return { id: w.id, status: w.status, amountE6: w.amountE6.toString(), dest: w.dest, duplicate: w.duplicate ?? false, autoApprove };
   });
 
   // Deposit/withdrawal lifecycle (the on-chain status the ledger history doesn't carry).
