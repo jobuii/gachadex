@@ -40,13 +40,14 @@ export interface MarketRow {
   featured: boolean;
   requires_scrydex: boolean; // priced only by Scrydex (JP + Scrydex-only EN) → hidden until ORACLE_PRIMARY=scrydex
   rarity: string | null; // metadata->>'rarity' — surfaced for the screener's Rarity column/filter
+  jpy: boolean; // Japanese-market card (the JPY>$threshold set) — drives the screener/sidebar JPY toggle
 }
 
 const COLS = `id, kind, game, symbol, display_name, card_id, variant, index_slug, image_small, set_logo, status, tradeable,
   max_leverage_e2, init_margin_bps, maint_margin_bps,
   max_oi_long_uusdc::text AS max_oi_long_uusdc, max_oi_short_uusdc::text AS max_oi_short_uusdc,
   skew_k_e6::text AS skew_k_e6, premium_cap_e6::text AS premium_cap_e6, max_dev_bps,
-  min_qty_e6::text AS min_qty_e6, qty_step_e6::text AS qty_step_e6, price_tick_e6::text AS price_tick_e6, price_pinned, low_confidence, mark_clamped, featured, requires_scrydex,
+  min_qty_e6::text AS min_qty_e6, qty_step_e6::text AS qty_step_e6, price_tick_e6::text AS price_tick_e6, price_pinned, low_confidence, mark_clamped, featured, requires_scrydex, jpy,
   metadata->>'rarity' AS rarity`;
 
 export async function getMarketById(q: Queryer, id: string): Promise<MarketRow | null> {
@@ -154,6 +155,7 @@ export interface MarketView {
   featured: boolean; // top-250-by-price member (the sidebar's default card list)
   volume24hUsd: number; // 24h traded notional (USD) — the screener Volume column + Top-Volume sort
   rarity: string | null; // card rarity (from metadata) — the screener Rarity column + By-Rarity filter
+  jpy: boolean; // Japanese-market card — the JPY on/off filter (default off: the main 250/game is English)
 }
 
 /** Per-market details (card metadata + graded prices) for the detail panel. */
@@ -271,6 +273,7 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
         featured: m.featured,
         volume24hUsd: volMap.get(m.id) ?? 0,
         rarity: m.rarity,
+        jpy: m.jpy,
       };
     });
 }

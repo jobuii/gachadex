@@ -38,12 +38,14 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
   const [sort, setSort] = useState('top');
   const [rarity, setRarity] = useState('all');
   const [search, setSearch] = useState('');
+  const [showJpy, setShowJpy] = useState(false); // JP cards hidden by default — the main 250/game is English
 
   const cards = useMemo(() => (markets || []).filter((m) => m.kind === 'card'), [markets]);
   const rarities = useMemo(() => [...new Set(cards.map((c) => c.rarity).filter(Boolean))].sort(), [cards]);
 
   const rows = useMemo(() => {
     let r = cards;
+    if (!showJpy) r = r.filter((c) => !c.jpy);
     if (game !== 'all') r = r.filter((c) => c.game === game);
     if (rarity !== 'all') r = r.filter((c) => c.rarity === rarity);
     const q = search.trim().toLowerCase();
@@ -55,7 +57,7 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
       losers: (a, b) => (a.change24hPct ?? 0) - (b.change24hPct ?? 0),
     };
     return [...r].sort(by[sort]);
-  }, [cards, game, rarity, search, sort]);
+  }, [cards, game, rarity, search, sort, showJpy]);
 
   return (
     <div className="screener">
@@ -81,6 +83,9 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
             <option key={r} value={r}>{r}</option>
           ))}
         </select>
+        <button className={`screener-jpy ${showJpy ? 'on' : ''}`} onClick={() => setShowJpy((v) => !v)} aria-pressed={showJpy} title="Show Japanese-market cards">
+          JPY {showJpy ? 'ON' : 'OFF'}
+        </button>
         <input className="screener-search" placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} />
       </div>
 
