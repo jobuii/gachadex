@@ -84,6 +84,13 @@ flip.gg-style "rain", our brand: **DROP**. A slim bar pinned at the **top of the
 to DROP"* (big styled word, our accent) + a **pot pill** (mascot + amount) + a **countdown** — opening a
 modal. Style per `references/flipgg-rain-bar.png`, in OUR palette (dark + `--accent`/`--gold`).
 
+**Inspiration & anti-farmer gate (why DROP is gated).** Casino "rain" is the model: Stake's **RainBot**
+drops on an **hourly** timer; flip.gg's rain requires joining in the **last ~2 min** of the countdown.
+Crucially both **gate eligibility to stop bots/farmers** — flip.gg requires an account **above level 1**,
+Stake requires **Level-2 KYC + wagering history**. DROP keeps the timed-pot shape but swaps the KYC/level
+gate for an **on-chain** one (a wallet must have **deposited** or hold **500K+ $GDEX**, see Eligibility),
+which is harder to farm than a chat level and needs no KYC tier.
+
 **Money model (decided): real money, house-funded baseline + player top-up.** The app runs on **real
 funds** today, so DROP is a real-USDC feature end to end — no play-money path. The **house funds and buys
 the pack**; **player tips (real USDC) top up the pot** to cut the house's cost or, when tips are large
@@ -132,6 +139,10 @@ required for a round to run — they only raise the ceiling.
 - **Schema:** `drop_rounds(id,status,pot_uusdc,scheduled_at,drawn_at,winner_user_id,card_meta)`,
   `drop_tips(round_id,user_id,amount_uusdc)`.
 - **Dependency:** rare.win API access + pack-open endpoint (we'll have it for Phase 2).
+- **Future — scheduled mega-DROPs (marketing):** beyond the steady `DROP_INTERVAL` cadence, support an
+  occasional **mega-DROP** (e.g. a weekly **"1K DROP"**) seeded with a large house contribution as a
+  marketing / acquisition event — same mechanic, much bigger pot/pack. Implement as a scheduled one-off
+  override of `DROP_HOUSE_FLOOR` for a named round (no new draw logic).
 
 ## F7 — Presence (online count)
 Both references show it prominently ("350 online" / "24 ONLINE"). A green-dot **"N online"** in the chat
