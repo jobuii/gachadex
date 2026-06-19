@@ -249,6 +249,11 @@ treasury surplus (admin panel).
 **Custody limits** — hot-wallet cap, withdrawal daily cap, auto-approve max, min deposit/withdrawal/
 sweep, swap slippage — are **live-editable from the admin panel** (no redeploy); defaults come from env.
 
+**Withdrawal approval.** Withdrawals up to the **auto-approve max** are signed + broadcast automatically by
+a worker loop; larger ones always wait for manual operator approval. The auto-approval path itself is a
+**live admin toggle** (default `WITHDRAWAL_AUTO_PROCESS`) — turn it **off** and *every* withdrawal,
+regardless of size, requires manual approval; the change converges within ~30s, no redeploy.
+
 **Boot gate.** With `REAL_FUNDS=true` the API refuses to start unless the custody config is present
 (`USDC_MINT`, `TREASURY_PUBKEY`, the deposit seed, `HOT_WALLET_SECRET`); on mainnet it additionally
 requires `ALLOW_MAINNET_FUNDS=true`.
@@ -318,6 +323,15 @@ chat (animated falling-`G` brand marks, "It's about to DROP") and opens a modal 
   `DROP_INTERVAL`), the on-chain draw of a random eligible wallet (deposited **or** holding ≥ `DROP_GDEX_MIN`
   $GDEX), buying/opening the pack via the **rare.win** API, and the NFT prize (sell-back for USDC or keep).
   These need rare.win API access and are not built yet.
+
+### Admin **Customers** view (operator tab)
+
+One row per user — wallet, deposit address, balances, LP, volume, fees/funding, realized/unrealized P/L,
+deposits/withdrawals/tips — paginated + sortable, with operator close actions (one position, one customer,
+or a kill-switch across all). Each active customer expands to a drill-down with two tabs:
+- **Positions** — open positions per market (entry, mark, uP/L, margin, liq, **open date**), with per-row close.
+- **History** — deposits, withdrawals, and completed trades merged reverse-chronologically, each **dated**,
+  with amount + status. (Sourced from the existing per-user history queries; no separate store.)
 
 ### Admin **CHAT** view (3rd operator tab)
 
@@ -407,7 +421,7 @@ applied on boot (`db/migrate.ts`).
 | `GET /lp/pool` · `GET /lp/position` · `POST /lp/deposit` · `POST /lp/withdraw` | mixed | LP pool state + provide/withdraw liquidity |
 | `GET /leaderboard` · `GET /referral/me` · `POST /referral/redeem` | mixed | Leaderboard (public, optional viewer); referral code + redeem |
 | `GET /wallet/deposit-address` · `POST /wallet/withdraw/nonce` · `POST /wallet/withdraw` · `GET /wallet/transactions` | yes | Real-funds custody: deposit address, withdraw (wallet step-up), wallet history |
-| `/admin/markets/:id/price` · `/admin/treasury` · `/admin/insurance/*` · `/admin/custody-limits` · `/admin/withdrawals/*` · `/admin/freeze` · `/admin/customers` · `/admin/chat/*` · live knobs `/admin/{fee,liq-fee,funding-factor,mark-clamp}` · `/admin/{restrictions,mark-guards}` | admin key | Operator ops (manual pricing always; custody ops under real funds) + Customers & CHAT view, the live-tunable engine knobs, and the price-confidence / mark-guard panels — see [docs/ops-runbook.md](docs/ops-runbook.md) |
+| `/admin/markets/:id/price` · `/admin/treasury` · `/admin/insurance/*` · `/admin/custody-limits` · `/admin/withdrawals/*` · `/admin/freeze` · `/admin/customers` · `/admin/customers/:id/{positions,history}` · `/admin/chat/*` · live knobs `/admin/{fee,liq-fee,funding-factor,mark-clamp,withdrawal-auto-process}` · `/admin/{restrictions,mark-guards}` | admin key | Operator ops (manual pricing always; custody ops under real funds) + Customers & CHAT view, the live-tunable engine knobs, and the price-confidence / mark-guard panels — see [docs/ops-runbook.md](docs/ops-runbook.md) |
 | `GET /chat` · `POST /chat` · `/chat/messages/:id/react` · `/chat/ranks` · `/chat/profile/:id` · `GET /chat/drop/pot` · `POST /chat/drop/tip` · mod routes | mixed | Live chat: read/post, reactions, rank map, profile card, DROP pot tips (real USDC), mod actions |
 | `POST /webhooks/scrydex` | HMAC | Scrydex push re-pricing (Stripe-style `t=,v1=` signature over the raw body); active only under `ORACLE_PRIMARY=scrydex` |
 | `GET /health` | public | Health check |
@@ -449,6 +463,7 @@ to the browser). Copy `apps/api/.env.example` → `apps/api/.env`; every key has
 | `DEPOSIT_MASTER_SEED` · `HOT_WALLET_SECRET` | _(empty)_ | Custody keys (real-funds) — set in the host's secret store, never committed |
 | `ADMIN_API_KEY` | _(empty)_ | ≥32 chars; enables the `/admin` operator routes |
 | `HOT_WALLET_MAX_USD` · `WITHDRAWAL_DAILY_CAP_USD` · … | see config.ts | Custody limits — defaults here, **live-editable in the admin panel** |
+| `WITHDRAWAL_AUTO_PROCESS` | `false` | Boot default for the auto-withdrawal-approval toggle; flip it live from the admin panel (OFF = all withdrawals need manual approval) |
 | `OI_CAP_NAV_BPS` · `MAX_PNL_FACTOR_BPS` · `ADL_PNL_FACTOR_BPS` | `0` (off) | Pool-risk caps (NAV-relative OI · open-gate · ADL); turn on for real funds |
 | `FAUCET_DEFAULT_USD` | `10000` | Per-claim play USDC (balance capped at $1M) |
 | `REFERRAL_BONUS_USD` / `MAX_REFERRALS_PAID` | `1000` / `50` | Referral payout (both parties) + per-referrer cap |
