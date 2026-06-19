@@ -5,7 +5,7 @@ import { SidebarMarkets } from '../components/SidebarMarkets';
 import { TradingView } from '../components/TradingView';
 import { OrderEntry } from '../components/OrderEntry';
 import { BottomPanel } from '../components/BottomPanel';
-import { Marketplace } from '../components/Marketplace';
+import { MarketsScreener } from '../components/MarketsScreener';
 import { Portfolio } from '../components/Portfolio';
 import { PoolView } from '../components/PoolView';
 import { Leaderboard } from '../components/Leaderboard';
@@ -158,7 +158,7 @@ export function Exchange() {
         </div>
       )}
 
-      {activeView === 'markets' && <Marketplace markets={markets} loading={loading} onTradeMarket={handleTradeMarket} />}
+      {activeView === 'markets' && <MarketsScreener markets={markets} loading={loading} onTradeMarket={handleTradeMarket} />}
       {activeView === 'portfolio' && <Portfolio markets={markets} onSelect={handleTradeMarket} />}
       {activeView === 'pool' && <PoolView />}
       {activeView === 'leaderboard' && <Leaderboard />}

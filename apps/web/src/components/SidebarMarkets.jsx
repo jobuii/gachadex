@@ -8,6 +8,21 @@ import * as api from '../lib/api.js';
 const TABS = ['indices', 'cards'];
 const SERIES_ORDER = { gj: 0, gp: 1, pdq: 2 }; // GJ (Dow) → G&P (equal-weight) → Pokedaq (capped)
 
+// Cards-tab top-mover sort pills. Sort off the REST snapshot (markE6/volume24hUsd/change24hPct) so rows
+// don't reshuffle under the cursor on every live tick — same keys as the Markets screener page.
+const SORT_PILLS = [
+  { id: 'top', label: 'Top' },
+  { id: 'volume', label: 'Vol' },
+  { id: 'gainers', label: 'Gain' },
+  { id: 'losers', label: 'Lose' },
+];
+const CARD_SORTS = {
+  top: (a, b) => Number(b.markE6 ?? 0) - Number(a.markE6 ?? 0),
+  volume: (a, b) => (b.volume24hUsd ?? 0) - (a.volume24hUsd ?? 0),
+  gainers: (a, b) => (b.change24hPct ?? 0) - (a.change24hPct ?? 0),
+  losers: (a, b) => (a.change24hPct ?? 0) - (b.change24hPct ?? 0),
+};
+
 // Game filter (icon-only identity dots). Fixed brand colours, independent of the skin:
 // gold = Pokémon, red = One Piece, violet = Magic.
 const GAMES = [
@@ -76,6 +91,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
   const [tab, setTab] = useState('cards');
   const [game, setGame] = useState('pokemon');
   const [search, setSearch] = useState('');
+  const [sortMode, setSortMode] = useState('top'); // cards top-mover sort: top|volume|gainers|losers
   const [catalog, setCatalog] = useState(null); // null = inactive; [] = no results
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState(false); // search failed/unavailable (≠ zero matches)
@@ -151,9 +167,9 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
     const base = q ? mine : featured.length ? featured : mine;
     return base
       .filter((m) => m.displayName.toLowerCase().includes(q.toLowerCase()))
-      .sort((a, b) => Number(b.markE6 ?? 0) - Number(a.markE6 ?? 0));
+      .sort(CARD_SORTS[sortMode] ?? CARD_SORTS.top);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [markets, tab, game, q]);
+  }, [markets, tab, game, q, sortMode]);
 
   // Catalog rows whose market is already shown above are noise — keep only new/unlisted cards
   // (and variant twins whose canonical market didn't match the local name filter).
@@ -202,6 +218,22 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
+
+      {tab === 'cards' && (
+        <div className="sidebar-sorts" role="tablist" aria-label="Sort">
+          {SORT_PILLS.map((s) => (
+            <button
+              key={s.id}
+              role="tab"
+              aria-selected={sortMode === s.id}
+              className={`sidebar-tab-btn ${sortMode === s.id ? 'active' : ''}`}
+              onClick={() => setSortMode(s.id)}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="sidebar-col-headers">
         <span>#</span>

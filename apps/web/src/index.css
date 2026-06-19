@@ -1589,3 +1589,33 @@ td.addr:hover { text-decoration: underline; }
 .admin-panel .pnl-breakdown-table .muted { font-size: 0.92em; }
 .admin-panel .pnl-breakdown-total td { border-top: 1px solid var(--border); padding-top: 0.4rem; font-weight: 600; color: var(--text); }
 .admin-panel .wallet-input { font-family: var(--ops-font); font-size: 0.82rem; }
+
+/* ─── Markets screener (Option C) ─────────────────────────────────────────── */
+.screener { display: flex; flex-direction: column; height: calc(100vh - 64px); background: var(--bg); overflow: hidden; }
+.screener-bar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+  padding: 0.75rem 1rem; border-bottom: var(--border-w) solid var(--border); background: var(--bg-2); }
+.screener-games, .screener-sorts { display: flex; }
+.screener-spacer { flex: 1; }
+.screener-select, .screener-search { background: var(--bg-3); border: var(--border-w) solid var(--border);
+  color: var(--text); font-family: var(--font-base); font-size: 0.5rem; padding: 0.42rem 0.45rem; border-radius: var(--radius); }
+.screener-search { width: 160px; }
+.screener-table-wrap { flex: 1; overflow-y: auto; }
+.screener-table { width: 100%; border-collapse: collapse; font-size: 0.5rem; }
+.screener-table thead th { position: sticky; top: 0; z-index: 1; background: var(--bg-2); text-align: left;
+  color: var(--text-muted); font-size: 0.45rem; padding: 0.6rem 0.8rem; border-bottom: var(--border-w) solid var(--border); white-space: nowrap; }
+.screener-table th.num, .screener-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.screener-table th.sorted { color: var(--gold); }
+.screener-table tbody td { padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--bg-3); color: var(--text); }
+.screener-row { cursor: pointer; }
+.screener-row:hover { background: var(--bg-2); }
+.screener-table td.up { color: var(--success); }
+.screener-table td.down { color: var(--danger); }
+.screener-card { display: flex; align-items: center; gap: 0.6rem; }
+.screener-thumb { width: 28px; height: 38px; object-fit: contain; background: var(--bg-3); flex: none; border-radius: var(--radius); }
+.screener-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+.screener-badge { font-size: 0.4rem; color: var(--text-muted); border: 1px solid var(--border); padding: 0.15rem 0.35rem; border-radius: var(--radius); }
+.screener-empty { padding: 2rem 1rem; text-align: center; color: var(--text-muted); font-size: 0.5rem; }
+
+/* sidebar top-mover sort pills (Option C) — a compact row below the search */
+.sidebar-sorts { display: flex; padding: 0 0.6rem 0.5rem; }
+.sidebar-sorts .sidebar-tab-btn { font-size: 0.42rem; padding: 0.32rem 0.3rem; }
