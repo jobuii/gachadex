@@ -76,16 +76,29 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
   return (
     <div className="screener">
       <div className="screener-bar">
-        <div className="screener-games">
+        <div className="screener-games" role="tablist" aria-label="Game">
           {GAMES.map((g) => (
-            <button key={g.id} className={`game-tab-btn ${game === g.id ? 'on' : ''}`} style={{ '--dot': g.color }} onClick={() => setGame(g.id)}>
+            <button
+              key={g.id}
+              role="tab"
+              aria-selected={game === g.id}
+              className={`game-tab-btn ${game === g.id ? 'on' : ''}`}
+              style={{ '--dot': g.color }}
+              onClick={() => setGame(g.id)}
+            >
               <span className="gdot" />{g.label}
             </button>
           ))}
         </div>
-        <div className="screener-sorts">
+        <div className="screener-sorts" role="tablist" aria-label="Sort">
           {SORTS.map((s) => (
-            <button key={s.id} className={`sidebar-tab-btn ${sort === s.id ? 'active' : ''}`} onClick={() => setSort(s.id)}>
+            <button
+              key={s.id}
+              role="tab"
+              aria-selected={sort === s.id}
+              className={`sidebar-tab-btn ${sort === s.id ? 'active' : ''}`}
+              onClick={() => setSort(s.id)}
+            >
               {s.label}
             </button>
           ))}
