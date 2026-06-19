@@ -242,3 +242,48 @@ export async function getPositionHistory(db: Db, userId: string, limit?: number)
     };
   });
 }
+
+export interface CustomerHistoryRow {
+  kind: 'Deposit' | 'Withdrawal' | 'Trade';
+  time: string;
+  symbol: string | null; // the market (trades); null for wallet movements
+  detail: string | null; // deposit asset / withdrawal dest / trade "Long 5x"
+  amountUusdc: string; // signed micro-USDC: deposit +, withdrawal -, trade = realized P/L
+  status: string;
+}
+
+/**
+ * Admin customer-detail history: deposits + withdrawals (getWalletTransactions) and completed trades
+ * (getPositionHistory), normalized into ONE reverse-chronological list. Reuses the existing per-user
+ * history queries — no new SQL — so the admin view matches what the customer sees.
+ */
+export async function getCustomerHistory(db: Db, userId: string, limit?: number): Promise<CustomerHistoryRow[]> {
+  const [wallet, trades] = await Promise.all([
+    getWalletTransactions(db, userId, limit),
+    getPositionHistory(db, userId, limit),
+  ]);
+  const rows: CustomerHistoryRow[] = [];
+  for (const w of wallet) {
+    const usd = w.usdcE6 ?? '0'; // micro-USDC (credited proceeds / payout); 0 while a deposit is uncredited
+    rows.push({
+      kind: w.kind === 'deposit' ? 'Deposit' : 'Withdrawal',
+      time: w.time,
+      symbol: null,
+      detail: w.kind === 'deposit' ? w.asset : w.dest,
+      amountUusdc: w.kind === 'deposit' ? usd : `-${usd}`,
+      status: w.status,
+    });
+  }
+  for (const t of trades) {
+    rows.push({
+      kind: 'Trade',
+      time: t.closedAt ?? t.openedAt,
+      symbol: t.symbol,
+      detail: `${t.side} ${t.leverage}x`,
+      amountUusdc: t.realizedPnlUusdc,
+      status: t.status,
+    });
+  }
+  rows.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+  return rows.slice(0, clampLimit(limit));
+}

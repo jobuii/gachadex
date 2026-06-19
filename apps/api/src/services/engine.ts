@@ -563,11 +563,12 @@ export interface PositionView {
   markE6: string;
   unrealizedPnlUusdc: string;
   status: string;
+  openedAt: string;
 }
 
 export async function getUserPositions(db: Db, userId: string): Promise<PositionView[]> {
-  const r = await db.query<PositionRow & { symbol: string; display_name: string; mark: string | null }>(
-    `SELECT ${POS_COLS}, m.symbol, m.display_name,
+  const r = await db.query<PositionRow & { symbol: string; display_name: string; mark: string | null; opened_at: string }>(
+    `SELECT ${POS_COLS}, p.opened_at, m.symbol, m.display_name,
             (SELECT mark_price_e6::text FROM marks k WHERE k.market_id=p.market_id ORDER BY computed_at DESC LIMIT 1) AS mark
      FROM positions p JOIN markets m ON m.id = p.market_id
      WHERE p.user_id=$1 AND p.status='open' ORDER BY p.opened_at DESC`,
@@ -590,6 +591,7 @@ export async function getUserPositions(db: Db, userId: string): Promise<Position
       markE6: markE6.toString(),
       unrealizedPnlUusdc: uPnl.toString(),
       status: row.status,
+      openedAt: row.opened_at,
     };
   });
 }

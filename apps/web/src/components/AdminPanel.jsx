@@ -54,6 +54,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
   const [fundingDraft, setFundingDraft] = useState(''); // operator enters a PERCENT (0.30 = 0.30%/hour)
   const [markClamp, setMarkClampState] = useState(null); // { bps, default } | null — §6a mark-guard clamp
   const [markClampDraft, setMarkClampDraft] = useState(''); // operator enters a PERCENT (25 = 25%/update)
+  const [withdrawalAuto, setWithdrawalAuto] = useState(null); // { enabled, default } | null — auto-withdrawal toggle
   const [stats, setStats] = useState(null); // { markets: [...], totals } | null — per-asset trading stats
   const [restrictions, setRestrictions] = useState(null); // { restricted:[...], flippedToday:[...] } | null — price-confidence gate
   const [markGuards, setMarkGuards] = useState(null); // { clamped:[...], flippedToday:[...] } | null — §6a mark guard
@@ -160,6 +161,13 @@ export function AdminPanel({ onGoToMarket } = {}) {
       })(),
       (async () => {
         try {
+          setWithdrawalAuto(await api.adminGetWithdrawalAutoProcess(key)); // auto-withdrawal toggle
+        } catch {
+          setWithdrawalAuto(null);
+        }
+      })(),
+      (async () => {
+        try {
           setStats(await api.adminGetMarketStats(key)); // per-asset stats + net exposure
         } catch {
           setStats(null);
@@ -229,6 +237,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
     setLiqFeeState(null);
     setFundingFactorState(null);
     setMarkClampState(null);
+    setWithdrawalAuto(null);
     setStats(null);
     setRestrictions(null);
     setMarkGuards(null);
@@ -368,6 +377,31 @@ export function AdminPanel({ onGoToMarket } = {}) {
       setMarkClampState(r);
       setMarkClampDraft('');
       setMsg(`Mark-guard clamp set to ${(r.bps / 100).toFixed(2)}%/update (uncorroborated moves).`);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Auto-withdrawal toggle: ON = the worker auto-approves under-cap withdrawals; OFF = all need manual approval.
+  const toggleWithdrawalAuto = async () => {
+    setErr(null);
+    setMsg(null);
+    const next = !withdrawalAuto?.enabled;
+    if (
+      !window.confirm(
+        next
+          ? 'Turn ON automatic withdrawal approval?\nEligible withdrawals (under the auto-approve cap) will process without manual review.'
+          : 'Turn OFF automatic withdrawal approval?\nEvery withdrawal will then require manual operator approval.',
+      )
+    )
+      return;
+    setBusy('withdrawalAuto');
+    try {
+      const r = await api.adminSetWithdrawalAutoProcess(next, adminKey.trim());
+      setWithdrawalAuto(r);
+      setMsg(`Withdrawal auto-approval is now ${r.enabled ? 'ON' : 'OFF'}.`);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -766,6 +800,30 @@ export function AdminPanel({ onGoToMarket } = {}) {
           {busy === 'markClamp' ? '…' : 'Save clamp'}
         </button>
       </div>
+
+      {withdrawalAuto && (
+        <>
+          <h3 style={{ marginTop: '1.25rem' }}>Withdrawal auto-approval</h3>
+          <p className="ref-blurb">
+            When <strong>ON</strong>, withdrawals under the auto-approve cap are processed automatically by the
+            worker. When <strong>OFF</strong>, <strong>every</strong> withdrawal waits for manual operator
+            approval. Currently{' '}
+            <strong style={{ color: withdrawalAuto.enabled ? 'var(--success)' : 'var(--danger)' }}>
+              {withdrawalAuto.enabled ? 'ON' : 'OFF'}
+            </strong>
+            {` (default ${withdrawalAuto.default ? 'ON' : 'OFF'})`}.
+          </p>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.35rem 0' }}>
+            <button
+              className={`${withdrawalAuto.enabled ? 'btn-ghost' : 'btn-primary'} sm`}
+              disabled={busy === 'withdrawalAuto'}
+              onClick={toggleWithdrawalAuto}
+            >
+              {busy === 'withdrawalAuto' ? '…' : withdrawalAuto.enabled ? 'Turn OFF auto-approval' : 'Turn ON auto-approval'}
+            </button>
+          </div>
+        </>
+      )}
 
       {custodyLimits && (
         <>

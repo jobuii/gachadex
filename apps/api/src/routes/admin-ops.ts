@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest } from '@pokex/shared-types';
+import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, WithdrawalAutoProcessRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { rl } from './_ratelimit.ts';
@@ -19,6 +19,8 @@ import { chatConfigView, setChatThresholds } from '../services/chat-config.ts';
 import { dropConfigView, setDropConfig, getDropView } from '../services/drop-config.ts';
 import { totalTippedE6, recentTips } from '../services/drop.ts';
 import { getUserPositions, liquidateAllEligible } from '../services/engine.ts';
+import { withdrawalAutoProcessView, setWithdrawalAutoProcess } from '../services/withdrawal-config.ts';
+import { getCustomerHistory } from '../services/history.ts';
 import { adminClosePosition, adminCloseUserPositions, adminCloseAllPositions } from '../services/admin-close.ts';
 
 /**
@@ -107,6 +109,14 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     return markClampView();
   });
 
+  // Live toggle: automatic withdrawal approval on/off. OFF => every withdrawal waits for manual approval.
+  app.get('/admin/withdrawal-auto-process', rl(config.routeRateLimits.admin), async () => withdrawalAutoProcessView());
+  app.post('/admin/withdrawal-auto-process', rl(config.routeRateLimits.admin), async (req) => {
+    const { enabled } = WithdrawalAutoProcessRequest.parse(req.body);
+    await setWithdrawalAutoProcess(await getDb(), enabled);
+    return withdrawalAutoProcessView();
+  });
+
   // Operator "Customers" view — one row per user (wallet, deposit address, balances, lifetime volume,
   // fees, funding, realized/unrealized P/L, deposits/withdrawals). Paginated + sortable; `sort` is
   // whitelisted inside listCustomers.
@@ -121,6 +131,12 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/admin/customers/:id/positions', rl(config.routeRateLimits.admin), async (req) => {
     const { id } = req.params as { id: string };
     return { positions: await getUserPositions(await getDb(), id) };
+  });
+
+  // One customer's history (deposits, withdrawals, completed trades) for the expand-row History tab.
+  app.get('/admin/customers/:id/history', rl(config.routeRateLimits.admin), async (req) => {
+    const { id } = req.params as { id: string };
+    return { entries: await getCustomerHistory(await getDb(), id, 200) };
   });
 
   // Operator close one of a customer's positions (recorded as a platform close via PLATFORM_ACTOR).

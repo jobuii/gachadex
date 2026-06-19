@@ -21,6 +21,12 @@ const KILL_PHRASE = 'CLOSE ALL';
 const short = (a) => shortenPubkey(a) || '—';
 const usd = (e6) => formatUsd(BigInt(e6 ?? 0)); // ?? 0 guards against an older API missing the new fields
 const signed = (e6) => ({ color: BigInt(e6 ?? 0) < 0n ? 'var(--danger)' : 'var(--success)' });
+const hasVal = (e6) => BigInt(e6 ?? 0) > 0n;
+const fmtWhen = (t) => {
+  if (!t) return '—';
+  const d = new Date(t);
+  return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+};
 
 export function CustomersView({ adminKey, onGoToMarket }) {
   const [rows, setRows] = useState([]);
@@ -32,6 +38,8 @@ export function CustomersView({ adminKey, onGoToMarket }) {
   const [copied, setCopied] = useState(null);
   const [expanded, setExpanded] = useState(null); // userId currently expanded
   const [positions, setPositions] = useState({}); // userId -> positions[] | 'loading'
+  const [history, setHistory] = useState({}); // userId -> entries[] | 'loading'
+  const [tab, setTab] = useState({}); // userId -> 'positions' | 'history'
   const [busy, setBusy] = useState(null); // positionId | 'user:<id>' | 'all' | 'liquidate' — action in flight
   const [note, setNote] = useState(null); // action feedback line
   const [killOpen, setKillOpen] = useState(false); // global kill-switch confirmation modal
@@ -65,23 +73,33 @@ export function CustomersView({ adminKey, onGoToMarket }) {
   };
 
   // Expand a row to its open positions per market — lazy-loaded once, then cached.
-  const toggle = (userId) => {
+  const toggle = (c) => {
+    const userId = c.userId;
     if (expanded === userId) {
       setExpanded(null);
       return;
     }
     setExpanded(userId);
+    setTab((t) => ({ ...t, [userId]: t[userId] ?? (c.openPositions > 0 ? 'positions' : 'history') }));
     if (positions[userId] === undefined) {
       setPositions((p) => ({ ...p, [userId]: 'loading' }));
+      setHistory((h) => ({ ...h, [userId]: 'loading' }));
       reloadUser(userId);
     }
   };
 
+  // Load both tabs' data (history refreshes too after a close — a close becomes a completed trade).
   const reloadUser = (userId) =>
-    api
-      .adminGetCustomerPositions(userId, adminKey)
-      .then((r) => setPositions((p) => ({ ...p, [userId]: r.positions || [] })))
-      .catch(() => setPositions((p) => ({ ...p, [userId]: [] })));
+    Promise.all([
+      api
+        .adminGetCustomerPositions(userId, adminKey)
+        .then((r) => setPositions((p) => ({ ...p, [userId]: r.positions || [] })))
+        .catch(() => setPositions((p) => ({ ...p, [userId]: [] }))),
+      api
+        .adminGetCustomerHistory(userId, adminKey)
+        .then((r) => setHistory((h) => ({ ...h, [userId]: r.entries || [] })))
+        .catch(() => setHistory((h) => ({ ...h, [userId]: [] }))),
+    ]);
 
   // One busy/feedback skeleton for every close action; fn returns the note line to show.
   const runAction = async (busyKey, fn) => {
@@ -227,17 +245,19 @@ export function CustomersView({ adminKey, onGoToMarket }) {
           </thead>
           <tbody>
             {rows.map((c) => {
-              const open = c.openPositions > 0;
+              const expandable = c.openPositions > 0 || hasVal(c.depositsE6) || hasVal(c.withdrawalsE6) || hasVal(c.volumeE6);
               const pos = positions[c.userId];
+              const hist = history[c.userId];
+              const activeTab = tab[c.userId] ?? 'positions';
               return (
                 <Fragment key={c.userId}>
                   <tr className={expanded === c.userId ? 'cust-row-open' : ''}>
                     <td
                       className="cust-caret"
-                      style={{ cursor: open ? 'pointer' : 'default', opacity: open ? 1 : 0.25 }}
-                      onClick={() => open && toggle(c.userId)}
+                      style={{ cursor: expandable ? 'pointer' : 'default', opacity: expandable ? 1 : 0.25 }}
+                      onClick={() => expandable && toggle(c)}
                     >
-                      {open ? (expanded === c.userId ? '▾' : '▸') : ''}
+                      {expandable ? (expanded === c.userId ? '▾' : '▸') : ''}
                     </td>
                     <td className="addr" title={c.pubkey} onClick={() => copy(c.pubkey)}>
                       {copied && copied === c.pubkey ? 'copied!' : short(c.pubkey)}
@@ -264,55 +284,95 @@ export function CustomersView({ adminKey, onGoToMarket }) {
                     <tr className="cust-expand">
                       <td />
                       <td colSpan={COLS - 1}>
-                        {pos === 'loading' && <span className="muted">loading positions…</span>}
-                        {Array.isArray(pos) && pos.length === 0 && <span className="muted">No open positions.</span>}
-                        {Array.isArray(pos) && pos.length > 0 && (
+                        <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.45rem' }}>
+                          {['positions', 'history'].map((t) => (
+                            <button
+                              key={t}
+                              className={`${activeTab === t ? 'btn-primary' : 'btn-ghost'} sm`}
+                              onClick={() => setTab((s) => ({ ...s, [c.userId]: t }))}
+                            >
+                              {t === 'positions' ? `Positions${Array.isArray(pos) ? ` (${pos.length})` : ''}` : 'History'}
+                            </button>
+                          ))}
+                        </div>
+
+                        {activeTab === 'positions' ? (
                           <>
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.35rem' }}>
-                              <button
-                                className="btn-ghost sm"
-                                style={{ color: 'var(--danger)' }}
-                                disabled={busy != null}
-                                onClick={() => closeUser(c.userId, pos.length)}
-                              >
-                                {busy === 'user:' + c.userId ? 'closing…' : `Close all ${pos.length} positions`}
-                              </button>
-                            </div>
-                            <table className="cust-subtable">
-                              <thead>
-                                <tr>
-                                  <th>Market</th><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th>
-                                  <th>uP/L</th><th>Margin</th><th>Liq</th><th />
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {pos.map((p) => (
-                                  <tr key={p.id}>
-                                    <td>
-                                      <button
-                                        className="link-btn"
-                                        title={`Go to ${p.displayName || p.symbol}`}
-                                        onClick={() => onGoToMarket?.(p.marketId)}
-                                      >
-                                        {p.displayName || p.symbol}
-                                      </button>
-                                    </td>
-                                    <td className={p.side === 'long' ? 'up' : 'down'}>{p.side.toUpperCase()} {p.leverage}x</td>
-                                    <td className="num">{(Number(p.qtyE6) / 1e6).toFixed(2)}</td>
-                                    <td className="num">{usd(p.avgEntryE6)}</td>
-                                    <td className="num">{usd(p.markE6)}</td>
-                                    <td className="num" style={signed(p.unrealizedPnlUusdc)}>{formatSignedUsd(p.unrealizedPnlUusdc)}</td>
-                                    <td className="num">{usd(p.marginUusdc)}</td>
-                                    <td className="num down">{usd(p.liqPriceE6)}</td>
-                                    <td>
-                                      <button className="btn-ghost sm" disabled={busy != null} onClick={() => closeOne(c.userId, p)}>
-                                        {busy === p.id ? '…' : 'Close'}
-                                      </button>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                            {pos === 'loading' && <span className="muted">loading positions…</span>}
+                            {Array.isArray(pos) && pos.length === 0 && <span className="muted">No open positions.</span>}
+                            {Array.isArray(pos) && pos.length > 0 && (
+                              <>
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.35rem' }}>
+                                  <button
+                                    className="btn-ghost sm"
+                                    style={{ color: 'var(--danger)' }}
+                                    disabled={busy != null}
+                                    onClick={() => closeUser(c.userId, pos.length)}
+                                  >
+                                    {busy === 'user:' + c.userId ? 'closing…' : `Close all ${pos.length} positions`}
+                                  </button>
+                                </div>
+                                <table className="cust-subtable">
+                                  <thead>
+                                    <tr>
+                                      <th>Market</th><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th>
+                                      <th>uP/L</th><th>Margin</th><th>Liq</th><th>Opened</th><th />
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {pos.map((p) => (
+                                      <tr key={p.id}>
+                                        <td>
+                                          <button
+                                            className="link-btn"
+                                            title={`Go to ${p.displayName || p.symbol}`}
+                                            onClick={() => onGoToMarket?.(p.marketId)}
+                                          >
+                                            {p.displayName || p.symbol}
+                                          </button>
+                                        </td>
+                                        <td className={p.side === 'long' ? 'up' : 'down'}>{p.side.toUpperCase()} {p.leverage}x</td>
+                                        <td className="num">{(Number(p.qtyE6) / 1e6).toFixed(2)}</td>
+                                        <td className="num">{usd(p.avgEntryE6)}</td>
+                                        <td className="num">{usd(p.markE6)}</td>
+                                        <td className="num" style={signed(p.unrealizedPnlUusdc)}>{formatSignedUsd(p.unrealizedPnlUusdc)}</td>
+                                        <td className="num">{usd(p.marginUusdc)}</td>
+                                        <td className="num down">{usd(p.liqPriceE6)}</td>
+                                        <td className="muted">{fmtWhen(p.openedAt)}</td>
+                                        <td>
+                                          <button className="btn-ghost sm" disabled={busy != null} onClick={() => closeOne(c.userId, p)}>
+                                            {busy === p.id ? '…' : 'Close'}
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            {hist === 'loading' && <span className="muted">loading history…</span>}
+                            {Array.isArray(hist) && hist.length === 0 && <span className="muted">No deposits, withdrawals or completed trades yet.</span>}
+                            {Array.isArray(hist) && hist.length > 0 && (
+                              <table className="cust-subtable">
+                                <thead>
+                                  <tr><th>Date</th><th>Type</th><th>Detail</th><th>Amount</th><th>Status</th></tr>
+                                </thead>
+                                <tbody>
+                                  {hist.map((e, i) => (
+                                    <tr key={i}>
+                                      <td className="muted">{fmtWhen(e.time)}</td>
+                                      <td>{e.kind}</td>
+                                      <td>{e.kind === 'Trade' ? `${e.symbol} · ${e.detail}` : e.kind === 'Withdrawal' ? short(e.detail) : e.detail}</td>
+                                      <td className="num" style={signed(e.amountUusdc)}>{formatSignedUsd(e.amountUusdc)}</td>
+                                      <td className="muted">{e.status}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
                           </>
                         )}
                       </td>

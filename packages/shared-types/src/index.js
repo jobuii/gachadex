@@ -191,6 +191,9 @@ export const FundingFactorRequest = z.object({ bps: z.coerce.number().int().min(
 // (price creeps), higher = more pool protection (adopts moves faster).
 export const MarkClampRequest = z.object({ bps: z.coerce.number().int().min(100).max(9000) }).strict();
 
+// Admin toggle for automatic withdrawal approval. When false, all withdrawals require manual approval.
+export const WithdrawalAutoProcessRequest = z.object({ enabled: z.boolean() }).strict();
+
 // --- real-funds wallet (custody P2) -------------------------------------------
 // Withdrawals need a step-up: the wallet signs a server-rendered message over the EXACT
 // (amount, dest, nonce) — get the message from /wallet/withdraw/nonce, sign it, submit both.

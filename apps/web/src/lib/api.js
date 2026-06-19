@@ -236,11 +236,16 @@ export const adminSetFundingFactor = (bps, adminKey) => adminReq('/admin/funding
 // GET -> { bps, default }; POST { bps } (100-9000).
 export const adminGetMarkClamp = (adminKey) => adminGet('/admin/mark-clamp', adminKey);
 export const adminSetMarkClamp = (bps, adminKey) => adminReq('/admin/mark-clamp', adminKey, { bps });
+// Automatic withdrawal-approval toggle -> { enabled, default }.
+export const adminGetWithdrawalAutoProcess = (adminKey) => adminGet('/admin/withdrawal-auto-process', adminKey);
+export const adminSetWithdrawalAutoProcess = (enabled, adminKey) => adminReq('/admin/withdrawal-auto-process', adminKey, { enabled });
 // Per-customer operator view (paginated + sortable) -> { customers: [...], total }.
 export const adminGetCustomers = ({ limit = 50, offset = 0, sort = 'volume' } = {}, adminKey) =>
   adminGet(`/admin/customers?limit=${limit}&offset=${offset}&sort=${encodeURIComponent(sort)}`, adminKey);
 // One customer's open positions per market (expand-row drill-down) -> { positions: [...] }.
 export const adminGetCustomerPositions = (userId, adminKey) => adminGet(`/admin/customers/${userId}/positions`, adminKey);
+// One customer's history (deposits, withdrawals, completed trades) -> { entries: [...] }.
+export const adminGetCustomerHistory = (userId, adminKey) => adminGet(`/admin/customers/${userId}/history`, adminKey);
 // Operator position closes (recorded as platform closes). Scopes: one position, one customer, ALL customers.
 export const adminClosePosition = (userId, positionId, adminKey) =>
   adminReq(`/admin/customers/${userId}/positions/${positionId}/close`, adminKey);

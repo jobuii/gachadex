@@ -11,6 +11,7 @@ import { loadFee, loadLiqFee, loadFundingFactor } from './services/fees.ts';
 import { loadMarkClampBps } from './services/marks.ts';
 import { loadChatConfig } from './services/chat-config.ts';
 import { loadDropConfig } from './services/drop-config.ts';
+import { loadWithdrawalAutoProcess, getWithdrawalAutoProcess } from './services/withdrawal-config.ts';
 import { tryAcquireLease, releaseLease } from './services/lease.ts';
 import { getDefaultClient } from './services/providers/tcgpricelookup.ts';
 import { discoverGame, dueForRebalance, markRebalanced, retireDeadMarkets } from './services/providers/discovery.ts';
@@ -146,18 +147,20 @@ function startWithdrawalWorker(db: Db, log: FastifyBaseLogger) {
       if (r.recovered > 0) log.info(r, 'in-flight withdrawals recovered');
     })
     .catch((e) => log.error(e, 'withdrawal boot recovery failed'));
-  if (config.withdrawalAutoProcess) {
-    chainLoop(
-      () =>
-        processAllRequested(db, chain, log)
-          .then((r) => {
-            if (r.confirmed > 0) log.info(r, 'withdrawals processed');
-          })
-          .catch((e) => log.error(e, 'withdrawal processing failed (will retry)')),
-      config.withdrawalProcessMs,
-      config.withdrawalProcessMs,
-    );
-  }
+  // Always run the loop; the live WITHDRAWAL_AUTO_PROCESS knob (admin-toggleable) gates each pass, so
+  // auto-approval flips on/off without a redeploy. When OFF, withdrawals wait for manual approval.
+  chainLoop(
+    () =>
+      getWithdrawalAutoProcess()
+        ? processAllRequested(db, chain, log)
+            .then((r) => {
+              if (r.confirmed > 0) log.info(r, 'withdrawals processed');
+            })
+            .catch((e) => log.error(e, 'withdrawal processing failed (will retry)'))
+        : Promise.resolve(),
+    config.withdrawalProcessMs,
+    config.withdrawalProcessMs,
+  );
 }
 
 /** Real-funds only (custody P3): proof-of-reserves (auto-freeze on breach) + hot-float sweeps. */
@@ -213,7 +216,7 @@ async function main() {
     startLiquidationLoop(db, app.log);
     // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
     // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.
-    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d), loadDropConfig(d), loadMarkClampBps(d)]);
+    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d), loadDropConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
     await loadLiveKnobs(db);
     setInterval(() => void loadLiveKnobs(db).catch((e) => app.log.warn(e, 'live-knob refresh failed')), 30_000);
     if (config.realFunds) {
