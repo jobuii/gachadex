@@ -171,49 +171,59 @@ export async function applyUniverse(
   };
   if (!apply) return result;
 
-  // 1. (re)feature already-listed markets + stamp Scrydex ids / requires_scrydex
+  // 1. (re)feature already-listed markets + stamp Scrydex ids. requires_scrydex is derived from the
+  // market's OWN provider_card_id (the exact condition fetchTrackedCards filters on) — NOT the fresh
+  // derivation, so an existing tcgpl-priceable market is never wrongly hidden if the new index row
+  // happens to lack a tcgpl price.
   for (const m of updates) {
     await db.query(
+      // Fill provider_card_id if it was missing (a prior Scrydex-only market that now has a tcgpl match)
+      // so it becomes tcgpl-priceable + visible; requires_scrydex reflects the POST-fill value (Postgres
+      // evaluates every SET RHS against the OLD row, so re-derive from COALESCE here, not the bare column).
       `UPDATE markets SET featured=true,
          scrydex_card_id=COALESCE($2, scrydex_card_id), scrydex_expansion_id=COALESCE($3, scrydex_expansion_id),
-         requires_scrydex=$4 WHERE tcgplayer_id=$1`,
-      [m.tcgplayerId, m.scrydexCardId, m.scrydexExpansionId, m.requiresScrydex],
+         provider_card_id=COALESCE(provider_card_id, $4),
+         requires_scrydex=(COALESCE(provider_card_id, $4) IS NULL) WHERE tcgplayer_id=$1`,
+      [m.tcgplayerId, m.scrydexCardId, m.scrydexExpansionId, m.tcgplCardId],
     );
     result.updated++;
   }
   log(`re-featured ${result.updated} existing markets`);
 
   // 2. create brand-new entrants — Scrydex card for display/images when we have its id, else tcgpl
-  const viaScrydex = entrants.filter((m) => m.scrydexCardId);
-  const viaTpl = entrants.filter((m) => !m.scrydexCardId && m.tcgplCardId);
+  const viaScrydex = entrants.filter((m): m is DerivedMarket & { scrydexCardId: string } => m.scrydexCardId != null);
+  const viaTpl = entrants.filter((m): m is DerivedMarket & { tcgplCardId: string } => !m.scrydexCardId && m.tcgplCardId != null);
+  // every price_index row has a scrydex_card_id or a tcgpl_card_id, so this is 0 — but count any
+  // source-less entrant as a failure so created + fetchFailures always reconciles with toCreate.
+  result.fetchFailures += entrants.length - viaScrydex.length - viaTpl.length;
   for (const game of [...new Set(viaScrydex.map((m) => m.game))]) {
     const slug = scrydexSlug(game);
     if (!slug) continue;
     const group = viaScrydex.filter((m) => m.game === game);
-    const cards = new Map((await sx.getCardsByIds(slug, group.map((m) => m.scrydexCardId as string), 'discovery')).map((c) => [c.id, c]));
+    const cards = new Map((await sx.getCardsByIds(slug, group.map((m) => m.scrydexCardId), 'discovery')).map((c) => [c.id, c]));
     for (const m of group) {
-      const card = cards.get(m.scrydexCardId as string);
+      const card = cards.get(m.scrydexCardId);
       if (!card) { result.fetchFailures++; continue; }
-      const providerId = m.tcgplCardId ?? (m.scrydexCardId as string);
+      const providerId = m.tcgplCardId ?? m.scrydexCardId;
       const t: ScrydexTracked = {
-        scrydex_card_id: m.scrydexCardId as string, provider_card_id: m.tcgplCardId ?? null,
+        scrydex_card_id: m.scrydexCardId, provider_card_id: m.tcgplCardId ?? null,
         symbol: cardSymbol(game, providerId), card_id: providerId, game, tcgplayer_id: m.tcgplayerId, featured: true,
       };
       const id = await upsertCardMarket(db, { ...toCardUpsert(fromScrydexCard(card, t)), featured: true });
-      await db.query(`UPDATE markets SET scrydex_card_id=$2, scrydex_expansion_id=$3, requires_scrydex=$4 WHERE id=$1`,
-        [id, m.scrydexCardId, m.scrydexExpansionId, m.requiresScrydex]);
+      await db.query(`UPDATE markets SET scrydex_card_id=$2, scrydex_expansion_id=$3, requires_scrydex=(provider_card_id IS NULL) WHERE id=$1`,
+        [id, m.scrydexCardId, m.scrydexExpansionId]);
       result.created++;
     }
   }
   if (viaTpl.length) {
-    const cards = new Map((await tpl.getCardsByIds(viaTpl.map((m) => m.tcgplCardId as string), 'discovery')).map((c) => [c.id, c]));
+    const cards = new Map((await tpl.getCardsByIds(viaTpl.map((m) => m.tcgplCardId), 'discovery')).map((c) => [c.id, c]));
     for (const m of viaTpl) {
-      const c = cards.get(m.tcgplCardId as string);
+      const c = cards.get(m.tcgplCardId);
       if (!c) { result.fetchFailures++; continue; }
       const t: TrackedMarket = { provider_card_id: c.id, symbol: cardSymbol(m.game, c.id), card_id: c.id, game: m.game, featured: true };
       const id = await upsertCardMarket(db, { ...toCardUpsert(fromTplCard(c, t)), featured: true });
-      await db.query(`UPDATE markets SET scrydex_card_id=COALESCE($2, scrydex_card_id), requires_scrydex=$3 WHERE id=$1`,
-        [id, m.scrydexCardId, m.requiresScrydex]);
+      await db.query(`UPDATE markets SET scrydex_card_id=COALESCE($2, scrydex_card_id), requires_scrydex=(provider_card_id IS NULL) WHERE id=$1`,
+        [id, m.scrydexCardId]);
       result.created++;
     }
   }
@@ -221,7 +231,7 @@ export async function applyUniverse(
 
   // 3. un-feature drop-outs — status/tradeable untouched, so they keep pricing (open-position-safe)
   if (dropTids.length) {
-    await db.query(`UPDATE markets SET featured=false WHERE tcgplayer_id = ANY($1)`, [dropTids]);
+    await db.query(`UPDATE markets SET featured=false WHERE kind='card' AND tcgplayer_id = ANY($1)`, [dropTids]);
     result.unfeatured = dropTids.length;
   }
   log(`un-featured ${result.unfeatured} drop-outs`);

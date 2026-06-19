@@ -101,3 +101,15 @@ test('listMarketsWithData hides requires_scrydex markets under non-scrydex prima
   assert.ok(!bySym.has('mtg:sx-5002'), 'Scrydex-only market hidden until the flip');
   assert.ok(bySym.has('mtg:tp-5001'), 'tcgpl-priceable market stays visible');
 });
+
+test('applyUniverse re-run: a Scrydex-only market that gains a tcgpl match fills provider_card_id + un-hides', async () => {
+  // 5002 was created Scrydex-only (requires_scrydex=true, provider_card_id NULL). Its price_index row now gains a tcgpl match.
+  await db.query(`UPDATE price_index SET tcgpl_card_id='tp-5002', tcgpl_raw_usd=250 WHERE tcgplayer_id=5002`);
+  const u = await deriveUniverse(db, { topN: 5, jpyFloorUsd: 100, games: ['mtg'] });
+  await applyUniverse(db, u, { apply: true, scrydex: scrydexStub });
+  const m = await db.query<{ provider_card_id: string | null; requires_scrydex: boolean }>(
+    `SELECT provider_card_id, requires_scrydex FROM markets WHERE tcgplayer_id=5002`,
+  ).then((r) => r.rows[0]);
+  assert.equal(m.provider_card_id, 'tp-5002', 'newly-matched tcgpl id is filled in');
+  assert.equal(m.requires_scrydex, false, 'now tcgpl-priceable → no longer hidden');
+});
