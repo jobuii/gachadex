@@ -1531,6 +1531,14 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 .admin-stat.pnl-up .val { color: var(--success); }
 .admin-stat.pnl-down { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
 .admin-stat.pnl-down .val { color: var(--danger); }
+/* Pending-withdrawals box demands attention while a payout is queued — flashing red border. */
+.admin-stat.pending-alert { border-color: var(--danger); animation: pending-flash 1.1s ease-in-out infinite; }
+.admin-stat.pending-alert .val { color: var(--danger); }
+@keyframes pending-flash {
+  0%, 100% { border-color: var(--danger); box-shadow: 0 0 7px -2px var(--danger); }
+  50% { border-color: color-mix(in srgb, var(--danger) 25%, var(--border)); box-shadow: none; }
+}
+@media (prefers-reduced-motion: reduce) { .admin-stat.pending-alert { animation: none; } }
 
 /* operator tab bar (Main | Customers) */
 .admin-tabs { display: flex; gap: 0.25rem; margin: 0.9rem 0 0.3rem; border-bottom: 2px solid var(--border); }

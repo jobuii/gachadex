@@ -3,9 +3,9 @@ import { formatUsd } from '@pokex/pricing';
 // Small admin dashboard tiles, shared across the operator panels (Main, Customers, Chat). Values are
 // micro-USDC (string or bigint); a null value renders an em-dash.
 
-export function Stat({ label, value }) {
+export function Stat({ label, value, className = '' }) {
   return (
-    <div className="admin-stat">
+    <div className={`admin-stat ${className}`.trim()}>
       <div className="lbl">{label}</div>
       <div className="val">{value != null ? formatUsd(BigInt(value)) : '—'}</div>
     </div>
