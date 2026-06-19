@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { toE6, SCALE } from '@pokex/pricing';
-import { INDEX_CATALOG } from '@pokex/shared-types';
+import { INDEX_CATALOG, DEFAULT_CAP_BPS } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import type { Db, Queryer } from '../db/client.ts';
 import { upsertCardMarket, upsertIndexMarket, getMarketById, type CardUpsert } from './markets.ts';
@@ -8,6 +8,7 @@ import { recomputeMark, getMarkClampBps } from './marks.ts';
 import { pokemontcgFetcher } from './providers/pokemontcg.ts';
 import { fetchTrackedCards } from './providers/tcgpricelookup.ts';
 import { fetchScrydexTrackedCards } from './providers/scrydex.ts';
+import { equalWeightLevel, cappedWeightLevel, BASE_VALUE_E6, type ConstituentPrice } from './index-weighting.ts';
 
 /**
  * Provider-agnostic card snapshot — the seam between price providers and the oracle (P2 of the
@@ -57,7 +58,7 @@ export function toCardUpsert(c: OracleCard): CardUpsert {
 /** Returns the cards to ingest. Injectable for tests. */
 export type CardFetcher = () => Promise<OracleCard[]>;
 
-const BASE_VALUE_E6 = 1_000_000_000n; // indices start at 1000.000000 points
+// BASE_VALUE_E6 (1000.000000-point base) is shared with the chained-return series — see index-weighting.ts.
 const REANCHOR_JUMP_FACTOR = 4n; // a 1-tick jump beyond this can only be a wrong-scale divisor, not a real basket move
 
 /** Returns the PSA-10 graded price (USD) for a card, or null. Injectable for tests. */
@@ -274,7 +275,7 @@ export async function ingest(
     // Members by basket kind: top-N raw baskets slice the featured list; graded uses the PSA-10 set;
     // anything else (sealed) has NO data source yet and must stay gated regardless of raw members.
     const members =
-      idx.slug === 'graded'
+      idx.tier === 'graded'
         ? (gradedByGame.get(idx.game) ?? [])
         : idx.topN != null
           ? inGame.slice(0, idx.topN).map((x) => ({ cardId: x.cardId, priceE6: x.rawE6 }))
@@ -294,18 +295,47 @@ export async function ingest(
 
 async function buildIndex(
   db: Db,
-  idx: { game: string; slug: string; name: string },
-  members: { cardId: string; priceE6: bigint }[],
+  idx: { game: string; slug: string; name: string; weighting?: string; capBps?: number },
+  members: ConstituentPrice[],
   observedAt: Date,
   pinned: Set<string>,
 ): Promise<void> {
   if (members.length === 0) return;
-  const rawE6 = members.reduce((a, m) => a + m.priceE6, 0n);
   const marketId = await db.tx((q) => upsertIndexMarket(q, { game: idx.game, slug: idx.slug, name: idx.name, tradeable: true }));
   if (pinned.has(marketId)) return; // operator-pinned manual price — leave it alone
 
-  // Divisor: based at BASE_VALUE on first build, then RE-BASED whenever the constituent set
-  // changes so the index value is continuous across rebalances (composition shouldn't move it).
+  // GJ stays the price-weighted divisor method (unchanged); G&P/Pokedaq are chained-return levels off the
+  // previous print + previous snapshot. All three reuse the snapshot/record/mark tail below.
+  const indexValueE6 =
+    (idx.weighting ?? 'price') === 'price'
+      ? await priceWeightedLevel(db, marketId, members)
+      : await chainedLevel(db, marketId, idx, members);
+
+  // Snapshot constituents (transparency + the previous-price input the chained series reads next pass).
+  // One multi-row INSERT, not a per-card loop — this runs for every series of every basket each pass.
+  await db.tx(async (q) => {
+    await q.query(`DELETE FROM index_constituents WHERE market_id = $1`, [marketId]);
+    const params: unknown[] = [];
+    const rows = members.map((m) => {
+      params.push(randomUUID(), marketId, m.cardId, m.priceE6.toString());
+      return `($${params.length - 3}, $${params.length - 2}, $${params.length - 1}, $${params.length})`;
+    });
+    await q.query(`INSERT INTO index_constituents(id, market_id, card_id, weight_e6) VALUES ${rows.join(', ')}`, params);
+  });
+
+  const recorded = await db.tx((q) =>
+    recordOracle(q, marketId, indexValueE6, observedAt, { kind: 'index', constituents: members.length }),
+  );
+  if (recorded) {
+    const market = await getMarketById(db, marketId);
+    if (market) await db.tx((q) => recomputeMark(q, market, indexValueE6, 0n, 0n));
+  }
+}
+
+/** GJ — price-weighted level: Σ prices over a divisor based at 1000 on first build, then RE-BASED whenever
+ *  the constituent set changes so the value is continuous across rebalances (the S&P/Dow "index divisor"). */
+async function priceWeightedLevel(db: Db, marketId: string, members: ConstituentPrice[]): Promise<bigint> {
+  const rawE6 = members.reduce((a, m) => a + m.priceE6, 0n);
   const newSet = members.map((m) => m.cardId).sort().join(',');
   const oldRows = await db.query<{ card_id: string }>(`SELECT card_id FROM index_constituents WHERE market_id=$1`, [marketId]);
   const oldSet = oldRows.rows.map((r) => r.card_id).sort().join(',');
@@ -346,24 +376,28 @@ async function buildIndex(
       await db.query(`UPDATE index_divisors SET divisor_e6=$1, as_of=now() WHERE market_id=$2`, [divisor.toString(), marketId]);
     }
   }
-  const indexValueE6 = (rawE6 * SCALE) / divisor;
+  return (rawE6 * SCALE) / divisor;
+}
 
-  // Snapshot constituents (transparency / future rebalancing).
-  await db.tx(async (q) => {
-    await q.query(`DELETE FROM index_constituents WHERE market_id = $1`, [marketId]);
-    for (const m of members) {
-      await q.query(
-        `INSERT INTO index_constituents(id, market_id, card_id, weight_e6) VALUES($1, $2, $3, $4)`,
-        [randomUUID(), marketId, m.cardId, m.priceE6.toString()],
-      );
-    }
-  });
-
-  const recorded = await db.tx((q) =>
-    recordOracle(q, marketId, indexValueE6, observedAt, { kind: 'index', constituents: members.length }),
+/** G&P / Pokedaq — chained-return level off the previous index print + the previous constituent snapshot
+ *  (weight_e6 stores each card's price). Launches at the 1000 base when there is no prior pass. */
+async function chainedLevel(
+  db: Db,
+  marketId: string,
+  idx: { weighting?: string; capBps?: number },
+  members: ConstituentPrice[],
+): Promise<bigint> {
+  const snap = await db.query<{ card_id: string; p: string }>(
+    `SELECT card_id, weight_e6::text AS p FROM index_constituents WHERE market_id=$1`,
+    [marketId],
   );
-  if (recorded) {
-    const market = await getMarketById(db, marketId);
-    if (market) await db.tx((q) => recomputeMark(q, market, indexValueE6, 0n, 0n));
-  }
+  const prevPrices = new Map<string, bigint>(snap.rows.map((r) => [r.card_id, BigInt(r.p)]));
+  const prevRow = await db.query<{ v: string }>(
+    `SELECT index_price_e6::text AS v FROM oracle_prices WHERE market_id=$1 AND is_accepted ORDER BY source_observed_at DESC LIMIT 1`,
+    [marketId],
+  );
+  const prevLevel = prevRow.rows[0] ? BigInt(prevRow.rows[0].v) : 0n;
+  return idx.weighting === 'capped'
+    ? cappedWeightLevel(prevLevel, prevPrices, members, idx.capBps ?? DEFAULT_CAP_BPS)
+    : equalWeightLevel(prevLevel, prevPrices, members);
 }
