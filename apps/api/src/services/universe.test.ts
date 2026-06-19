@@ -8,7 +8,8 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
-const { deriveUniverse } = await import('./universe.ts');
+const { deriveUniverse, applyUniverse } = await import('./universe.ts');
+const { upsertCardMarket, listMarketsWithData } = await import('./markets.ts');
 
 await initDb();
 const db = await getDb();
@@ -53,4 +54,50 @@ test('deriveUniverse: EN top-N by per-game feed + JPY floor set + requiresScryde
   assert.equal(by[101].reason, 'en-top');
   assert.equal(by[103], undefined, 'EN rank 3 excluded at topN=2');
   assert.equal(by[202], undefined, 'JP <$100 excluded');
+});
+
+// Stub Scrydex client: returns a minimal card per requested id (enough for fromScrydexCard).
+const scrydexStub = {
+  getCardsByIds: async (_slug: string, ids: string[]) =>
+    ids.map((id) => ({ id, name: `Card ${id}`, number: '1', rarity: 'Rare', expansion: { id: 'exp1', name: 'Exp One' }, images: [{ type: 'front', small: `${id}-s`, large: `${id}-l` }], variants: [] })),
+} as unknown as Parameters<typeof applyUniverse>[2] extends { scrydex?: infer C } ? C : never;
+const marketByTid = (tid: number) =>
+  db.query<Record<string, unknown>>(`SELECT id, featured, requires_scrydex, scrydex_card_id FROM markets WHERE tcgplayer_id=$1`, [tid]).then((r) => r.rows[0]);
+
+test('applyUniverse: creates entrants (hidden flag), re-features stays, un-features drop-outs', async () => {
+  // mtg price_index (isolated from the pokemon/onepiece rows above)
+  await seed([
+    { tid: 5001, game: 'mtg', name: 'M1', sxUsd: 500, sxPrices: rawUsd(500), tpUsd: 400 }, // both feeds → not requiresScrydex
+    { tid: 5002, game: 'mtg', name: 'M2', sxUsd: 300, sxPrices: rawUsd(300) }, // Scrydex-only → requiresScrydex
+  ]);
+  // existing markets: 5001 featured (will stay), 9999 featured but NOT derived (will drop)
+  await upsertCardMarket(db, { game: 'mtg', symbol: 'mtg:tp-5001', cardId: 'tp-5001', displayName: 'M1', variant: null, imageSmall: null, tcgplayerId: 5001, providerCardId: 'tp-5001', featured: true });
+  await upsertCardMarket(db, { game: 'mtg', symbol: 'mtg:tp-9999', cardId: 'tp-9999', displayName: 'Old', variant: null, imageSmall: null, tcgplayerId: 9999, providerCardId: 'tp-9999', featured: true });
+
+  const u = await deriveUniverse(db, { topN: 5, jpyFloorUsd: 100, games: ['mtg'] });
+  const dry = await applyUniverse(db, u, { scrydex: scrydexStub });
+  assert.deepEqual({ c: dry.toCreate, u: dry.toUpdate, d: dry.toUnfeature, created: dry.created }, { c: 1, u: 1, d: 1, created: 0 }, 'dry-run plans but writes nothing');
+  assert.equal(await marketByTid(5002), undefined, 'dry-run created no market');
+
+  const res = await applyUniverse(db, u, { apply: true, scrydex: scrydexStub });
+  assert.equal(res.created, 1); // 5002
+  assert.equal(res.updated, 1); // 5001
+  assert.equal(res.unfeatured, 1); // 9999
+  assert.equal(res.fetchFailures, 0);
+
+  const m5002 = await marketByTid(5002);
+  assert.ok(m5002, 'entrant 5002 created');
+  assert.equal(m5002.featured, true);
+  assert.equal(m5002.requires_scrydex, true, 'Scrydex-only entrant flagged hidden-until-flip');
+  assert.equal(m5002.scrydex_card_id, 'sx-5002');
+  assert.equal((await marketByTid(5001)).featured, true, 'stay stays featured');
+  assert.equal((await marketByTid(9999)).featured, false, 'drop-out un-featured (status untouched)');
+});
+
+test('listMarketsWithData hides requires_scrydex markets under non-scrydex primary', async () => {
+  // env ORACLE_PRIMARY is unset here → config.oraclePrimary='pokemontcg' (not scrydex)
+  const view = await listMarketsWithData(db);
+  const bySym = new Set(view.map((m) => m.symbol));
+  assert.ok(!bySym.has('mtg:sx-5002'), 'Scrydex-only market hidden until the flip');
+  assert.ok(bySym.has('mtg:tp-5001'), 'tcgpl-priceable market stays visible');
 });
