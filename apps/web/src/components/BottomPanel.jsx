@@ -23,6 +23,10 @@ function Signed({ e6 }) {
   return <span className={BigInt(e6 ?? '0') >= 0n ? 'up' : 'down'}>{formatSignedUsd(e6 ?? '0')}</span>;
 }
 
+// Symbol cell — a link that jumps to that market (empty/em-dash when there's no symbol, e.g. a deposit).
+const SymCell = ({ symbol, onGo }) =>
+  symbol ? <td className="link" onClick={() => onGo?.(symbol)}>{symbol}</td> : <td className="muted">—</td>;
+
 function positionsEmptyLabel(user, rows) {
   if (!user) return 'Sign in to view your positions.';
   if (rows == null) return 'Loading…';
@@ -59,7 +63,7 @@ function DataTab({ head, user, err, rows, empty, renderRows }) {
   );
 }
 
-export function BottomPanel({ market, height }) {
+export function BottomPanel({ market, height, onGoToMarket }) {
   const { user } = useAuth();
   const oi = useRealtime((s) => s.oi);
   const [tab, setTab] = useState('oi');
@@ -138,18 +142,19 @@ export function BottomPanel({ market, height }) {
               <OpenPositions
                 positions={user ? rows : []}
                 onChanged={() => setReloadKey((k) => k + 1)}
+                onSelect={onGoToMarket}
                 emptyLabel={positionsEmptyLabel(user, rows)}
               />
             ) : (
               <DataTab
-                head={['Symbol', 'Side', 'Status', 'Entry', 'Avg close', 'Realized PnL', 'Closed qty', 'Opened', 'Closed']}
+                head={['SYMBOL', 'SIDE', 'STATUS', 'ENTRY', 'AVG CLOSE', 'REALIZED PNL', 'CLOSED QTY', 'OPENED', 'CLOSED']}
                 user={user}
                 err={err}
                 rows={rows}
                 empty="No closed positions yet."
                 renderRows={(rs) => rs.map((p, i) => (
                   <tr key={i}>
-                    <td>{p.symbol}</td>
+                    <SymCell symbol={p.symbol} onGo={onGoToMarket} />
                     <td className={sideCls(p.side)}>{p.side} {p.leverage}x</td>
                     <td>{statusLabel(p.status)}</td>
                     <td>{usd(p.entryE6)}</td>
@@ -167,7 +172,7 @@ export function BottomPanel({ market, height }) {
 
         {tab === 'orders' && (
           <DataTab
-            head={['Time', 'Symbol', 'Side', 'Price', 'Filled', 'Value', 'Reduce', 'Status']}
+            head={['TIME', 'SYMBOL', 'SIDE', 'PRICE', 'FILLED', 'VALUE', 'REDUCE', 'STATUS']}
             user={user}
             err={err}
             rows={rows}
@@ -175,7 +180,7 @@ export function BottomPanel({ market, height }) {
             renderRows={(rs) => rs.map((r, i) => (
               <tr key={i}>
                 <td>{fmtTime(r.time)}</td>
-                <td>{r.symbol}</td>
+                <SymCell symbol={r.symbol} onGo={onGoToMarket} />
                 <td className={sideCls(r.side)}>{r.side}</td>
                 <td>{usd(r.priceE6)}</td>
                 <td>{qty(r.filledE6)}</td>
@@ -189,7 +194,7 @@ export function BottomPanel({ market, height }) {
 
         {tab === 'trades' && (
           <DataTab
-            head={['Time', 'Symbol', 'Side', 'Price', 'Amount', 'Value', 'Fee', 'Realized', 'Role']}
+            head={['TIME', 'SYMBOL', 'SIDE', 'PRICE', 'AMOUNT', 'VALUE', 'FEE', 'REALIZED', 'ROLE']}
             user={user}
             err={err}
             rows={rows}
@@ -197,7 +202,7 @@ export function BottomPanel({ market, height }) {
             renderRows={(rs) => rs.map((r, i) => (
               <tr key={i}>
                 <td>{fmtTime(r.time)}</td>
-                <td>{r.symbol}</td>
+                <SymCell symbol={r.symbol} onGo={onGoToMarket} />
                 <td className={sideCls(r.side)}>{r.side}</td>
                 <td>{usd(r.priceE6)}</td>
                 <td>{qty(r.amountE6)}</td>
@@ -212,7 +217,7 @@ export function BottomPanel({ market, height }) {
 
         {tab === 'transactions' && (
           <DataTab
-            head={['Time', 'Type', 'Amount', 'Symbol']}
+            head={['TIME', 'TYPE', 'AMOUNT', 'SYMBOL']}
             user={user}
             err={err}
             rows={rows}
@@ -222,7 +227,7 @@ export function BottomPanel({ market, height }) {
                 <td>{fmtTime(r.time)}</td>
                 <td>{r.type}</td>
                 <td><Signed e6={r.amountUusdc} /></td>
-                <td className="muted">{r.symbol ?? '—'}</td>
+                <SymCell symbol={r.symbol} onGo={onGoToMarket} />
               </tr>
             ))}
           />

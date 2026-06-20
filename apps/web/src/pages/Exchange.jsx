@@ -81,6 +81,12 @@ export function Exchange() {
 
   const selected = markets.find((m) => m.id === selectedId) || null;
   const onSelectMarket = (m) => setSelectedId(m.id);
+  // Jump to a market from a bottom-panel row — by id (open positions) or symbol (history rows),
+  // resolved against the loaded markets list.
+  const goToMarket = (idOrSymbol) => {
+    const m = markets.find((x) => x.id === idOrSymbol || x.symbol === idOrSymbol);
+    if (m) setSelectedId(m.id);
+  };
   // A just-listed catalog card: refresh the markets list, then jump to the new market.
   const onMarketListed = useCallback(async (marketId) => {
     await loadMarkets();
@@ -109,7 +115,7 @@ export function Exchange() {
             collapsed={sidebarCollapsed}
             setCollapsed={setSidebarCollapsed}
           />
-          <TradingView market={selected} />
+          <TradingView market={selected} onGoToMarket={goToMarket} />
           <OrderEntry market={selected} onTraded={loadMarkets} />
         </div>
       )}
@@ -126,7 +132,7 @@ export function Exchange() {
 
           <TradingView market={selected} mobile />
           <OrderEntry market={selected} onTraded={loadMarkets} />
-          <BottomPanel market={selected} />
+          <BottomPanel market={selected} onGoToMarket={goToMarket} />
 
           <div
             className={`mobile-markets-drawer ${marketsOpen ? 'open' : ''}`}

@@ -68,7 +68,7 @@ const CHART_MIN = 150;
 const CHART_CHROME = 190;
 const clampPanel = (h) => Math.min(Math.max(h, PANEL_MIN), Math.max(PANEL_MIN + 100, window.innerHeight - CHART_CHROME - CHART_MIN));
 
-export function TradingView({ market, mobile = false }) {
+export function TradingView({ market, mobile = false, onGoToMarket }) {
   const elRef = useRef(null);
   const chartRef = useRef(null);
   const mainRef = useRef(null);
@@ -362,7 +362,7 @@ export function TradingView({ market, mobile = false }) {
       {!mobile && (
         <>
           <div className="panel-resizer" onMouseDown={startResize} title="Drag to resize" />
-          <BottomPanel market={market} height={panelHeight} />
+          <BottomPanel market={market} height={panelHeight} onGoToMarket={onGoToMarket} />
         </>
       )}
     </div>

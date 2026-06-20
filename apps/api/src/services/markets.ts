@@ -71,8 +71,8 @@ export interface CardUpsert {
   providerCardId?: string | null;
   // Index-constituent eligibility (the discovery top-250). Omit to keep the stored value.
   featured?: boolean | null;
-  // Creation-only: minimum order size (P6 dollar-min-notional for long-tail listings). Never
-  // touched on re-upsert — the operator may retune a live market's min.
+  // Creation-only: the per-market quantity floor (a fine step; the $1 dollar dust floor is the
+  // engine's min-notional check). Never touched on re-upsert — the operator may retune a live market's min.
   minQtyE6?: bigint | null;
 }
 
@@ -89,7 +89,7 @@ export async function upsertCardMarket(q: Queryer, opts: CardUpsert): Promise<st
   await q.query(
     `INSERT INTO markets(id, kind, game, symbol, display_name, card_id, variant, image_small, image_large, set_logo, metadata, tradeable,
        max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id, featured, min_qty_e6)
-     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13, COALESCE($14, false), COALESCE($15, 10000))
+     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13, COALESCE($14, false), COALESCE($15, 100))
      ON CONFLICT(symbol) DO UPDATE
        SET display_name = EXCLUDED.display_name, image_small = EXCLUDED.image_small, image_large = EXCLUDED.image_large,
            set_logo = EXCLUDED.set_logo, metadata = EXCLUDED.metadata, variant = EXCLUDED.variant,

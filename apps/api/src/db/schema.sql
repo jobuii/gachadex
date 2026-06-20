@@ -234,8 +234,8 @@ CREATE TABLE IF NOT EXISTS markets (
   skew_k_e6          BIGINT NOT NULL DEFAULT 1000000, -- k = 1.0
   premium_cap_e6     BIGINT NOT NULL DEFAULT 100000,  -- ±10%
   max_dev_bps        INT NOT NULL DEFAULT 1500,       -- ±15% anchor clamp
-  min_qty_e6         BIGINT NOT NULL DEFAULT 10000,   -- 0.01 units
-  qty_step_e6        BIGINT NOT NULL DEFAULT 10000,
+  min_qty_e6         BIGINT NOT NULL DEFAULT 100,     -- 0.0001 units (dollar floor is the $1 min-notional in the engine)
+  qty_step_e6        BIGINT NOT NULL DEFAULT 100,     -- 0.0001 units
   price_tick_e6      BIGINT NOT NULL DEFAULT 10000,   -- $0.01
   price_pinned       BOOLEAN NOT NULL DEFAULT false,  -- operator manual-price override; auto-oracle skips pinned markets
   low_confidence     BOOLEAN NOT NULL DEFAULT false,  -- oracle price-quality gate: thin/disagreeing signals -> reduce-only (see priceCard)
@@ -650,3 +650,12 @@ CREATE TABLE IF NOT EXISTS worker_leases (
   holder     TEXT NOT NULL,    -- per-process random id
   expires_at TIMESTAMPTZ NOT NULL
 );
+
+-- Min order size (idempotent backfill): shrink the qty step to 0.0001 units so the $1 min-notional floor
+-- (enforced in the engine) is reachable on high-priced cards — the old 0.01-unit step inflated the floor
+-- to step×price (~$50 on a $5k card). The dollar dust floor is the notional check, so a flat fine min_qty
+-- is safe. Runs every boot but no-ops once every market is already at the fine step.
+ALTER TABLE markets ALTER COLUMN min_qty_e6 SET DEFAULT 100;
+ALTER TABLE markets ALTER COLUMN qty_step_e6 SET DEFAULT 100;
+UPDATE markets SET qty_step_e6 = 100 WHERE qty_step_e6 <> 100;
+UPDATE markets SET min_qty_e6 = 100 WHERE min_qty_e6 <> 100;

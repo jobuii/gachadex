@@ -95,17 +95,6 @@ export async function searchCatalog(
   });
 }
 
-// Dollar min-notional (plan P6): a long-tail market's minimum order is ~>= $1 so dust positions
-// can't exist. min_qty rounds UP to the qty step; the $10 gate bounds it to <= 0.1 units.
-const MIN_NOTIONAL_UUSDC = 1_000_000n; // $1
-const QTY_STEP_E6 = 10_000n; // matches the markets qty_step_e6 default
-
-export function minQtyForPrice(priceE6: bigint): bigint {
-  if (priceE6 <= 0n) return QTY_STEP_E6;
-  const raw = (MIN_NOTIONAL_UUSDC * 1_000_000n + priceE6 - 1n) / priceE6; // ceil(1e12 / price)
-  return ((raw + QTY_STEP_E6 - 1n) / QTY_STEP_E6) * QTY_STEP_E6;
-}
-
 async function findExisting(
   db: Db,
   providerCardId: string,
@@ -192,7 +181,7 @@ export async function ensureMarketFromCard(
 
   let marketId: string;
   try {
-    marketId = await ingestCard(db, card, new Date(), undefined, { minQtyE6: minQtyForPrice(card.rawE6) });
+    marketId = await ingestCard(db, card, new Date());
   } catch (e) {
     // Unique-index race or a printing twin of an already-listed product (the tcgplayer_id unique
     // index is the arbiter): the canonical market won — return it (reviving it if it was retired).

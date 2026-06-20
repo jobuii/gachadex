@@ -60,6 +60,18 @@ test('open a 10x long locks the right margin and computes the liq price', async 
   await closeAll(userId);
 });
 
+test('rejects an order below the $1 minimum notional', async () => {
+  const userId = await newUser();
+  // card-x marks ~$1000/unit; 0.0005 units ≈ $0.50 notional — clears min_qty/step but trips the $1 floor
+  await assert.rejects(
+    openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 500n, leverage: 1, idempotencyKey: randomUUID() }),
+    /below the \$1 minimum/,
+  );
+  // 0.0015 units ≈ $1.50 notional — above the floor, allowed
+  await openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 1_500n, leverage: 1, idempotencyKey: randomUUID() });
+  await closeAll(userId);
+});
+
 test('closing a profitable long pays out from the LP pool and conserves value', async () => {
   const userId = await newUser();
   await openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 5_000_000n, leverage: 10, idempotencyKey: randomUUID() });

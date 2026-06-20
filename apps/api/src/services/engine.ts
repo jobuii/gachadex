@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { notional, initialMargin, maintenanceMargin, unrealizedPnl, liquidationPrice, fee } from '@pokex/pricing';
+import { notional, initialMargin, maintenanceMargin, unrealizedPnl, liquidationPrice, fee, MIN_NOTIONAL_UUSDC } from '@pokex/pricing';
 import { HttpError } from '../errors.ts';
 import { config } from '../config.ts';
 import { advisoryXactLock, type Db, type Queryer } from '../db/client.ts';
@@ -311,6 +311,9 @@ async function validateMarketAndOrder(q: Queryer, input: OpenInput): Promise<Mar
   return market;
 }
 
+// The $1 dust floor (MIN_NOTIONAL_UUSDC from @pokex/pricing) is enforced on NOTIONAL (qty × mark) below,
+// so it's price-aware — a fine qty step alone can't stop sub-$1 positions on cheap cards. Replaces the old
+// per-market min_qty dust floor, which (rounded to the 0.01-unit step) inflated to step×price (~$50 on a $5k card).
 export async function openPosition(db: Db, userId: string, input: OpenInput): Promise<{ orderId: string; positionId: string; duplicate?: boolean }> {
   // fast-path idempotency, scoped to the user (keys are not a global namespace)
   const prior = await db.query<{ id: string }>(`SELECT id FROM orders WHERE user_id=$1 AND idempotency_key=$2`, [userId, input.idempotencyKey]);
@@ -335,6 +338,9 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
       );
       if (!fresh.rows[0]) throw new HttpError(400, 'market is repricing — not yet open for new positions', 'market_repricing');
       const { markE6, indexE6 } = mi;
+      if (notional(input.qtyE6, markE6) < MIN_NOTIONAL_UUSDC) {
+        throw new HttpError(400, 'order below the $1 minimum', 'below_min_notional');
+      }
       // slippage guard: reject if the fill mark moved past the caller's limit (long: cap, short: floor)
       if (input.limitPriceE6 != null && (input.side === 'long' ? markE6 > input.limitPriceE6 : markE6 < input.limitPriceE6)) {
         throw new HttpError(400, 'fill price moved past your limit price', 'slippage_exceeded');

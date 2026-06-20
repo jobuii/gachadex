@@ -17,6 +17,7 @@
  */
 
 export const SCALE = 1_000_000n; // 1e6 fixed-point scale for prices, qty, money, rates
+export const MIN_NOTIONAL_UUSDC = SCALE; // $1 — smallest order notional (dust floor; engine-enforced, client-previewed)
 
 // ---------------------------------------------------------------------------
 // Card price extraction (dedups the getPrice copy-pasted across the SPA)

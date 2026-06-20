@@ -148,7 +148,7 @@ export async function ingestCard(
   c: OracleCard,
   fallbackObservedAt: Date,
   pinned?: Set<string>,
-  extra?: Partial<CardUpsert>, // creation-time overrides (e.g. the P6 dollar-min-notional min qty)
+  extra?: Partial<CardUpsert>, // creation-time overrides (e.g. a custom per-market qty floor)
 ): Promise<string> {
   const marketId = await db.tx((q) => upsertCardMarket(q, { ...toCardUpsert(c), ...extra }));
   if (pinned?.has(marketId)) return marketId; // manual override in effect — skip the auto print + mark

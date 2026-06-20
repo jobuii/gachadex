@@ -11,7 +11,7 @@ const { getDb, closeDb } = await import('../../db/client.ts');
 const { initDb } = await import('../../db/init.ts');
 const { upsertCardMarket } = await import('../markets.ts');
 const { retireDeadMarkets } = await import('./discovery.ts');
-const { searchCatalog, ensureMarketFromCard, isListable, minQtyForPrice, clearSearchCache, MIN_LIST_PRICE_USD } =
+const { searchCatalog, ensureMarketFromCard, isListable, clearSearchCache, MIN_LIST_PRICE_USD } =
   await import('./search.ts');
 
 await initDb();
@@ -67,13 +67,6 @@ test('isListable: $10 floor + eBay agreement within 25%, rejects one-sided cards
   assert.equal(MIN_LIST_PRICE_USD, 10);
 });
 
-test('minQtyForPrice: ~$1 minimum notional, rounded up to the qty step', () => {
-  assert.equal(minQtyForPrice(10_000_000n), 100_000n); // $10 card -> 0.1 units
-  assert.equal(minQtyForPrice(100_000_000n), 10_000n); // $100 card -> step floor
-  assert.equal(minQtyForPrice(33_000_000n), 40_000n); // $33 -> ceil(0.0303) to step = 0.04
-  assert.equal(minQtyForPrice(0n), 10_000n);
-});
-
 test('searchCatalog caches the provider call and joins existing markets fresh on every call', async () => {
   clearSearchCache();
   const existingId = await upsertCardMarket(db, {
@@ -123,7 +116,7 @@ test('ensureMarketFromCard: creates once (idempotent), with first print, mark, a
   );
   assert.equal(m.rows[0].symbol, 'mtg:prov-ensure', 'game-namespaced symbol');
   assert.equal(m.rows[0].featured, false, 'long-tail: never an index constituent');
-  assert.equal(m.rows[0].min_qty, '50000', '~$21 card -> 0.05 units = $1 min notional');
+  assert.equal(m.rows[0].min_qty, '100', 'fine flat min_qty; the $1 floor is the engine min-notional check');
   const print = await db.query<{ v: string }>(
     `SELECT index_price_e6::text AS v FROM oracle_prices WHERE market_id = $1 AND is_accepted`,
     [first.marketId],

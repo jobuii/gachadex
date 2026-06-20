@@ -22,7 +22,7 @@ export function OpenPositions({ positions, onChanged, onSelect, emptyLabel = 'No
     <table className="positions-table">
       <thead>
         <tr>
-          <th>MARKET</th>
+          <th>SYMBOL</th>
           <th>SIDE</th>
           {!compact && <><th>SIZE</th><th>ENTRY</th><th>MARK</th><th>LIQ</th></>}
           <th>PNL (ROE%)</th>

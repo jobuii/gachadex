@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { liquidationPrice, fee, notional, formatUsd } from '@pokex/pricing';
+import { liquidationPrice, fee, notional, formatUsd, MIN_NOTIONAL_UUSDC } from '@pokex/pricing';
 import { useRealtime } from '../store/realtime';
 import { useAuth } from '../auth/AuthContext';
 import { FaucetButton } from './FaucetButton';
@@ -67,8 +67,8 @@ export function OrderEntry({ market, onTraded }) {
   const marginNum = Math.min(parseFloat(marginUsd) || 0, 1e15); // clamp absurd/exponential input
   const notionalUsd = marginNum * leverage;
   const qtyUnits = priceUsd > 0 ? notionalUsd / priceUsd : 0;
-  const step = BigInt(market.qtyStepE6 ?? '10000');
-  const minQty = BigInt(market.minQtyE6 ?? '10000');
+  const step = BigInt(market.qtyStepE6 ?? '100');
+  const minQty = BigInt(market.minQtyE6 ?? '100');
   const qRaw = Math.round(qtyUnits * 1e6);
   let qtyE6 = Number.isFinite(qRaw) ? BigInt(qRaw) : 0n; // never BigInt(Infinity/NaN): that throws during render
   qtyE6 = (qtyE6 / step) * step; // snap to the market's step
@@ -76,11 +76,13 @@ export function OrderEntry({ market, onTraded }) {
   const liqE6 = markE6 && marginNum > 0
     ? liquidationPrice({ side, entryE6: BigInt(markE6), leverageE2: leverage * 100, maintMarginBps: market.maintMarginBps })
     : 0n;
-  const feeUusdc = fee(notional(qtyE6, markE6 ? BigInt(markE6) : 0n), OPEN_FEE_BPS);
+  const orderNotionalE6 = markE6 ? notional(qtyE6, BigInt(markE6)) : 0n;
+  const feeUusdc = fee(orderNotionalE6, OPEN_FEE_BPS);
   const availableUsd = balance ? Number(balance.availableUusdc) / 1e6 : 0;
   const largeImg = details?.imageLarge || market.imageSmall; // big card art for the click-to-enlarge modal
+  const belowMin = marginNum > 0 && orderNotionalE6 < MIN_NOTIONAL_UUSDC; // order too small (sub-$1 notional)
 
-  const canTrade = user && market.tradeable && market.status === 'active' && qtyE6 >= minQty && marginNum > 0;
+  const canTrade = user && market.tradeable && market.status === 'active' && qtyE6 >= minQty && marginNum > 0 && !belowMin;
 
   const submit = async () => {
     setErr(null);
@@ -210,6 +212,7 @@ export function OrderEntry({ market, onTraded }) {
           <div className="order-info-row"><span>Est. fee</span><span>{formatUsd(BigInt(feeUusdc))}</span></div>
         </div>
 
+        {belowMin && <div className="order-gated">Minimum order is $1 (notional).</div>}
         {err && <div className="order-error">{err}</div>}
 
         {!user ? (
