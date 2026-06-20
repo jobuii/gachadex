@@ -3,6 +3,7 @@ import { formatUsd } from '@pokex/pricing';
 import { indexSeries, INDEX_SERIES_LABELS } from '@pokex/shared-types';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { useAuth } from '../auth/AuthContext';
+import { useStickyState } from '../lib/useStickyState';
 import * as api from '../lib/api.js';
 
 const TABS = ['indices', 'cards'];
@@ -92,7 +93,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
   const [game, setGame] = useState('pokemon');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('top'); // cards top-mover sort: top|volume|gainers|losers
-  const [showJpy, setShowJpy] = useState(false); // JP cards hidden by default — the main 250/game is English
+  const [showJpy, setShowJpy] = useStickyState('pokeX_showJpy', false); // JP cards hidden by default; persists across refresh (shared key with the screener toggle)
   const [catalog, setCatalog] = useState(null); // null = inactive; [] = no results
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState(false); // search failed/unavailable (≠ zero matches)
@@ -165,7 +166,10 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
     // an API build that predates the `featured` field (deploy race / rollback) or a transient data
     // gap must never collapse the list into an empty "coming soon".
     const featured = mine.filter((m) => m.featured);
-    const base = q ? mine : featured.length ? featured : mine;
+    let base = q ? mine : featured.length ? featured : mine;
+    // The JP set is a separate opt-in catalogue (featured=false), so the toggle must ADD it to the
+    // featured base — not just un-hide rows already there (there are none, hence the empty list bug).
+    if (showJpy && !q) base = base.concat(mine.filter((m) => m.jpy && !m.featured));
     return base
       .filter((m) => showJpy || !m.jpy)
       .filter((m) => m.displayName.toLowerCase().includes(q.toLowerCase()))

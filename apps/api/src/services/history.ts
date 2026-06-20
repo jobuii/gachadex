@@ -185,6 +185,7 @@ export async function getWalletTransactions(db: Db, userId: string, limit?: numb
 }
 
 export interface PositionHistoryRow {
+  marketId: string; // for the share card (fetches the card art) + market navigation
   symbol: string;
   side: 'Long' | 'Short';
   leverage: number;
@@ -199,10 +200,10 @@ export interface PositionHistoryRow {
 
 export async function getPositionHistory(db: Db, userId: string, limit?: number): Promise<PositionHistoryRow[]> {
   const positions = await db.query<{
-    id: string; side: string; leverage_e2: number; status: string; pnl: string; entry_e6: string;
+    id: string; market_id: string; side: string; leverage_e2: number; status: string; pnl: string; entry_e6: string;
     opened_at: string; closed_at: string | null; symbol: string;
   }>(
-    `SELECT p.id, p.side, p.leverage_e2, p.status, p.realized_pnl_uusdc::text AS pnl,
+    `SELECT p.id, p.market_id, p.side, p.leverage_e2, p.status, p.realized_pnl_uusdc::text AS pnl,
             p.avg_entry_e6::text AS entry_e6, p.opened_at, p.closed_at, m.symbol
      FROM positions p JOIN markets m ON m.id = p.market_id
      WHERE p.user_id = $1 AND p.status IN ('closed', 'liquidated', 'deleveraged')
@@ -229,6 +230,7 @@ export async function getPositionHistory(db: Db, userId: string, limit?: number)
     const c = closeByPos.get(p.id);
     const qty = c ? BigInt(c.qty) : 0n;
     return {
+      marketId: p.market_id,
       symbol: p.symbol,
       side: p.side === 'long' ? 'Long' : 'Short',
       leverage: Math.round(p.leverage_e2 / 100),

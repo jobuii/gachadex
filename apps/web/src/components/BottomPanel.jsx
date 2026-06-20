@@ -1,9 +1,26 @@
 import { useState, useEffect } from 'react';
-import { formatUsd, formatSignedUsd } from '@pokex/pricing';
+import { formatUsd, formatSignedUsd, notional, initialMargin } from '@pokex/pricing';
 import { useRealtime } from '../store/realtime';
 import { useAuth } from '../auth/AuthContext';
 import { OpenPositions } from './OpenPositions';
+import { PnlShareModal, ShareIcon } from './PnlShareModal';
 import * as api from '../lib/api.js';
+
+// A closed history row → the share-card shape. Closed positions release their margin (margin_uusdc=0),
+// so reconstruct what was invested = initialMargin(entry notional, leverage); pnl is the realized P/L.
+function closedShare(p) {
+  const invested = initialMargin(notional(BigInt(p.closedQtyE6), BigInt(p.entryE6)), (p.leverage || 1) * 100);
+  return {
+    marketId: p.marketId,
+    symbol: p.symbol,
+    displayName: p.symbol,
+    side: (p.side ?? '').toLowerCase(),
+    leverage: p.leverage,
+    qtyE6: p.closedQtyE6,
+    marginUusdc: invested.toString(),
+    pnlUusdc: p.realizedPnlUusdc,
+  };
+}
 
 const TABS = [
   ['oi', 'Open Interest'],
@@ -71,6 +88,7 @@ export function BottomPanel({ market, height, onGoToMarket }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [shareP, setShareP] = useState(null); // closed position being shared as a PnL card
 
   // Clear rows on any tab switch so the previous tab's data (a different row shape) can't render
   // under the new tab for a frame before the fetch effect resets it.
@@ -159,7 +177,14 @@ export function BottomPanel({ market, height, onGoToMarket }) {
                     <td>{statusLabel(p.status)}</td>
                     <td>{usd(p.entryE6)}</td>
                     <td>{p.avgCloseE6 ? usd(p.avgCloseE6) : '—'}</td>
-                    <td><Signed e6={p.realizedPnlUusdc} /></td>
+                    <td>
+                      <div className="pnl-cell">
+                        <Signed e6={p.realizedPnlUusdc} />
+                        <button className="pnl-share-btn" title="Share PnL card" onClick={() => setShareP(closedShare(p))}>
+                          <ShareIcon />
+                        </button>
+                      </div>
+                    </td>
                     <td>{qty(p.closedQtyE6)}</td>
                     <td>{fmtTime(p.openedAt)}</td>
                     <td>{fmtTime(p.closedAt)}</td>
@@ -233,6 +258,7 @@ export function BottomPanel({ market, height, onGoToMarket }) {
           />
         )}
       </div>
+      {shareP && <PnlShareModal position={shareP} onClose={() => setShareP(null)} />}
     </div>
   );
 }

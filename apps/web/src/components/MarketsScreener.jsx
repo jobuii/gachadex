@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { formatUsd } from '@pokex/pricing';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
+import { useStickyState } from '../lib/useStickyState';
 
 // Dedicated "Markets" screener (the filters/Option-C page): a sortable table of every card market with
 // top-mover tabs (Top/Volume/Gainers/Losers), a game filter, a rarity filter, and search. Sorting keys
@@ -46,7 +47,7 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
   const [sort, setSort] = useState('top');
   const [rarity, setRarity] = useState('all');
   const [search, setSearch] = useState('');
-  const [showJpy, setShowJpy] = useState(false); // JP cards hidden by default — the main 250/game is English
+  const [showJpy, setShowJpy] = useStickyState('pokeX_showJpy', false); // persists across refresh (shared key with the sidebar toggle)
 
   const cards = useMemo(() => (markets || []).filter((m) => m.kind === 'card'), [markets]);
   // The game + JPY filters bound which rarities can appear, so derive the dropdown options from THAT

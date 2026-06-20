@@ -183,6 +183,17 @@ function drawCard(canvas, d, bgImg) {
   }
 }
 
+// Share-card trigger icon (upload glyph) — shared by the open-positions + history PnL cells.
+export function ShareIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7" />
+      <path d="M12 16V3" />
+      <path d="M8 7l4-4 4 4" />
+    </svg>
+  );
+}
+
 export function PnlShareModal({ position, onClose }) {
   const canvasRef = useRef(null);
   const [status, setStatus] = useState(''); // '', 'copied', 'copyfail'
@@ -195,18 +206,19 @@ export function PnlShareModal({ position, onClose }) {
         api.getMarketDetails(position.marketId).catch(() => null),
         api.getReferral().then((r) => r?.code).catch(() => null),
       ]);
+      // pnlUusdc is unrealized (open positions) or realized (closed history) — the caller picks which.
+      const pnlE6 = BigInt(position.pnlUusdc ?? position.unrealizedPnlUusdc ?? '0');
       const margin = BigInt(position.marginUusdc ?? '0');
-      const pnl = BigInt(position.unrealizedPnlUusdc ?? '0');
-      const roePct = margin > 0n ? (Number(pnl) / Number(margin)) * 100 : 0;
+      const roePct = margin > 0n ? (Number(pnlE6) / Number(margin)) * 100 : 0;
       const name = shortName(position.displayName, position.symbol);
       const data = {
         name,
         side: position.side,
         leverage: position.leverage,
         roePct,
-        invested: usdc(position.marginUusdc),
+        invested: usdc(margin),
         position: `${(Number(position.qtyE6) / 1e6).toFixed(2)} ${name}`,
-        pnl: signedUsdc(position.unrealizedPnlUusdc),
+        pnl: signedUsdc(pnlE6),
         ref,
       };
 
