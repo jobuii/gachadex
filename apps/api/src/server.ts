@@ -13,6 +13,7 @@ import { historyRoutes } from './routes/history.ts';
 import { chatRoutes } from './routes/chat.ts';
 import { walletRoutes } from './routes/wallet.ts';
 import { scrydexWebhookRoutes } from './routes/scrydex-webhook.ts';
+import { imageProxyRoutes } from './routes/image-proxy.ts';
 import { adminRoutes, type AdminChains } from './routes/admin.ts';
 import { adminOpsRoutes } from './routes/admin-ops.ts';
 import { registerWs } from './plugins/ws.ts';
@@ -113,6 +114,7 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
   await app.register(chatRoutes);
   await app.register(walletRoutes);
   await app.register(scrydexWebhookRoutes); // Scrydex price webhook (§8), HMAC-verified; encapsulated raw-body parser
+  await app.register(imageProxyRoutes); // same-origin re-serve of whitelisted CDN images (canvas-safe share cards)
 
   // Non-custody operator surface (manual price override, etc.): registers whenever an admin key is
   // set — including play-money mode — because it never moves real funds (ROADMAP §2).

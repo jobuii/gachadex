@@ -3,6 +3,10 @@
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
+// Re-serve a (CORS-less) CDN image through our API so a <canvas> can draw it without tainting — used by
+// the PnL share card so it can export to PNG. Null for a missing URL.
+export const imageProxyUrl = (url) => (url ? `${API_URL}/image-proxy?url=${encodeURIComponent(url)}` : null);
+
 let accessToken = null;
 let refreshing = null; // in-flight refresh promise (single-flight)
 const REFRESH_KEY = 'pokeX_refresh';

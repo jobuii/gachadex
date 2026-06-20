@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { formatUsd, formatSignedUsd, formatPct } from '@pokex/pricing';
 import * as api from '../lib/api.js';
+import { PnlShareModal } from './PnlShareModal';
 
 export function OpenPositions({ positions, onChanged, onSelect, emptyLabel = 'No open positions.', compact = false }) {
   const [busy, setBusy] = useState(null);
+  const [shareP, setShareP] = useState(null);
   const rows = positions ?? [];
 
   const close = async (p) => {
@@ -19,6 +21,7 @@ export function OpenPositions({ positions, onChanged, onSelect, emptyLabel = 'No
   };
 
   return (
+    <>
     <table className="positions-table">
       <thead>
         <tr>
@@ -54,8 +57,19 @@ export function OpenPositions({ positions, onChanged, onSelect, emptyLabel = 'No
                 </>
               )}
               <td className={up ? 'up' : 'down'}>
-                <div>{formatSignedUsd(p.unrealizedPnlUusdc ?? '0')}</div>
-                <div style={{ fontSize: '0.82em', opacity: 0.85 }}>{formatPct(roePct)}</div>
+                <div className="pnl-cell">
+                  <span className="pnl-cell-vals">
+                    <span>{formatSignedUsd(p.unrealizedPnlUusdc ?? '0')}</span>
+                    <span className="pnl-cell-roe">{formatPct(roePct)}</span>
+                  </span>
+                  <button className="pnl-share-btn" title="Share PnL card" onClick={() => setShareP(p)}>
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7" />
+                      <path d="M12 16V3" />
+                      <path d="M8 7l4-4 4 4" />
+                    </svg>
+                  </button>
+                </div>
               </td>
               <td>
                 <button className="btn-ghost sm" disabled={busy === p.id} onClick={() => close(p)}>
@@ -67,5 +81,7 @@ export function OpenPositions({ positions, onChanged, onSelect, emptyLabel = 'No
         })}
       </tbody>
     </table>
+    {shareP && <PnlShareModal position={shareP} onClose={() => setShareP(null)} />}
+    </>
   );
 }

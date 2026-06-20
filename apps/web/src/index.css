@@ -931,6 +931,20 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 .modal-sub { margin: 0; font-size: 0.5rem; color: var(--text-muted); }
 .modal-sub.val { margin: 0.25rem 0 0.7rem; color: var(--text); }
 
+/* PnL share card modal */
+.modal-content.pnl-share { max-width: min(720px, 94vw); padding: 1rem; }
+.pnl-share-canvas { width: 100%; height: auto; display: block; border-radius: 8px; }
+.pnl-share-actions { display: flex; gap: 0.6rem; justify-content: center; margin-top: 0.9rem; }
+/* share icon inside the open-positions PNL cell */
+.pnl-cell { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; }
+.pnl-cell-vals { display: flex; flex-direction: column; }
+.pnl-cell-roe { font-size: 0.82em; opacity: 0.85; }
+.pnl-share-btn {
+  background: none; border: none; cursor: pointer; padding: 2px; display: inline-flex;
+  color: var(--text-muted); opacity: 0.7; flex-shrink: 0;
+}
+.pnl-share-btn:hover { opacity: 1; color: var(--gold); }
+
 .preview-img {
   max-height: 250px; /* enlarged */
 }

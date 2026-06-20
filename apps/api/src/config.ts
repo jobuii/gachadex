@@ -58,6 +58,7 @@ export const config = {
     admin: num('RL_ADMIN', 30), // operator endpoints (also brute-force defense on the admin key)
     catalogSearch: num('RL_CATALOG_SEARCH', 30), // each uncached search costs a provider request
     marketEnsure: num('RL_MARKET_ENSURE', 10), // on-demand listing: provider request + market create
+    imageProxy: num('RL_IMAGE_PROXY', 120), // same-origin re-serve of whitelisted CDN images (for the share card)
   },
 
   // Database. Empty => use embedded PGlite (local dev, zero deps).
