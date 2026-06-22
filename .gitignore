@@ -46,3 +46,6 @@ mockups/
 
 # read-only live-DB query helpers (prod access tooling; never commit — see memory: live-db-readonly-access)
 apps/api/.ro-*
+
+# design references / mockup screenshots (local only; not part of the repo)
+/references/
