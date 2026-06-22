@@ -373,7 +373,7 @@ export interface ScrydexTracked {
   featured: boolean;
 }
 
-const EMPTY_CROSS: CrossCheck = { tcgpMarket: null, ebay1d: null };
+export const EMPTY_CROSS: CrossCheck = { tcgpMarket: null, ebay1d: null }; // "no tcgpl cross-check" sentinel
 
 /** Display/identity OracleCard built from a SCRYDEX card — the fallback for when tcgpl has dropped the
  *  card but Scrydex still prices it (Scrydex-primary keeps it tradeable instead of letting it go stale).

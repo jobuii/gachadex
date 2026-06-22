@@ -77,6 +77,11 @@ export interface CardUpsert {
   // PSA-10 graded price (micro-USD), Scrydex-first / tcgpl fallback. Persisted on every print so the
   // detail-panel + Graded index stay current (incl. via the webhook); COALESCEd so a null never clobbers.
   gradedE6?: bigint | null;
+  // Scrydex identity, set atomically when a market is listed/priced via Scrydex (so the oracle can anchor
+  // it on Scrydex and the webhook can scope it). COALESCEd: a null never erases a stored id, so the
+  // regular oracle pass (which doesn't echo them) keeps the backfilled values.
+  scrydexCardId?: string | null;
+  scrydexExpansionId?: string | null;
 }
 
 /** Symbol for a provider-created card market: game-namespaced so provider ids can never collide across
@@ -91,19 +96,22 @@ export async function upsertCardMarket(q: Queryer, opts: CardUpsert): Promise<st
   const meta = opts.metadata != null ? JSON.stringify(opts.metadata) : null;
   await q.query(
     `INSERT INTO markets(id, kind, game, symbol, display_name, card_id, variant, image_small, image_large, set_logo, metadata, tradeable,
-       max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id, featured, min_qty_e6, graded_psa10_e6)
-     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13, COALESCE($14, false), COALESCE($15, 100), $16)
+       max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id, featured, min_qty_e6, graded_psa10_e6, scrydex_card_id, scrydex_expansion_id)
+     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13, COALESCE($14, false), COALESCE($15, 100), $16, $17, $18)
      ON CONFLICT(symbol) DO UPDATE
        SET display_name = EXCLUDED.display_name, image_small = EXCLUDED.image_small, image_large = EXCLUDED.image_large,
            set_logo = EXCLUDED.set_logo, metadata = EXCLUDED.metadata, variant = EXCLUDED.variant,
            tcgplayer_id = COALESCE(EXCLUDED.tcgplayer_id, markets.tcgplayer_id),
            provider_card_id = COALESCE(EXCLUDED.provider_card_id, markets.provider_card_id),
            featured = COALESCE($14, markets.featured),
-           graded_psa10_e6 = COALESCE($16, markets.graded_psa10_e6)`,
+           graded_psa10_e6 = COALESCE($16, markets.graded_psa10_e6),
+           scrydex_card_id = COALESCE(EXCLUDED.scrydex_card_id, markets.scrydex_card_id),
+           scrydex_expansion_id = COALESCE(EXCLUDED.scrydex_expansion_id, markets.scrydex_expansion_id)`,
     [
       id, opts.symbol, opts.displayName, opts.cardId, opts.variant, opts.imageSmall, opts.imageLarge ?? null,
       opts.setLogo ?? null, meta, CARD_OI_CAP, opts.game ?? 'pokemon', opts.tcgplayerId ?? null, opts.providerCardId ?? null,
       opts.featured ?? null, opts.minQtyE6?.toString() ?? null, opts.gradedE6?.toString() ?? null,
+      opts.scrydexCardId ?? null, opts.scrydexExpansionId ?? null,
     ],
   );
   const r = await q.query<{ id: string }>(`SELECT id FROM markets WHERE symbol = $1`, [opts.symbol]);

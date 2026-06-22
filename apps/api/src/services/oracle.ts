@@ -21,6 +21,8 @@ export interface OracleCard {
   cardId: string; // provider display id — keys index constituents + the graded write
   tcgplayerId?: number | null; // stable cross-provider ids (markets.tcgplayer_id / provider_card_id)
   providerCardId?: string | null;
+  scrydexCardId?: string | null; // set when a market is listed/priced via Scrydex (stamped atomically with the upsert)
+  scrydexExpansionId?: string | null;
   displayName: string;
   variant: string | null;
   imageSmall: string | null;
@@ -51,6 +53,8 @@ export function toCardUpsert(c: OracleCard): CardUpsert {
     metadata: c.metadata,
     tcgplayerId: c.tcgplayerId,
     providerCardId: c.providerCardId,
+    scrydexCardId: c.scrydexCardId,
+    scrydexExpansionId: c.scrydexExpansionId,
     featured: c.featured, // undefined keeps the stored flag (rebalanced by the discovery job)
     gradedE6: c.gradedE6, // Scrydex-first PSA-10; persisted per-print (COALESCEd so null never clobbers)
   };

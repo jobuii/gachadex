@@ -44,7 +44,7 @@ function marketSubtitle(m) {
 }
 
 /** One whole-catalog search result: trade it if a market exists, list it on demand if it qualifies. */
-function CatalogRow({ r, existing, listingEnabled, onSelect, onListed }) {
+function CatalogRow({ r, existing, listingEnabled, game, onSelect, onListed }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -52,7 +52,7 @@ function CatalogRow({ r, existing, listingEnabled, onSelect, onListed }) {
     setErr(null);
     setBusy(true);
     try {
-      const { marketId } = await api.ensureMarket(r.providerCardId);
+      const { marketId } = await api.ensureMarket(r.providerCardId, game);
       await onListed(marketId);
     } catch (e) {
       setErr(e.message);
@@ -76,7 +76,7 @@ function CatalogRow({ r, existing, listingEnabled, onSelect, onListed }) {
         {existing ? (
           <span className="catalog-state up">TRADE ▸</span>
         ) : !r.listable ? (
-          <span className="catalog-state" title="Needs a $10+ TCGplayer price corroborated by eBay sales">not listable</span>
+          <span className="catalog-state" title="Needs a $10+ market price">not listable</span>
         ) : !listingEnabled ? (
           // listable, but on-demand listing is turned off server-side — hide the (dead) LIST button
           <span className="catalog-state" title="On-demand listing is currently disabled">listing off</span>
@@ -200,7 +200,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
             aria-selected={game === g.id}
             className={`game-tab-btn ${game === g.id ? 'on' : ''}`}
             style={{ '--dot': g.color }}
-            onClick={() => setGame(g.id)}
+            onClick={() => { setGame(g.id); setCatalog(null); }} // drop the previous game's rows so a stale row can't be listed against the new game
           >
             <span className="gdot" />
             {g.label}
@@ -323,6 +323,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
                     r={r}
                     existing={r.marketId ? marketById.get(r.marketId) ?? null : null}
                     listingEnabled={listingEnabled}
+                    game={game}
                     onSelect={onSelect}
                     onListed={onListed}
                   />
