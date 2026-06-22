@@ -10,6 +10,7 @@ const VIEWS = [
   { id: 'trade', label: 'Exchange', icon: '📈', short: 'Trade' },
   { id: 'markets', label: 'Markets', icon: '🎴', short: 'Markets' },
   { id: 'pool', label: 'Pool', icon: '💧', short: 'Pool' },
+  { id: 'games', label: 'Games', icon: '🎮', short: 'Games' },
   { id: 'leaderboard', label: 'Leaderboard', icon: '🏆', short: 'Ranks' },
   { id: 'portfolio', label: 'Portfolio', icon: '👤', short: 'Folio' },
 ];

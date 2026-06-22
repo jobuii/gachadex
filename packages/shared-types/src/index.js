@@ -301,6 +301,55 @@ export const DelegateCreateRequest = DelegateNonceRequest.extend({
   signature: z.string(), // base58 MASTER-wallet signature over `message`
 });
 
+// --- games (docs/games-spec.md) ----------------------------------------------
+
+// Rotate the provably-fair client seed (1–64 printable ASCII chars).
+export const ClientSeedRequest = z.object({
+  clientSeed: z.string().trim().min(1).max(64).regex(/^[\x20-\x7E]+$/, 'client seed: printable ASCII only'),
+});
+
+// Open a pack: a tier price (whole USD, validated against the live config server-side) + an idempotency key.
+export const PackRipOpenRequest = z.object({
+  tier: z.coerce.number().int().positive().max(10_000_000),
+  idempotencyKey: z.string().min(8),
+});
+
+// Sell a held prize back for USDC.
+export const PrizeSellRequest = z.object({
+  prizeId: z.string().min(1),
+});
+
+// Live-tunable games config (admin Games view). Partial — only provided keys change. Bounds mirror
+// game-config.ts; `tiers` nests a per-tier weighted value-band table the rip draws from.
+const PackBandReq = z.object({
+  minUsd: z.coerce.number().int().min(0).max(10_000_000),
+  maxUsd: z.coerce.number().int().min(0).max(10_000_000),
+  weight: z.coerce.number().min(0).max(1_000_000_000),
+});
+const PackTierReq = z.object({
+  price: z.coerce.number().int().positive().max(10_000_000),
+  bands: z.array(PackBandReq).min(1).max(12),
+});
+export const GameConfigRequest = z
+  .object({
+    packRip: z
+      .object({
+        enabled: z.boolean().optional(),
+        buybackSpreadBps: z.coerce.number().int().min(0).max(9000).optional(),
+        maxPrizeUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+        tiers: z.array(PackTierReq).min(1).max(12).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+// Seed the GAME_POOL bankroll (play-money) — a whole/fractional dollar amount.
+export const GamePoolSeedRequest = z.object({
+  amountUsd: z.coerce.number().positive().max(10_000_000),
+});
+
 // --- websocket protocol ------------------------------------------------------
 
 export const WS_PUBLIC_CHANNELS = ['mark', 'stats', 'oi', 'funding']; // channel:{marketId}

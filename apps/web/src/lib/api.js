@@ -171,6 +171,14 @@ export function capturePendingReferral() {
 export const getPendingReferral = () => localStorage.getItem(REF_KEY);
 export const clearPendingReferral = () => localStorage.removeItem(REF_KEY);
 
+// --- games (docs/games-spec.md) ---
+export const getGames = () => req('/games'); // public: { enabled, games: [{ id, name, enabled, tiers, buybackSpreadBps }] }
+export const getGamesFairness = () => req('/games/fairness', { auth: true }); // { serverSeedHash, clientSeed, nonce }
+export const setGamesClientSeed = (clientSeed) => req('/games/fairness/client-seed', { method: 'POST', auth: true, body: { clientSeed } });
+export const packRipOpen = (tier, idempotencyKey) => req('/games/pack-rip/open', { method: 'POST', auth: true, body: { tier, idempotencyKey } });
+export const packRipSellBack = (prizeId) => req('/games/pack-rip/sell-back', { method: 'POST', auth: true, body: { prizeId } });
+export const getGamePrizes = () => req('/games/prizes', { auth: true }); // { prizes: [{ prizeId, displayName, imageSmall, valueE6, ... }] }
+
 // --- LP ---
 export const getPool = () => req('/lp/pool');
 export const getLpPosition = () => req('/lp/position', { auth: true });
@@ -215,6 +223,10 @@ export const adminSetChatThresholds = (body, adminKey) => adminReq('/admin/chat/
 export const adminGetDropConfig = (adminKey) => adminGet('/admin/chat/drop-config', adminKey);
 export const adminSetDropConfig = (body, adminKey) => adminReq('/admin/chat/drop-config', adminKey, body);
 export const adminGetDrop = (adminKey) => adminGet('/admin/chat/drop', adminKey);
+// Games admin: per-game config (live knobs) + the GAME_POOL bankroll; seed the pool (play-money).
+export const adminGetGamesConfig = (adminKey) => adminGet('/admin/games/config', adminKey);
+export const adminSetGamesConfig = (body, adminKey) => adminReq('/admin/games/config', adminKey, body);
+export const adminSeedGamePool = (amountUsd, adminKey) => adminReq('/admin/games/seed-pool', adminKey, { amountUsd });
 // Treasury + insurance. /admin/treasury (full PoR view incl. insurance + allocatable surplus) is
 // real-funds-only; /admin/insurance (balance) + the fee-allocation moves work in play-money too.
 export const adminGetTreasury = (adminKey) => adminGet('/admin/treasury', adminKey);

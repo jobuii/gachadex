@@ -215,4 +215,10 @@
   .screener-name { max-width: none; }
   .screener-thumb { width: 26px; height: 36px; }
   .screener-badge { font-size: 0.38rem; }
+
+  /* games: tighter tiles + stacked rip actions */
+  .games-grid { grid-template-columns: 1fr 1fr; }
+  .rip-head-right { width: 100%; justify-content: space-between; }
+  .rip-actions { flex-direction: column; }
+  .rip-actions .btn-primary, .rip-actions .btn-ghost { width: 100%; }
 }

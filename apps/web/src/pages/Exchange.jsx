@@ -8,6 +8,7 @@ import { BottomPanel } from '../components/BottomPanel';
 import { MarketsScreener } from '../components/MarketsScreener';
 import { Portfolio } from '../components/Portfolio';
 import { PoolView } from '../components/PoolView';
+import { GamesView } from '../components/GamesView';
 import { Leaderboard } from '../components/Leaderboard';
 import { AdminPanel } from '../components/AdminPanel';
 import { ChatSidebar } from '../components/ChatSidebar';
@@ -167,6 +168,7 @@ export function Exchange() {
       {activeView === 'markets' && <MarketsScreener markets={markets} loading={loading} onTradeMarket={handleTradeMarket} />}
       {activeView === 'portfolio' && <Portfolio markets={markets} onSelect={handleTradeMarket} />}
       {activeView === 'pool' && <PoolView />}
+      {activeView === 'games' && <GamesView onTradeMarket={handleTradeMarket} />}
       {activeView === 'leaderboard' && <Leaderboard />}
       {activeView === 'admin' && <AdminPanel onGoToMarket={(id) => handleTradeMarket({ id })} />}
 

@@ -3,6 +3,7 @@ import { formatUsd, formatSignedUsd, toE6, shortenPubkey } from '@pokex/pricing'
 import * as api from '../lib/api.js';
 import { CustomersView } from './CustomersView.jsx';
 import { ChatAdminView } from './ChatAdminView.jsx';
+import { GamesAdminView } from './GamesAdminView.jsx';
 import { Stat, PnlStat } from './adminStats.jsx';
 
 /**
@@ -566,11 +567,14 @@ export function AdminPanel({ onGoToMarket } = {}) {
         <button className={`admin-tab ${tab === 'main' ? 'active' : ''}`} onClick={() => setTab('main')}>Main</button>
         <button className={`admin-tab ${tab === 'customers' ? 'active' : ''}`} onClick={() => setTab('customers')}>Customers</button>
         <button className={`admin-tab ${tab === 'chat' ? 'active' : ''}`} onClick={() => setTab('chat')}>Chat</button>
+        <button className={`admin-tab ${tab === 'games' ? 'active' : ''}`} onClick={() => setTab('games')}>Games</button>
       </div>
 
       {tab === 'customers' && <CustomersView adminKey={adminKey} onGoToMarket={onGoToMarket} />}
 
       {tab === 'chat' && <ChatAdminView adminKey={adminKey} />}
+
+      {tab === 'games' && <GamesAdminView adminKey={adminKey} />}
 
       {tab === 'main' && (
         <>

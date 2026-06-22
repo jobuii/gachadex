@@ -59,6 +59,8 @@ export const config = {
     catalogSearch: num('RL_CATALOG_SEARCH', 30), // each uncached search costs a provider request
     marketEnsure: num('RL_MARKET_ENSURE', 10), // on-demand listing: provider request + market create
     imageProxy: num('RL_IMAGE_PROXY', 120), // same-origin re-serve of whitelisted CDN images (for the share card)
+    gamePlay: num('RL_GAME_PLAY', 30), // games wager endpoints (pack rip open / sell-back)
+    gameFairness: num('RL_GAME_FAIRNESS', 30), // provably-fair panel reads + client-seed rotation
   },
 
   // Database. Empty => use embedded PGlite (local dev, zero deps).
@@ -144,6 +146,11 @@ export const config = {
   dropTipsEnabled: process.env.DROP_TIPS_ENABLED === 'true',
   dropTipMinUsd: num('DROP_TIP_MIN_USD', 1), // smallest single tip (USD)
   dropTipMaxUsd: num('DROP_TIP_MAX_USD', 10_000), // fat-finger cap on a single tip (USD)
+
+  // Games surface (docs/games-spec.md). Master gate, OFF by default — real-money wagering rides above
+  // the existing ALLOW_MAINNET_FUNDS gate. Per-game toggles live in the admin Games view (game-config.ts);
+  // this env flag is the kill switch that hides + disables the whole surface until the operator opts in.
+  gamesEnabled: process.env.GAMES_ENABLED === 'true',
 
   // Funding: per-accrual rate = skewFactor * (skew / openInterest), bps (the heavy side pays)
   fundingSkewFactorBps: num('FUNDING_SKEW_FACTOR_BPS', 30), // skew-balancing component (max)

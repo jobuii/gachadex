@@ -202,6 +202,42 @@ export async function emitChatEvent(db: Db, evt: ChatEventInput): Promise<void> 
   } satisfies ChatMessage);
 }
 
+/**
+ * Persist + broadcast a Games BIG WIN action bar (a big pack pull / prize). Renders in the same chat
+ * ActionBar as trade wins (meta.variant='big_win'); `side` is intentionally absent (no long/short for a
+ * game). Best-effort — callers swallow its errors so a chat hiccup can never roll back a play.
+ */
+export async function emitGameWinEvent(
+  db: Db,
+  evt: { userId: string; marketId: string; payoutE6: bigint; game: string },
+): Promise<void> {
+  const r = await db.query<{ dn: string | null; pk: string; is_mod: boolean; mkt: string }>(
+    `SELECT u.display_name AS dn, u.solana_pubkey AS pk, u.is_mod, m.display_name AS mkt
+     FROM users u JOIN markets m ON m.id = $2 WHERE u.id = $1`,
+    [evt.userId, evt.marketId],
+  );
+  if (!r.rows[0]) return;
+  const handle = handleFor(r.rows[0].dn, r.rows[0].pk);
+  const marketName = r.rows[0].mkt;
+  const meta: Record<string, unknown> = {
+    variant: 'big_win',
+    game: evt.game,
+    marketId: evt.marketId,
+    marketName,
+    pnlE6: evt.payoutE6.toString(),
+    notionalE6: evt.payoutE6.toString(),
+  };
+  const body = `${handle} pulled ${formatUsd(evt.payoutE6, { decimals: 0 })} — ${marketName} (${evt.game})`;
+  const id = randomUUID();
+  const ins = await db.query<{ created_at: string }>(
+    `INSERT INTO chat_messages(id, user_id, body, kind, meta) VALUES($1, $2, $3, 'event', $4) RETURNING created_at`,
+    [id, evt.userId, body, JSON.stringify(meta)],
+  );
+  publish('chat', 'event', {
+    id, userId: evt.userId, handle, body, createdAt: ins.rows[0].created_at, replyTo: null, kind: 'event', meta, isMod: r.rows[0].is_mod,
+  } satisfies ChatMessage);
+}
+
 export interface Profile {
   userId: string;
   username: string | null; // the chosen display name (null if unset)

@@ -11,6 +11,7 @@ import { loadFee, loadLiqFee, loadFundingFactor } from './services/fees.ts';
 import { loadMarkClampBps } from './services/marks.ts';
 import { loadChatConfig } from './services/chat-config.ts';
 import { loadDropConfig } from './services/drop-config.ts';
+import { loadGameConfig } from './services/game-config.ts';
 import { loadWithdrawalAutoProcess, getWithdrawalAutoProcess } from './services/withdrawal-config.ts';
 import { tryAcquireLease, releaseLease } from './services/lease.ts';
 import { getDefaultClient } from './services/providers/tcgpricelookup.ts';
@@ -216,7 +217,7 @@ async function main() {
     startLiquidationLoop(db, app.log);
     // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
     // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.
-    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d), loadDropConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
+    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
     await loadLiveKnobs(db);
     setInterval(() => void loadLiveKnobs(db).catch((e) => app.log.warn(e, 'live-knob refresh failed')), 30_000);
     if (config.realFunds) {
