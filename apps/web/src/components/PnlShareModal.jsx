@@ -20,32 +20,6 @@ const C = {
   pink: '#F472B6',
 };
 
-// the hexagon brand gem (6-facet), drawn at (cx,cy) with circumradius r.
-function drawGem(ctx, cx, cy, r) {
-  const pts = [];
-  for (let i = 0; i < 6; i++) {
-    const a = -Math.PI / 2 + (i * Math.PI) / 3; // pointy-top hexagon
-    pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
-  }
-  const g = ctx.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
-  g.addColorStop(0, C.cyan);
-  g.addColorStop(0.5, C.violet);
-  g.addColorStop(1, C.pink);
-  ctx.beginPath();
-  pts.forEach(([px, py], i) => (i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)));
-  ctx.closePath();
-  ctx.fillStyle = g;
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(6,6,10,0.42)'; // facet lines from centre → the 6-triangle gem look
-  ctx.lineWidth = 1.5;
-  pts.forEach(([px, py]) => {
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.lineTo(px, py);
-    ctx.stroke();
-  });
-}
-
 const usdc = (e6) => {
   const n = Math.round(Number(e6 ?? 0) / 1e6);
   return `${n.toLocaleString('en-US')} USDC`;
@@ -125,13 +99,12 @@ function drawCard(canvas, d, bgImg) {
     ctx.fillRect(0, 0, W, H);
   }
 
-  // ---- header: hexagon gem + GACHA·DEX wordmark ----
-  drawGem(ctx, PAD + 13, PAD + 17, 13);
+  // ---- header: GACHA·DEX wordmark (text only — no gem) ----
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
   ctx.font = "700 27px 'Space Grotesk', sans-serif";
   ctx.fillStyle = C.cream;
-  const wx = PAD + 40;
+  const wx = PAD;
   ctx.fillText('GACHA', wx, PAD + 17);
   const gachaW = ctx.measureText('GACHA').width;
   const wgrad = ctx.createLinearGradient(wx + gachaW, 0, wx + gachaW + 90, 0);
