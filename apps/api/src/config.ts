@@ -272,20 +272,13 @@ if (config.adlPnlFactorBps > 0 && config.maxPnlFactorBps > 0 && config.adlPnlFac
 //    serve it. tcgpl serves the search under BOTH ORACLE_PRIMARY=tcgpricelookup and =scrydex (scrydex
 //    runs tcgpl alongside for the cross-check). NOT gated on the NAV caps.
 //  - searchAndBetActive: on-demand LISTING (`/markets/ensure`), which CREATES a real-money-tradeable
-//    market. Under REAL funds it also needs all three NAV gates armed (the pool defenses a long-tail
-//    market leans on). A missing gate disables LISTING only — search keeps working — and never
-//    crashes the API (custody/trading have their own protections). Play money is exempt (gates ~ 0).
+//    market. It now follows catalogue search directly — the real-funds requirement that all three NAV
+//    gates be armed (added 2026-06-12) was REMOVED per operator decision 2026-06-22, so cards list
+//    irrespective of the OI/PnL pool gates. NB this lets thin long-tail markets open without those pool
+//    defenses armed; the trading/custody paths have their own protections and never crash with gates ~ 0.
 export const catalogSearchEnabled =
   config.searchAndBet && (config.oraclePrimary === 'tcgpricelookup' || config.oraclePrimary === 'scrydex');
-const navGatesArmed = config.maxPnlFactorBps > 0 && config.adlPnlFactorBps > 0 && config.oiCapNavBps > 0;
-export const searchAndBetActive = catalogSearchEnabled && (!config.realFunds || navGatesArmed);
-if (catalogSearchEnabled && config.realFunds && !navGatesArmed) {
-  console.warn(
-    '[config] on-demand LISTING disabled (catalogue search still works): REAL_FUNDS requires ' +
-      'MAX_PNL_FACTOR_BPS, ADL_PNL_FACTOR_BPS and OI_CAP_NAV_BPS all > 0. Set the three gates (and ' +
-      'redeploy) to enable listing new markets.',
-  );
-}
+export const searchAndBetActive = catalogSearchEnabled;
 
 // Scrydex webhooks are the PRIMARY price-update path (§8); without the secret the receiver deny-alls
 // every event (safe, but the feed falls back to the slower batch poll). Warn so a cutover doesn't run
