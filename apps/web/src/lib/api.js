@@ -108,7 +108,7 @@ export const getMarkets = () => req('/markets');
 export const getCandles = (id, tf) => req(`/markets/${id}/candles?tf=${encodeURIComponent(tf)}`);
 export const getMarketDetails = (id) => req(`/markets/${id}/details`);
 // Search-and-bet: whole-catalog search (server-cached) + on-demand market listing (auth).
-export const searchCatalog = (q, game) => req(`/catalog/search?q=${encodeURIComponent(q)}&game=${encodeURIComponent(game)}`);
+export const searchCatalog = (q, game) => req(`/catalog/search?q=${encodeURIComponent(q)}&game=${encodeURIComponent(game)}`, { auth: true });
 export const ensureMarket = (providerCardId) => req('/markets/ensure', { method: 'POST', auth: true, body: { providerCardId } });
 
 // --- account / trading ---
