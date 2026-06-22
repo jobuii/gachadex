@@ -9,7 +9,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 
 const { getDb, closeDb } = await import('../../db/client.ts');
 const { initDb } = await import('../../db/init.ts');
-const { ScrydexClient, extractRaw, scrydexSlug, scoreConfidence, combinePrice, fromScrydexCard, fetchScrydexTrackedCards, SCRYDEX_BATCH_SIZE, verifyScrydexSignature, backfillScrydexIds } =
+const { ScrydexClient, extractRaw, scrydexGradedLadder, scrydexPsa10E6, scrydexSlug, scoreConfidence, combinePrice, fromScrydexCard, fetchScrydexTrackedCards, SCRYDEX_BATCH_SIZE, verifyScrydexSignature, backfillScrydexIds } =
   await import('./scrydex.ts');
 const { ProviderLimiter } = await import('./limiter.ts');
 const { upsertCardMarket } = await import('../markets.ts');
@@ -117,6 +117,42 @@ test('extractRaw: NM absent -> LP fallback; graded-only -> null; JPY currency pa
 
   const noMarket = card([{ marketplaces: [{ name: 'tcgplayer', product_id: 7 }], prices: [{ type: 'raw', condition: 'NM', low: 5 }] }]);
   assert.equal(extractRaw(noMarket, 7), null, 'a raw entry with no market value is skipped');
+});
+
+// --- scrydexGradedLadder / scrydexPsa10E6 ---
+const graded = (company: string, grade: string, market: number, extra: Record<string, unknown> = {}) =>
+  ({ type: 'graded', company, grade, market, ...extra });
+
+test('scrydexGradedLadder: builds + sorts the ladder, dedups company+grade (prefers a real range), drops bad rungs', () => {
+  const c = card([
+    {
+      name: 'holofoil',
+      marketplaces: [{ name: 'tcgplayer', product_id: '12345' }],
+      prices: [
+        raw('NM', 100, { currency: 'USD' }),
+        graded('PSA', '10', 7000, { low: 7000, high: 7000, currency: 'USD' }),
+        graded('CGC', '10', 24995, { low: 24995, high: 24995, currency: 'USD' }), // single-sale outlier — loses to the range
+        graded('CGC', '10', 5800, { low: 3215, high: 6095, currency: 'USD' }), // real range — kept
+        graded('BGS', '9.5', 4160, { low: 2605, high: 4417, currency: 'USD' }),
+        graded('PSA', '104', 999, { currency: 'USD' }), // mis-parsed grade (>10) — dropped
+        graded('PSA', '9', 0, { currency: 'USD' }), // no positive market — dropped
+      ],
+    },
+  ]);
+  const ladder = scrydexGradedLadder(c, 12345, 0.0066);
+  assert.deepEqual(
+    ladder.map((r) => `${r.grader} ${r.grade} ${r.priceE6}`),
+    ['PSA 10 7000000000', 'BGS 9.5 4160000000', 'CGC 10 5800000000'], // PSA<BGS<CGC; the $24995 outlier dropped
+  );
+  assert.equal(scrydexPsa10E6(ladder)?.toString(), (7000n * 1_000_000n).toString());
+  assert.equal(scrydexGradedLadder(c, 99999, null).length, 0, 'no matching product_id -> empty');
+  assert.equal(scrydexPsa10E6([]), null, 'no PSA-10 rung -> null');
+});
+
+test('scrydexGradedLadder: JPY rungs are FX-converted to USD, and dropped when no FX', () => {
+  const c = card([{ marketplaces: [{ name: 'tcgplayer', product_id: 7 }], prices: [graded('PSA', '10', 1_000_000, { currency: 'JPY' })] }]);
+  assert.equal(scrydexGradedLadder(c, 7, 0.0066)[0].priceE6, (6600n * 1_000_000n).toString()); // 1,000,000 JPY * 0.0066 = $6,600
+  assert.equal(scrydexGradedLadder(c, 7, null).length, 0, 'JPY graded with no FX -> rung dropped');
 });
 
 // --- scoreConfidence (the §6 decision tree) ---

@@ -6,7 +6,7 @@ import type { OracleCard } from '../oracle.ts';
 import { getJpyUsd } from './fx.ts';
 import { ProviderLimiter, sleep, type ProviderPriority } from './limiter.ts';
 import { formatDisplayName } from './display.ts';
-import { fromTplCard, getDefaultClient, tplCrossCheck, type TplCard, type TrackedMarket } from './tcgpricelookup.ts';
+import { fromTplCard, getDefaultClient, tplCrossCheck, sortGradeRows, type GradeRow, type TplCard, type TrackedMarket } from './tcgpricelookup.ts';
 
 /**
  * Scrydex provider (Growth plan; spec docs/scrydex-pricing-build-spec.md). Primary RAW price source
@@ -198,6 +198,15 @@ export interface ScrydexRaw {
 /** Extract OUR card's raw TCGplayer quote from a Scrydex card: find the variant whose marketplace
  *  `product_id` equals our `tcgplayer_id`, then its raw price for the best available condition
  *  (NM→LP→MP) that actually carries a positive market value. Returns null if unmatched/unpriced. */
+/** The card variant whose TCGplayer marketplace matches OUR product id (the per-printing join key). */
+function findVariantByProduct(card: ScrydexCard, tcgplayerId: number | null): ScrydexVariant | undefined {
+  if (tcgplayerId == null) return undefined;
+  const want = String(tcgplayerId);
+  return (card.variants ?? []).find((v) =>
+    (v.marketplaces ?? []).some((m) => m.product_id != null && String(m.product_id) === want),
+  );
+}
+
 export function extractRaw(card: ScrydexCard, tcgplayerId: number | null): ScrydexRaw | null {
   if (tcgplayerId == null) return null;
   const want = String(tcgplayerId);
@@ -221,6 +230,45 @@ export function extractRaw(card: ScrydexCard, tcgplayerId: number | null): Scryd
     }
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Graded prices (PSA/BGS/CGC/… ladder) — Scrydex carries a full per-grade ladder with trends; richer
+// + fresher than tcgpl's eBay graded, and free of the eBay-median garbage. tcgpl stays the fallback.
+// ---------------------------------------------------------------------------
+
+/** The full graded ladder off a Scrydex card, matched to OUR market by the TCGplayer product_id and
+ *  FX'd to USD. Dedups duplicate company+grade (prefers a real low<high range over a single-sale
+ *  outlier) and drops JPY rungs when no FX is available. Empty when the card has no graded data. */
+export function scrydexGradedLadder(card: ScrydexCard, tcgplayerId: number | null, fxJpyUsd: number | null): GradeRow[] {
+  const variant = findVariantByProduct(card, tcgplayerId);
+  if (!variant) return [];
+  const ranged = (p: ScrydexPrice) => typeof p.low === 'number' && typeof p.high === 'number' && p.low < p.high;
+  const best = new Map<string, ScrydexPrice>();
+  for (const p of variant.prices ?? []) {
+    if (p.type !== 'graded' || !p.company || !p.grade || typeof p.market !== 'number' || p.market <= 0) continue;
+    const g = Number(p.grade);
+    if (!Number.isFinite(g) || g <= 0 || g > 10) continue; // guard mis-parsed grades
+    const key = `${p.company}|${p.grade}`;
+    const cur = best.get(key);
+    if (!cur || (ranged(p) && !ranged(cur))) best.set(key, p); // prefer a real range over a one-sale outlier
+  }
+  const rows: GradeRow[] = [];
+  for (const p of best.values()) {
+    let usd = p.market as number;
+    if (p.currency === 'JPY') {
+      if (!fxJpyUsd || fxJpyUsd <= 0) continue; // can't price a JPY graded rung without FX — drop it
+      usd *= fxJpyUsd;
+    }
+    rows.push({ grader: (p.company as string).toUpperCase(), grade: p.grade as string, priceE6: toE6(usd).toString() });
+  }
+  return sortGradeRows(rows);
+}
+
+/** PSA-10 (USD micro) off a Scrydex graded ladder — the graded-index anchor + stored graded price. */
+export function scrydexPsa10E6(ladder: GradeRow[]): bigint | null {
+  const row = ladder.find((r) => r.grader === 'PSA' && r.grade === '10');
+  return row ? BigInt(row.priceE6) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -333,10 +381,7 @@ const EMPTY_CROSS: CrossCheck = { tcgpMarket: null, ebay1d: null };
  *  the combined price/tier. */
 export function fromScrydexCard(c: ScrydexCard, t: ScrydexTracked): OracleCard {
   const front = (c.images ?? []).find((i) => i.type === 'front') ?? (c.images ?? [])[0];
-  const want = t.tcgplayer_id != null ? String(t.tcgplayer_id) : null;
-  const variant = (c.variants ?? []).find((v) =>
-    (v.marketplaces ?? []).some((m) => m.product_id != null && want != null && String(m.product_id) === want),
-  );
+  const variant = findVariantByProduct(c, t.tcgplayer_id);
   return {
     game: t.game,
     symbol: t.symbol,
@@ -421,10 +466,16 @@ export async function fetchScrydexTrackedCards(
     }
     if (!base) return []; // priced but nothing to describe it — skip rather than upsert a null display
 
+    // Graded: Scrydex full ladder first (richer + free of the tcgpl eBay-median garbage); tcgpl's eBay
+    // PSA-10 (carried on `base` when it came from fromTplCard) is the fallback for the index anchor.
+    const sxGradedLadder = sxCard ? scrydexGradedLadder(sxCard, t.tcgplayer_id, fxJpyUsd) : [];
+    const gradedE6 = scrydexPsa10E6(sxGradedLadder) ?? base.gradedE6;
+
     return [
       {
         ...base,
         rawE6: toE6(combined.priceUsd),
+        gradedE6,
         confident: combined.tier === 'tradeable',
         markCorroborated: combined.ebayCorroborated, // engages the §6a mark guard (eBay-only corroboration)
         payload: {
@@ -436,6 +487,7 @@ export async function fetchScrydexTrackedCards(
             day1Pct: sxRaw?.day1Pct ?? null,
             tier: combined.tier,
             fxJpyUsd,
+            graded: sxGradedLadder.length ? sxGradedLadder : null, // full ladder for the detail panel
           },
           tcgpricelookup: { cross, prices: tplCard?.prices ?? null },
         },

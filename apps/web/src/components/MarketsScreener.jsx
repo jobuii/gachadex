@@ -104,17 +104,18 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
             </button>
           ))}
         </div>
-        <div className="screener-spacer" />
-        <select className="screener-select" value={rarity} onChange={(e) => setRarity(e.target.value)}>
-          <option value="all">Rarity: All</option>
-          {rarities.map((r) => (
-            <option key={r} value={r}>{r}</option>
-          ))}
-        </select>
-        <button className={`screener-jpy ${showJpy ? 'on' : ''}`} onClick={() => setShowJpy((v) => !v)} aria-pressed={showJpy} title="Show Japanese-market cards">
-          JPY {showJpy ? 'ON' : 'OFF'}
-        </button>
-        <input className="screener-search" placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <div className="screener-right">
+          <select className="screener-select" value={rarity} onChange={(e) => setRarity(e.target.value)}>
+            <option value="all">Rarity: All</option>
+            {rarities.map((r) => (
+              <option key={r} value={r}>{r}</option>
+            ))}
+          </select>
+          <button className={`screener-jpy ${showJpy ? 'on' : ''}`} onClick={() => setShowJpy((v) => !v)} aria-pressed={showJpy} title="Show Japanese-market cards">
+            JPY {showJpy ? 'ON' : 'OFF'}
+          </button>
+          <input className="screener-search" placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
       </div>
 
       {loading ? (

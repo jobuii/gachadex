@@ -37,11 +37,13 @@ export async function scrydexWebhookRoutes(app: FastifyInstance): Promise<void> 
       return reply.code(400).send({ error: 'invalid payload' });
     }
 
-    // Only raw-price updates re-price the mark; graded/pop-report events are acked and ignored here.
-    // Dedup + cap the expansion list so one (validly-signed) event can't fan out to an unbounded batch
-    // fetch — a real event names a handful of expansions; the daily credit cap is the backstop.
+    // Raw-price AND graded updates re-price (a reprice re-fetches the whole card, refreshing the raw mark
+    // and the Scrydex graded ladder/PSA-10). Pop-report events are acked and ignored. Dedup + cap the
+    // expansion list so one (validly-signed) event can't fan out to an unbounded batch fetch — a real
+    // event names a handful of expansions; the daily credit cap is the backstop.
     const ids = [...new Set(event.data?.expansion_ids ?? [])].slice(0, MAX_EXPANSION_IDS_PER_EVENT);
-    if (typeof event.name === 'string' && event.name.endsWith('prices.raw_updated') && ids.length > 0) {
+    const reprices = typeof event.name === 'string' && (event.name.endsWith('prices.raw_updated') || event.name.endsWith('graded_updated'));
+    if (reprices && ids.length > 0) {
       // Fire-and-forget: ack immediately (<2s), re-price in the background. A miss is caught by the
       // slow batch-poll reconcile, so a failed/aborted re-price is not lost forever.
       void getDb()

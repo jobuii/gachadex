@@ -2,21 +2,49 @@ import { useEffect, useRef, useState } from 'react';
 import { formatPct } from '@pokex/pricing';
 import * as api from '../lib/api.js';
 
-// ---- canvas geometry + palette (matches references/PNL-card.png) ----
+// ---- canvas geometry + palette (GachaDex brand — fixed, since the card is a shared artifact) ----
 const W = 1200;
 const H = 750;
 const PAD = 40;
 const C = {
-  bg: '#0d0d12',
-  screen: '#04140b',
-  screenBorder: '#1f5f3a',
-  gold: '#f5c542',
-  cream: '#f3ede0',
-  dark: '#15100a',
-  green: '#36e07a',
-  red: '#ff5a5a',
-  muted: '#6b6b76',
+  bg: '#06060a',
+  screenBorder: '#6D28D9',
+  gold: '#22D3EE', // brand cyan (the secondary accent that replaced the old gold)
+  cream: '#F5F5F7',
+  dark: '#06060a',
+  green: '#34D399',
+  red: '#F43F5E',
+  muted: '#8B8B95',
+  cyan: '#22D3EE',
+  violet: '#8B5CF6',
+  pink: '#F472B6',
 };
+
+// the hexagon brand gem (6-facet), drawn at (cx,cy) with circumradius r.
+function drawGem(ctx, cx, cy, r) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI) / 3; // pointy-top hexagon
+    pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+  }
+  const g = ctx.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
+  g.addColorStop(0, C.cyan);
+  g.addColorStop(0.5, C.violet);
+  g.addColorStop(1, C.pink);
+  ctx.beginPath();
+  pts.forEach(([px, py], i) => (i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)));
+  ctx.closePath();
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(6,6,10,0.42)'; // facet lines from centre → the 6-triangle gem look
+  ctx.lineWidth = 1.5;
+  pts.forEach(([px, py]) => {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(px, py);
+    ctx.stroke();
+  });
+}
 
 const usdc = (e6) => {
   const n = Math.round(Number(e6 ?? 0) / 1e6);
@@ -43,32 +71,37 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-// A deterministic step line that climbs (profit) or falls (loss). Illustrative — positions carry no
-// per-trade history. Seeded off the magnitude so the same trade always draws the same line.
-function drawStepChart(ctx, x, y, w, h, gain) {
-  const steps = 7;
-  const seed = Math.abs(Math.round(gain * 100)) % 97;
-  const pts = [];
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    const jitter = (((seed * (i + 3)) % 11) / 11 - 0.5) * 0.12;
-    const base = gain >= 0 ? t : 1 - t; // up for profit, down for loss
-    pts.push(Math.min(0.95, Math.max(0.05, base * 0.8 + 0.12 + jitter)));
-  }
-  ctx.strokeStyle = gain >= 0 ? C.green : C.red;
-  ctx.lineWidth = 6;
-  ctx.lineJoin = 'miter';
-  ctx.beginPath();
-  for (let i = 0; i < pts.length; i++) {
-    const px = x + (w * i) / steps;
-    const py = y + h - pts[i] * h;
-    if (i === 0) ctx.moveTo(px, py);
-    else {
-      ctx.lineTo(px, y + h - pts[i - 1] * h); // horizontal tread
-      ctx.lineTo(px, py); // vertical riser
-    }
-  }
-  ctx.stroke();
+// A smooth trend line matching the hero terminal chart — the hero's zigzag pattern, rising for a
+// profit / falling for a loss, drawn with a left→right gradient stroke + a soft glow underlayer
+// (cyan→green when up, pink→red when down). Illustrative — positions carry no per-trade history.
+function drawTrendChart(ctx, x, y, w, h, gain) {
+  const up = gain >= 0;
+  const HERO = [[0, 95], [30, 80], [55, 88], [80, 60], [110, 68], [140, 40], [170, 50], [200, 22], [230, 30], [260, 8]];
+  const XMAX = 260, YMIN = 8, YMAX = 95;
+  const path = HERO.map(([px, py]) => {
+    const fx = px / XMAX;
+    let fy = (py - YMIN) / (YMAX - YMIN); // 1 at the low end, 0 at the top → rises left→right for a profit
+    if (!up) fy = 1 - fy;                 // mirror to a falling line for a loss
+    return [x + fx * w, y + fy * h];
+  });
+  const grad = ctx.createLinearGradient(x, 0, x + w, 0);
+  grad.addColorStop(0, up ? C.cyan : C.pink);
+  grad.addColorStop(1, up ? C.green : C.red);
+  const stroke = (width, alpha, blur) => {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = width;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    if (blur) { ctx.shadowColor = up ? C.green : C.red; ctx.shadowBlur = blur; }
+    ctx.beginPath();
+    path.forEach(([px, py], i) => (i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)));
+    ctx.stroke();
+    ctx.restore();
+  };
+  stroke(7, 0.45, 18); // soft glow underlayer
+  stroke(4, 1, 0);     // sharp line on top
 }
 
 function drawCard(canvas, d, bgImg) {
@@ -77,51 +110,53 @@ function drawCard(canvas, d, bgImg) {
   const gain = d.roePct;
   const accent = gain >= 0 ? C.green : C.red;
 
-  // base
+  // base + the traded card's art, cover-fit behind the WHOLE card at low opacity, then a dark overlay
+  // for text contrast. The screen/panels draw over it, so the art shows through faintly everywhere.
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, W, H);
+  if (bgImg) {
+    const scale = Math.max(W / bgImg.width, H / bgImg.height);
+    const iw = bgImg.width * scale;
+    const ih = bgImg.height * scale;
+    ctx.globalAlpha = 0.38;
+    ctx.drawImage(bgImg, (W - iw) / 2, 0, iw, ih); // top-aligned: show the card's TOP (name + upper art), cropped at the bottom
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(6,6,10,0.44)';
+    ctx.fillRect(0, 0, W, H);
+  }
 
-  // ---- header ----
-  ctx.fillStyle = C.gold;
-  ctx.beginPath();
-  ctx.arc(PAD + 8, PAD + 16, 7, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.font = "22px 'Press Start 2P', monospace";
+  // ---- header: hexagon gem + GACHA·DEX wordmark ----
+  drawGem(ctx, PAD + 13, PAD + 17, 13);
   ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  ctx.font = "700 27px 'Space Grotesk', sans-serif";
   ctx.fillStyle = C.cream;
-  ctx.fillText('GACHADEX', PAD + 28, PAD + 17);
+  const wx = PAD + 40;
+  ctx.fillText('GACHA', wx, PAD + 17);
+  const gachaW = ctx.measureText('GACHA').width;
+  const wgrad = ctx.createLinearGradient(wx + gachaW, 0, wx + gachaW + 90, 0);
+  wgrad.addColorStop(0, C.cyan);
+  wgrad.addColorStop(1, C.pink);
+  ctx.fillStyle = wgrad;
+  ctx.fillText('DEX', wx + gachaW, PAD + 17);
   // top-right CTA badge
-  ctx.font = "13px 'Press Start 2P', monospace";
-  const cta = 'INSERT COIN · TRADE NOW';
-  const cw = ctx.measureText(cta).width + 36;
-  roundRect(ctx, W - PAD - cw, PAD, cw, 38, 6);
+  ctx.font = "700 15px 'Space Grotesk', sans-serif";
+  const cta = 'TRADE NOW';
+  const cw = ctx.measureText(cta).width + 34;
+  roundRect(ctx, W - PAD - cw, PAD, cw, 34, 7);
   ctx.fillStyle = C.gold;
   ctx.fill();
   ctx.fillStyle = C.dark;
-  ctx.fillText(cta, W - PAD - cw + 18, PAD + 20);
+  ctx.fillText(cta, W - PAD - cw + 17, PAD + 17);
 
-  // ---- screen ----
+  // ---- screen ---- (shorter, to leave whitespace above the footer)
   const sx = PAD;
   const sy = 108;
   const sw = W - PAD * 2;
-  const sh = 512;
+  const sh = 480;
   roundRect(ctx, sx, sy, sw, sh, 6);
-  ctx.save();
-  ctx.clip();
-  ctx.fillStyle = C.screen;
-  ctx.fillRect(sx, sy, sw, sh);
-  if (bgImg) {
-    // cover-fit the card art, low opacity, behind everything
-    const scale = Math.max(sw / bgImg.width, sh / bgImg.height);
-    const iw = bgImg.width * scale;
-    const ih = bgImg.height * scale;
-    ctx.globalAlpha = 0.16;
-    ctx.drawImage(bgImg, sx + (sw - iw) / 2, sy + (sh - ih) / 2, iw, ih);
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = 'rgba(4,20,11,0.55)'; // darken for text contrast
-    ctx.fillRect(sx, sy, sw, sh);
-  }
-  ctx.restore();
+  ctx.fillStyle = 'rgba(8,8,16,0.34)'; // semi-transparent so the full-bleed card art shows through
+  ctx.fill();
   ctx.strokeStyle = C.screenBorder;
   ctx.lineWidth = 2;
   roundRect(ctx, sx, sy, sw, sh, 6);
@@ -129,26 +164,26 @@ function drawCard(canvas, d, bgImg) {
 
   // headline: name + side badge
   const tx = sx + 36;
-  ctx.font = "26px 'Press Start 2P', monospace";
+  ctx.font = "700 32px 'Space Grotesk', sans-serif";
   ctx.fillStyle = C.cream;
-  ctx.fillText(d.name, tx, sy + 56);
+  ctx.fillText(d.name, tx, sy + 58);
   const nameW = ctx.measureText(d.name).width;
-  ctx.font = "13px 'Press Start 2P', monospace";
+  ctx.font = "700 18px 'Space Grotesk', sans-serif";
   const badge = `${pos ? 'LONG' : 'SHORT'} ${d.leverage}X`;
-  const bw = ctx.measureText(badge).width + 24;
-  roundRect(ctx, tx + nameW + 22, sy + 42, bw, 30, 5);
+  const bw = ctx.measureText(badge).width + 28;
+  roundRect(ctx, tx + nameW + 24, sy + 40, bw, 36, 7);
   ctx.fillStyle = pos ? C.gold : C.red;
   ctx.fill();
   ctx.fillStyle = pos ? C.dark : C.cream;
-  ctx.fillText(badge, tx + nameW + 34, sy + 58);
+  ctx.fillText(badge, tx + nameW + 38, sy + 58);
 
   // hero %
-  ctx.font = "92px 'Press Start 2P', monospace";
+  ctx.font = "700 92px 'Space Grotesk', sans-serif";
   ctx.fillStyle = accent;
   ctx.fillText(formatPct(gain, 0), tx - 4, sy + 150);
 
-  // stylized chart in the lower screen
-  drawStepChart(ctx, tx, sy + 250, sw - 72, sh - 300, gain);
+  // stylized trend chart in the lower screen (matches the hero terminal line)
+  drawTrendChart(ctx, tx, sy + 250, sw - 72, sh - 300, gain);
 
   // ---- bottom panels ----
   const py = sy + sh + 20;
@@ -160,25 +195,25 @@ function drawCard(canvas, d, bgImg) {
     roundRect(ctx, px, py, pw, ph, 6);
     ctx.fillStyle = bg;
     ctx.fill();
-    ctx.font = "12px 'Press Start 2P', monospace";
+    ctx.font = "600 16px 'Space Grotesk', sans-serif";
     ctx.fillStyle = fg === C.cream ? 'rgba(243,237,224,0.6)' : 'rgba(21,16,10,0.6)';
-    ctx.fillText(label, px + 18, py + 24);
-    ctx.font = "20px 'Press Start 2P', monospace";
+    ctx.fillText(label, px + 18, py + 27);
+    ctx.font = "700 26px 'Space Grotesk', sans-serif";
     ctx.fillStyle = valColor || fg;
-    ctx.fillText(value, px + 18, py + 52);
+    ctx.fillText(value, px + 18, py + 57);
   };
   panel(0, 'INVESTED', d.invested, C.dark, C.gold, C.dark);
   panel(1, 'POSITION', d.position, C.dark, C.cream, C.dark);
   panel(2, 'PNL', d.pnl, gain >= 0 ? '#0a6b2e' : '#9a1414', C.gold, C.dark);
 
   // ---- footer ----
-  ctx.font = "12px 'Press Start 2P', monospace";
+  ctx.font = "600 17px 'Space Grotesk', sans-serif";
   ctx.fillStyle = C.muted;
-  ctx.fillText('GACHADEX.FUN', PAD, H - 22);
+  ctx.fillText('GACHADEX.FUN', PAD, H - 24);
   if (d.ref) {
     const ref = d.ref.toUpperCase();
     ctx.textAlign = 'right';
-    ctx.fillText(ref, W - PAD, H - 22);
+    ctx.fillText(ref, W - PAD, H - 24);
     ctx.textAlign = 'left';
   }
 }
@@ -209,7 +244,7 @@ export function PnlShareModal({ position, onClose }) {
       const pnlE6 = BigInt(position.pnlUusdc ?? position.unrealizedPnlUusdc ?? '0');
       const margin = BigInt(position.marginUusdc ?? '0');
       const roePct = margin > 0n ? (Number(pnlE6) / Number(margin)) * 100 : 0;
-      const name = shortName(position.displayName, position.symbol);
+      const name = shortName(details?.displayName ?? position.displayName, position.symbol);
       const data = {
         name,
         side: position.side,
@@ -233,7 +268,12 @@ export function PnlShareModal({ position, onClose }) {
           img.src = src;
         });
       }
-      await document.fonts.load("16px 'Press Start 2P'").catch(() => {}); // ensure the pixel font is loaded for canvas text
+      // ensure the brand font (both weights the card uses) is loaded before drawing canvas text
+      await Promise.all([
+        document.fonts.load("700 22px 'Space Grotesk'"),
+        document.fonts.load("600 16px 'Space Grotesk'"),
+        document.fonts.load("16px 'Space Grotesk'"),
+      ]).catch(() => {});
       if (!alive || !canvasRef.current) return;
       drawCard(canvasRef.current, data, bgImg);
       setReady(true);

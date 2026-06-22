@@ -45,8 +45,9 @@ export async function marketRoutes(app: FastifyInstance): Promise<void> {
     return { results: await searchCatalog(db, getDefaultClient(db), query, game) };
   });
 
-  // On-demand market creation CREATES a real-money-tradeable market, so it additionally requires the
-  // NAV gates (searchAndBetActive). When they're unset, search still works but listing is off.
+  // On-demand market creation CREATES a real-money-tradeable market; it follows catalogue search
+  // (searchAndBetActive === catalogSearchEnabled). The old real-funds NAV-gate requirement was removed
+  // 2026-06-22, so listing is on wherever catalogue search is on.
   if (!searchAndBetActive) return;
 
   // Authenticated (trade scope: delegated trading keys may list too) so anonymous traffic can't mint

@@ -17,8 +17,9 @@ process.env.USDC_MINT = 'Fake1111111111111111111111111111111111111111';
 process.env.TREASURY_PUBKEY = 'Fake2222222222222222222222222222222222222222';
 process.env.DEPOSIT_MASTER_SEED = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
 process.env.HOT_WALLET_SECRET = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
-// Search-and-bet on, tcgpricelookup live, but the THREE NAV gates intentionally UNSET — this is the
-// exact env that used to throw at config load and crash the boot.
+// Search-and-bet on, tcgpricelookup live; the THREE NAV gates intentionally UNSET — this was the exact
+// env that once threw at config load and crashed the boot. Since 2026-06-22 it's also the env where
+// on-demand listing is ENABLED, because listing no longer depends on the NAV caps (operator decision).
 process.env.ORACLE_PRIMARY = 'tcgpricelookup';
 process.env.TCGPRICELOOKUP_API_KEY = 'dummy';
 delete process.env.MAX_PNL_FACTOR_BPS;
@@ -36,14 +37,14 @@ test('REAL_FUNDS boot with search-and-bet on but NAV gates unset: server comes u
   assert.equal(res.statusCode, 200);
   assert.equal(res.json().ok, true);
   assert.equal(res.json().realFunds, true);
-  assert.equal(res.json().listingEnabled, false, 'health reports listing off (NAV gates unset) so the web can hide LIST');
+  assert.equal(res.json().listingEnabled, true, 'health reports listing ON — it follows catalogue search now, not the NAV gates');
 });
 
-test('catalogue search stays enabled (auth-gated) without the gates; on-demand listing is disabled', async () => {
+test('catalogue search and on-demand listing are both enabled without the NAV gates', async () => {
   // /catalog/search registered but authenticated → an anonymous request is 401, NOT a 404 missing route
   const search = await app.inject({ method: 'GET', url: '/catalog/search?q=ab&game=pokemon' });
   assert.equal(search.statusCode, 401, 'catalogue search route is registered (no NAV-gate dependency) and requires sign-in');
-  // /markets/ensure NOT registered → 404 (creating a real-money market needs the NAV gates)
+  // /markets/ensure now registered too (listing no longer gated on the NAV caps) → auth-gated 401, not 404
   const ensure = await app.inject({ method: 'POST', url: '/markets/ensure', payload: { providerCardId: 'x' } });
-  assert.equal(ensure.statusCode, 404, 'on-demand listing is gated off until the NAV caps are set');
+  assert.equal(ensure.statusCode, 401, 'on-demand listing route is registered (NAV-gate requirement removed) and requires sign-in');
 });

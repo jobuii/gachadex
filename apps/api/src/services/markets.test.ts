@@ -218,6 +218,30 @@ test('gradeLadder: full PSA/BGS/CGC ladder, oracle price chain per grade, sorted
   assert.deepEqual(gradeLadder(null), [], 'prints without a graded object (non-tpl payloads) have no ladder');
 });
 
+test('getMarketDetails: prefers the Scrydex graded ladder, falls back to the tcgpl ladder', async () => {
+  const insertPrint = (marketId: string, payload: unknown) =>
+    db.query(
+      `INSERT INTO oracle_prices(market_id, index_price_e6, raw_payload, source_observed_at, is_accepted)
+       VALUES ($1, 100000000, $2, now(), true)`,
+      [marketId, JSON.stringify(payload)],
+    );
+
+  // card A: a print carrying BOTH a Scrydex ladder and a tcgpl graded object → Scrydex wins
+  const a = await upsertCardMarket(db, { ...base, symbol: 'grd-sx', cardId: 'grd-sx' });
+  const sxLadder = [
+    { grader: 'PSA', grade: '10', priceE6: '7000000000' },
+    { grader: 'CGC', grade: '9', priceE6: '4500000000' },
+  ];
+  await insertPrint(a, { scrydex: { graded: sxLadder }, tcgpricelookup: { prices: { graded: { psa: { '10': { ebay: { avg_7d: 99999 } } } } } } });
+  assert.deepEqual((await getMarketDetails(db, a))!.grades, sxLadder, 'Scrydex ladder preferred over tcgpl');
+
+  // card B: a print with ONLY a tcgpl graded object → falls back to the tcgpl ladder
+  const b = await upsertCardMarket(db, { ...base, symbol: 'grd-tpl', cardId: 'grd-tpl' });
+  const tplGraded = { psa: { '10': { ebay: { avg_7d: 1234 } } } };
+  await insertPrint(b, { tcgpricelookup: { prices: { graded: tplGraded } } });
+  assert.deepEqual((await getMarketDetails(db, b))!.grades, gradeLadder(tplGraded), 'falls back to the tcgpl ladder');
+});
+
 test('getMarketDetails resolves the set release year by slug, then by game+name fallback', async () => {
   await db.query(
     `INSERT INTO tcg_sets(game, slug, name, release_year) VALUES('pokemon', 'obsidian-flames', 'Obsidian Flames', 2023)`,

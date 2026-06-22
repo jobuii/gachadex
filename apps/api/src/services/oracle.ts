@@ -52,6 +52,7 @@ export function toCardUpsert(c: OracleCard): CardUpsert {
     tcgplayerId: c.tcgplayerId,
     providerCardId: c.providerCardId,
     featured: c.featured, // undefined keeps the stored flag (rebalanced by the discovery job)
+    gradedE6: c.gradedE6, // Scrydex-first PSA-10; persisted per-print (COALESCEd so null never clobbers)
   };
 }
 

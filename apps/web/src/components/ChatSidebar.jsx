@@ -3,6 +3,7 @@ import { formatUsd } from '@pokex/pricing';
 import { CHAT_REACTIONS } from '@pokex/shared-types';
 import { useAuth } from '../auth/AuthContext';
 import { useChat } from '../store/chat';
+import { BrandMark } from './Brand';
 import * as api from '../lib/api.js';
 
 const PALETTE = ['#f0c040', '#3fb950', '#58a6ff', '#e74c3c', '#bc8cff', '#f78166', '#39d3bb'];
@@ -378,7 +379,7 @@ export function ChatSidebar({ open, onToggle }) {
           <span className="drop-word">DROP</span>
         </span>
         <span className="drop-pill">
-          <img src="/GachaDexPFP2.png" alt="" />
+          <BrandMark size={16} />
           <span>SOON</span>
         </span>
       </button>

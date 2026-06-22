@@ -109,7 +109,7 @@ export function TradingView({ market, mobile = false, onGoToMarket }) {
   useEffect(() => {
     if (!elRef.current) return undefined;
     const chart = createChart(elRef.current, {
-      layout: { background: { type: ColorType.Solid, color: '#111418' }, textColor: '#8b949e', fontSize: 9 },
+      layout: { background: { type: ColorType.Solid, color: '#111418' }, textColor: '#8b949e', fontSize: 12 },
       grid: { vertLines: { color: 'rgba(255,255,255,0.04)' }, horzLines: { color: 'rgba(255,255,255,0.04)' } },
       rightPriceScale: { borderColor: '#30363d' },
       timeScale: { borderColor: '#30363d', timeVisible: true },

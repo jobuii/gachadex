@@ -12,7 +12,7 @@ confidence gate** that keeps every existing safety layer and adds a real cross-v
 
 **In scope:** raw card pricing + confidence; the Scrydex adapter; provider orchestration (Scrydex primary,
 tcgpl secondary); **webhooks as the primary update path** (see §1a, §8); fallbacks; tests; flag-gated rollout.
-**Out of scope (follow-on phases, §14):** graded via Scrydex ladder + pop reports; sealed products; Vision.
+**Out of scope (follow-on phases, §14):** graded via Scrydex ladder (NOW BUILT — see §14); pop reports; sealed products; Vision.
 The mark engine, hybrid dedup, staleness breaker, manual pin, and engine gap controls are unchanged.
 
 ## 1a. QA + best-practice validation (2026-06-17)
@@ -320,7 +320,10 @@ tune without a deploy.
 
 ## 14. Follow-on phases (after raw pricing is live)
 
-- Graded via Scrydex PSA/BGS/CGC ladder + population reports (replace JustTCG).
+- ~~Graded via Scrydex PSA/BGS/CGC ladder~~ **BUILT** — `scrydexGradedLadder`/`scrydexPsa10E6` (PSA-10 →
+  `graded_psa10_e6` + Graded index; full ladder → `payload.scrydex.graded` → detail panel), tcgpl fallback,
+  `*.graded_updated` webhook. A live probe found tcgpl's eBay graded is eBay-median garbage (Vaporeon ☆
+  PSA-10 $52k→$7k); Scrydex is the better source. Still pending: population reports; full JustTCG retirement.
 - Sealed products (opens the gated sealed index).
 - (Webhooks moved to core — §8; the mark guard moved to core — §6a/#7.) Revisit single-venue
   (decision #6) if Scrydex exposes a second venue (Cardmarket / EUR).

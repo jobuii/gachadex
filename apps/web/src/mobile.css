@@ -27,8 +27,7 @@
   .nav-links, .nav-social-link { display: none; }
   .nav-left { gap: 0.55rem; }
   .nav-brand { gap: 0.4rem; }
-  .nav-brand img { width: 34px; height: 34px; }
-  .nav-brand img.nav-wordmark { display: none; }
+  .nav-brand .gdx-wordmark { display: none; } /* mobile: show just the gem to save bar space */
   .chat-toggle { font-size: 0.45rem; padding: 0.45rem 0.5rem; }
   .nav-actions { gap: 0.4rem; }
   .theme-trigger { font-size: 0.42rem; padding: 0.4rem 0.45rem; }
@@ -181,7 +180,6 @@
 
   /* compact filter bar; the search drops to its own full-width row */
   .screener-bar { padding: 0.45rem 0.5rem; gap: 0.32rem; }
-  .screener-spacer { display: none; }
   .screener-bar .game-tab-btn,
   .screener-bar .sidebar-tab-btn { font-size: 0.4rem; padding: 0.32rem 0.4rem; }
   .screener-jpy { font-size: 0.4rem; padding: 0.32rem 0.45rem; }

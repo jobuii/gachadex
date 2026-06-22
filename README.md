@@ -2,11 +2,12 @@
 
 A **leveraged perpetual-futures exchange on trading-card prices**, settled in USDC, across
 **Pokémon, One Piece, and Magic: The Gathering**. Trade perps on individual cards **and** on
-basket **indices** (Top 100 / Top 250 per game, with Graded and Sealed planned), with an
-index-anchored synthetic mark, a pooled-LP counterparty, funding, and liquidations — plus a
-leaderboard, referrals, **delegated trading keys** (for bots / the official CLI), seven selectable
-UI **skins**, and a **live chat & social layer** (reactions, rank badges, presence, moderation,
-and a **DROP** giveaway pot).
+basket **indices** — Top 100 / Top 250 (all three games) plus a Pokémon **Graded** index, each
+published in three weighting methodologies (**GJ** price-weighted, **G&P** equal-weight, **Pokedaq**
+5%-capped) — with an index-anchored synthetic mark, a pooled-LP counterparty, funding, and
+liquidations — plus a leaderboard, referrals, a sortable **markets screener**, shareable **PnL cards**,
+**delegated trading keys** (for bots / the official CLI), seven selectable UI **skins**, and a **live
+chat & social layer** (reactions, rank badges, presence, moderation, and a **DROP** giveaway pot).
 
 > **Two run modes.** The same engine runs on **play money** (a faucet, for demo/testing) or on **real
 > funds** — USDC custody with on-chain deposits/withdrawals on **Solana mainnet** — selected by the
@@ -16,9 +17,9 @@ and a **DROP** giveaway pot).
 > [Custody & wallets](#custody--wallets-real-funds-mode).
 >
 > A fan project built on public trading-card price data (primarily via
-> [tcgpricelookup.com](https://tcgpricelookup.com), with [pokemontcg.io](https://pokemontcg.io) as a
-> fallback feed); **not** affiliated with Nintendo, The Pokémon Company, Bandai, Wizards of the Coast,
-> or TCGFish, and **not financial advice**.
+> **[Scrydex](https://scrydex.com)**, with [tcgpricelookup.com](https://tcgpricelookup.com) as the eBay
+> cross-check + fallback and [pokemontcg.io](https://pokemontcg.io) as a legacy feed); **not** affiliated
+> with Nintendo, The Pokémon Company, Bandai, Wizards of the Coast, or TCGFish, and **not financial advice**.
 
 ---
 
@@ -27,9 +28,12 @@ and a **DROP** giveaway pot).
 - **Sign in with your Solana wallet** (Sign-In-With-Solana) — no passwords, no email.
 - **Fund your account** — claim **faucet** play-USDC (play-money mode), or **deposit real USDC** to a
   per-user Solana deposit address and **withdraw** back out (real-funds mode).
-- **Open leveraged perps**, long or short, up to **20×**, on any card market or on a per-game
-  Top 100 / Top 250 index (Pokémon live; One Piece / Magic light up as their card data flows).
-- **Manage positions** — partial or full close, live unrealized PnL, liquidation price.
+- **Open leveraged perps**, long or short, up to **20×**, on any card market or on any index — Top 100 /
+  Top 250 across all three games, plus Pokémon Graded; each in the GJ / G&P / Pokedaq series.
+- **Manage positions** — partial or full close, live unrealized PnL, liquidation price, and a one-click
+  **shareable PnL card** (the traded card's art + your ROE %) you can copy or download.
+- **Browse the markets screener** — a sortable table (price · 24h % · volume · rarity) with top-mover
+  tabs, a game filter, a rarity filter, and a **JPY** toggle for Japanese-market cards.
 - **Provide liquidity** to the LP pool (the counterparty to all trades) and earn fees + trader PnL.
 - **Leaderboard** — traders ranked by net realized PnL (with equity + volume).
 - **Referrals** — every account gets a shareable code; redeeming one pays both sides a play-USDC bonus.
@@ -52,12 +56,16 @@ This is the part most people ask about, so it's spelled out explicitly.
 
 ### Card prices and the live indices — the feed
 
-The oracle's primary feed is **[tcgpricelookup.com](https://tcgpricelookup.com)** (Trader plan) — a
-single multi-game API returning **raw** prices (TCGplayer market + eBay 1 / 7 / 30-day averages) **and**
-graded prices (PSA / BGS / CGC) for **Pokémon, One Piece, and Magic: The Gathering**, all in USD. The
-legacy **[pokemontcg.io](https://pokemontcg.io) v2** path (Pokémon-only, TCGplayer market price) is kept
-as a fallback; `ORACLE_PRIMARY` selects between them at boot — no deploy to flip. Full matrix:
-[docs/data-providers.md](docs/data-providers.md).
+The oracle's **live** primary feed is **[Scrydex](https://scrydex.com)** (`ORACLE_PRIMARY=scrydex`) — a
+fresh, **TCGplayer-anchored raw price** plus a **full graded ladder** (PSA / BGS / CGC / TAG, per grade,
+with trends) for **Pokémon, One Piece, and Magic: The Gathering**, joined to our markets by the TCGplayer
+`product_id`. **[tcgpricelookup.com](https://tcgpricelookup.com)** runs alongside it as the **eBay
+cross-check** (drives price confidence + the mark guard) and as the price **fallback** for cards Scrydex
+doesn't cover (e.g. most One Piece). JP-only printings report JPY → converted to USD via Frankfurter FX.
+The legacy **[pokemontcg.io](https://pokemontcg.io) v2** path and a pure-tcgpl **median-of-three** mode
+remain selectable via `ORACLE_PRIMARY` (`pokemontcg` / `tcgpricelookup` / `scrydex`) — flip at boot, no
+deploy. Full matrix: [docs/data-providers.md](docs/data-providers.md), build spec:
+[docs/scrydex-pricing-build-spec.md](docs/scrydex-pricing-build-spec.md).
 
 Each cycle the oracle fetches the tracked card universe from the active provider, and a **weekly
 discovery pass** rebalances the featured set per game (top-N by price) and retires dead long-tail
@@ -66,31 +74,40 @@ markets. That data is used two ways (`apps/api/src/services/oracle.ts`):
 1. **Individual card markets** — each tracked card becomes a tradeable market, priced by `priceCard`
    (the pipeline below). Card-market symbols are game-namespaced (`{game}:{providerCardId}`); legacy
    Pokémon markets keep their bare ids for continuity.
-2. **The Top 100 / Top 250 indices** — per game, the cards are sorted by price and the top-N slice
-   becomes the index basket. The index value is a **divisor-based basket NAV** (S&P-style):
-   `value = Σ(prices) · SCALE / divisor`, with the divisor chosen so the index starts at a base
-   of 1000 and re-anchored on a constituent change so the print stays continuous.
+2. **The indices** — per game, cards are sorted by price into **Top 100 / Top 250** baskets (plus a
+   Pokémon **Graded** basket). Each basket is published in **three weighting methodologies** — **GJ**
+   (price-weighted), **G&P** (equal-weight), and **Pokedaq** (5%-capped) — all computed over the same
+   constituents and the same canonical card price. See [The indices](#the-indices-per-game).
 
 So the indices are **not a separate API** — they're computed in-house from the same dataset that
 powers the card markets. The price *origin* is TCGplayer / eBay; the provider is the delivery API.
 
 ### The indices (per game)
 
-Each game has up to four indices (`INDEX_CATALOG` in `packages/shared-types`). An index is **listed but
-gated** (close-only / "Soon") until its data source is flowing, then auto-lights — no flag flip.
+Every basket is published in **three weighting methodologies** (`INDEX_CATALOG` in
+`packages/shared-types`; math in `services/index-weighting.ts`; weighting split in `services/oracle.ts` →
+`buildIndex`):
 
-| Index | Source | Status in this build |
+- **GJ** — *price-weighted* (Dow-style): `value = Σ(prices) · SCALE / divisor`, the divisor chosen for a
+  base of 1000 and **re-anchored** on a constituent change so the print stays continuous.
+- **G&P** — *equal-weight* (S&P-EW-style): a chained average of each constituent's per-period return.
+- **Pokedaq** — *capped-weight* (Nasdaq-100-style): chained return with each name capped at **5%**
+  (iteratively redistributed), normalized so a flat pass is exact (no drift).
+
+The three run over the same baskets and the same canonical card price. An index is listed but
+**close-only** until its data flows, then auto-lights — no flag flip. Indices aggregate many cards, so
+they're robust by construction and **never price-gated**. Slugs: GJ keeps the bare tier (`top-100`),
+G&P prefixes `gp-`, Pokedaq `pdq-`.
+
+| Basket (× GJ / G&P / Pokedaq) | Source | Status |
 |---|---|---|
-| **Pokémon — Top 100 / Top 250** | In-house basket NAV from card prices | ✅ Live |
-| **Pokémon — Graded (PSA 10)** | Provider graded (tcgpricelookup inline; [JustTCG](https://justtcg.com) fallback) → in-house basket | 🔒 Gated — lights up when graded prices flow (`JUSTTCG_API_KEY` enables the legacy path) |
-| **Pokémon — Sealed** | needs a sealed-product feed (TCGplayer Sealed / PriceCharting) | 🔒 Gated — no source wired; shows "Soon" |
-| **One Piece — Top 100 / Top 250** | In-house basket NAV from card prices | 🔒 Gated — lights up as One Piece card data flows from the provider |
-| **Magic — Top 100 / Top 250** | In-house basket NAV from card prices | 🔒 Gated — lights up as Magic card data flows from the provider |
+| **Top 100 / Top 250** — Pokémon, One Piece, Magic | In-house basket from card prices (Scrydex for Pokémon/Magic, tcgpl for One Piece) | ✅ Live (all three games) |
+| **Graded (PSA-10)** — Pokémon | **Scrydex graded** PSA-10 → in-house basket (tcgpl eBay / JustTCG as fallback) | ✅ Live |
+| **Sealed** — Pokémon | needs a sealed-product feed (TCGplayer Sealed / PriceCharting) | 🔒 Gated — no source wired; shows "Soon" |
 
-Gated indices are **listed but not tradeable** until their feed exists. We deliberately do **not**
-scrape TCGFish: their pages and embed badges are Cloudflare bot-challenged and the badges are rendered
-images, not an API, so they can't be ingested server-side. Enabling a graded/sealed index for real is a
-data decision (a licensed feed, or a data partnership), not a hack.
+We deliberately do **not** scrape TCGFish: their pages and embed badges are Cloudflare bot-challenged and
+the badges are rendered images, not an API. Enabling the **Sealed** index for real is a data decision (a
+licensed feed), not a hack.
 
 ### The oracle pipeline
 
@@ -133,27 +150,28 @@ A restricted market is **close-only** until its signals recover — or until an 
 price, which is treated as trusted and clears the gate. Indices aggregate many cards, so they're robust
 by construction and never gated.
 
-> **In flight — pricing correctness.** On the current `tcgpricelookup` feed, the eBay 1-day / 7-day
-> averages can come back low-quality (sometimes identical, off-card), and because the median runs
-> **2 eBay : 1 TCGplayer** those two reads can outvote the one good TCGplayer price — so a few live
-> markets are visibly mispriced and many thin cards sit reduce-only. Two queued fixes: a free change to
-> stop blending eBay into the *price* median (keep eBay only as a confidence cross-check), and the
-> **Scrydex cutover** (`ORACLE_PRIMARY=scrydex`) for a fresher TCGplayer-anchored price. The Scrydex path
-> is already built + merged and **dormant** behind the flag — the remaining step is the flip. See
-> `docs/scrydex-pricing-build-spec.md`.
+> **The median-of-three above is the `ORACLE_PRIMARY=tcgpricelookup` mode.** **Prod runs
+> `ORACLE_PRIMARY=scrydex`** (cutover complete), where the price is instead `combinePrice`
+> (`services/providers/scrydex.ts`): the **Scrydex TCGplayer market** anchors the value, tcgpl's **eBay**
+> read is the confidence cross-check (not part of the price), and the **§6a mark guard** clamps an
+> uncorroborated jump toward a real move over a few updates. This fixed the eBay-median garbage the median
+> mode suffered (a lone bad eBay read outvoting the good TCGplayer price). Cards Scrydex doesn't match
+> price off the tcgpl TCGplayer market via the same fallback. **Graded** prices likewise come from the
+> Scrydex ladder first, tcgpl fallback. Build spec: `docs/scrydex-pricing-build-spec.md`.
 
 ### How a card's price is calculated (the customer explanation)
 
-> Every market settles against a **fair value** we compute for each card from multiple real markets —
-> never a single listing.
+> Every market settles against a **fair value** we compute for each card from real markets — never a
+> single listing.
 >
-> **The median of three.** We take the median of three independent reads: eBay's latest **daily**
-> average sale price, TCGplayer's **market** price, and eBay's **7-day** average. The median is both the
-> price and the safety net — if any one source prints a nonsense number, it's the highest or lowest of
-> the three, so it's skipped. The price only moves when at least two sources agree.
+> **A corroborated TCGplayer price.** We anchor each card to its **TCGplayer market** price (kept fresh via
+> Scrydex) and cross-check it against recent **eBay** sales. If the two agree, the card trades normally;
+> if a print jumps without eBay confirming it, we ease the mark toward the move over a few updates instead
+> of snapping — so one freak print can't wrongly liquidate you. The price tracks the real market, but a
+> single bad sale can't move it alone.
 >
-> **It moves with the market.** Because eBay's daily read is one of the three, your chart tracks recent
-> real sales day to day instead of sitting still — but a single freak sale can't move it alone.
+> *(Earlier builds used a median of three eBay/TCGplayer reads — still selectable via
+> `ORACLE_PRIMARY=tcgpricelookup` — but prod runs the Scrydex-anchored model above.)*
 >
 > **Thin cards are limited.** Some cards trade too rarely to price safely. Where our sources disagree
 > (more than 2× apart) or there's only one, we hold the card at its median fair value and make it
@@ -184,6 +202,9 @@ by construction and never gated.
   `GET`/`POST /admin/mark-clamp` — and currently-clamped markets + engage/disengage history show in the
   admin **mark-guards** panel. (`apps/api/src/services/marks.ts` → `recomputeMark`.)
 - **Isolated margin, up to 20×.** Each position locks its own margin; leverage is capped per market.
+- **Minimum order size.** A **$1 min-notional** floor (price-aware, enforced in `openPosition`) blocks
+  dust positions; the per-market qty step is fine (0.0001 units) so small orders are reachable even on
+  high-priced cards (`MIN_NOTIONAL_UUSDC` in `packages/pricing`).
 - **Pooled-LP counterparty.** There is no order book. Trades fill against the LP pool at the mark;
   the pool books trader PnL (LPs win when traders lose, and vice-versa).
 - **Fees.** A trading commission (`FEE_BPS`, **default 0** — off; when set, charged on both open and
@@ -348,11 +369,12 @@ A dedicated operator tab alongside Main + Customers, all under the admin key:
 ## Architecture
 
 ```
-  tcgpricelookup (multi-game raw + graded; ~daily)  [pokemontcg.io = fallback · JustTCG = graded fallback]
-                          │
+  Scrydex (raw TCGplayer + graded ladder; primary)  +  tcgpricelookup (eBay cross-check + fallback)
+                          │                              [pokemontcg.io = legacy feed · ORACLE_PRIMARY picks]
               ┌───────────▼─────────────┐
-              │  oracle (timer, 6h)      │  median-of-three price + 2× confidence gate, hybrid dedup,
-              │  src/services/oracle.ts  │  staleness halt, per-game Top-100/250 basket NAVs, recompute marks
+              │  oracle (timer, 6h       │  Scrydex-anchored price + eBay confidence gate + §6a mark guard,
+              │  + Scrydex webhook)      │  hybrid dedup, staleness halt, GJ/G&P/Pokedaq index series over
+              │  src/services/oracle.ts  │  Top-100/250 + Graded baskets, recompute marks
               └───────────┬─────────────┘
                           │ publishes mark/stats/oi/funding
    apps/web (React SPA)   │            ┌──────────────────────────────────────┐
@@ -446,16 +468,16 @@ to the browser). Copy `apps/api/.env.example` → `apps/api/.env`; every key has
 | `PGLITE_DIR` | `./.pglite` | Local embedded-DB dir (use `memory://` for ephemeral) |
 | `JWT_SECRET` | dev default | **Must** be a strong ≥32-char value in production (boot refuses otherwise) |
 | `MAX_DELEGATED_KEYS` / `DELEGATE_MAX_TTL_DAYS` | `4` / `180` | Per-account cap + max lifetime for delegated trading keys |
-| `ORACLE_PRIMARY` | `pokemontcg` | Active price feed: `pokemontcg`, `tcgpricelookup`, or `scrydex` (prod runs `tcgpricelookup`; the Scrydex-primary path is built + merged but **dormant** until the cutover flips this); flip at boot, no deploy |
+| `ORACLE_PRIMARY` | `pokemontcg` | Active price feed: `pokemontcg`, `tcgpricelookup`, or `scrydex`. **Prod runs `scrydex`** (cutover complete) — Scrydex anchors the price, tcgpl is the eBay cross-check + fallback. Flip at boot, no deploy |
 | `TCGPRICELOOKUP_API_KEY` | _(empty)_ | Trader-plan key for the multi-game raw+graded feed; a DB-backed limiter paces 1 req/s + `TCGPRICELOOKUP_DAILY_CAP` (10k/day) across instances |
 | `POKEMONTCG_API_KEY` | _(empty)_ | Legacy fallback feed; optional, keyless works at lower rate limits |
-| `SCRYDEX_API_KEY` · `SCRYDEX_TEAM_ID` | _(empty)_ | Scrydex auth (`X-Api-Key` + `X-Team-ID`) — the TCGplayer-anchored primary raw feed under `ORACLE_PRIMARY=scrydex` (dormant until cutover) |
+| `SCRYDEX_API_KEY` · `SCRYDEX_TEAM_ID` | _(empty)_ | Scrydex auth (`X-Api-Key` + `X-Team-ID`) — the **live** TCGplayer-anchored raw + graded feed under `ORACLE_PRIMARY=scrydex` |
 | `SCRYDEX_WEBHOOK_SECRET` · `SCRYDEX_DAILY_CAP` | _(empty)_ / `1600` | `whsec_…` HMAC secret for `POST /webhooks/scrydex` push re-pricing · daily Scrydex request guard |
 | `FX_BASE` | `https://api.frankfurter.dev` | ECB FX source (Frankfurter) for JPY→USD on Japan-priced cards (Scrydex path) |
 | `ORACLE_REFRESH_MS` / `ORACLE_PAGE_SIZE` | `6h` / `250` | Ingest cadence; page size (pokemontcg caps at 250 upstream) |
 | `DISCOVERY_INTERVAL_MS` / `RETIRE_AFTER_DAYS` | `7d` / `30` | Weekly featured-set rebalance; cull dead long-tail markets (no OI/volume) |
 | `SEARCH_AND_BET` | `true` | Catalogue search + on-demand listing (tcgpricelookup only; real-funds listing also needs the NAV caps) |
-| `JUSTTCG_API_KEY` / `GRADED_CONSTITUENTS` | _(empty)_ / `100` | Legacy graded feed: set the key to enable the **Graded** index path |
+| `JUSTTCG_API_KEY` / `GRADED_CONSTITUENTS` | _(empty)_ / `100` | Graded prices come from **Scrydex first** (full PSA/BGS/CGC ladder), tcgpl eBay as fallback; JustTCG is a last-resort PSA-10 fallback for cards neither covers (key enables it) |
 | `REAL_FUNDS` | `false` | `false` = play-money (faucet). `true` = real custody (deposits/withdrawals); requires the custody vars below |
 | `ALLOW_MAINNET_FUNDS` | `false` | Must be `true` to run real funds on **mainnet** (the audit/KYC/geofence acknowledgement) |
 | `SOLANA_RPC_URL` | devnet | Backend Solana RPC — point at a **mainnet** provider for real funds |
@@ -590,10 +612,11 @@ The engine is complete end to end — ledger → SIWS auth → oracle/marks → 
 per-user deposit addresses + sweeps, hot/cold treasury with proof-of-reserves + auto-freeze,
 withdrawals (manual + capped auto-approve), the insurance fund, and live-editable custody limits. The
 pool-protection engine (adaptive depth, NAV-relative OI caps, pool-health gate, ADL) ships too, and a
-marketing landing page is the public entry point. The platform is **multi-game** — `markets.game`
-(Pokémon / One Piece / Magic), a per-game index catalogue, the `tcgpricelookup` multi-game provider, a
-sidebar **game switcher**, and **7 UI skins** — with One Piece / Magic markets data-gated (they light up
-as the provider returns their cards). **Delegated trading keys** (scoped, revocable) back the official
+marketing landing page is the public entry point. The platform is **multi-game and live across all
+three** — `markets.game` (Pokémon / One Piece / Magic), a per-game index catalogue in **three weighting
+series** (GJ / G&P / Pokedaq), the **Scrydex-primary** feed (tcgpl eBay cross-check + One Piece fallback)
+with a **Scrydex graded** ladder, a sidebar **game switcher**, a sortable **markets screener** (with a
+JPY toggle), and **7 UI skins**. **Delegated trading keys** (scoped, revocable) back the official
 `gachadex` CLI / SDK and **search-and-bet** (on-demand market listing). A **chat & social layer** ships
 alongside — live chat with reactions, leaderboard rank badges, presence, and moderation, plus the
 **DROP** giveaway-pot teaser with real-USDC player tipping (flag-gated, **off by default**).
@@ -602,8 +625,8 @@ alongside — live chat with reactions, leaderboard rank badges, presence, and m
 are yours to put in place — the code only gates on `ALLOW_MAINNET_FUNDS=true`, it does not verify them.
 
 Still deferred: the full **DROP** round mechanic (the scheduled draw, the rare.win pack-open, and the
-on-chain NFT prize — needs rare.win API access), a real **Graded / Sealed** price feed and the **One
-Piece / Magic** card data flowing through the provider (those markets exist but stay gated until then),
+on-chain NFT prize — needs rare.win API access), the **Sealed** price feed (the Sealed index stays gated
+until a sealed-product source is wired), Scrydex **population reports** + full JustTCG retirement,
 **limit / stop** orders (today's `limitPriceE6` is a slippage guard, not a resting order), a Go engine
 rewrite, and the **KMS-held deposit seed** (`DEPOSIT_SEED_KMS_REF` is recognized but throws "not
 implemented" — use `DEPOSIT_MASTER_SEED` for now).
