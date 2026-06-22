@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { AuthButton } from './AuthButton';
 import { ThemePicker } from './ThemePicker';
-import Brand from './Brand';
+import { Wordmark } from './Brand';
 import { useChat } from '../store/chat';
 
 // One list drives both bars: desktop nav links use `label`; the mobile bottom tab bar uses
@@ -23,7 +23,7 @@ export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat }) {
     <nav className="navbar">
       <div className="nav-left">
         <button type="button" className="nav-brand" onClick={() => navigate('/')} title="Back to home">
-          <Brand size={30} />
+          <Wordmark />
         </button>
         <button
           className={`chat-toggle ${chatOpen ? 'active' : ''}`}

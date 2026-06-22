@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChatSidebar } from './ChatSidebar';
-import Brand, { BrandMark } from './Brand';
+import { Wordmark } from './Brand';
 import { useChat, initialChatOpen, persistChatOpen } from '../store/chat';
 import '../landing.css';
 
@@ -109,7 +109,7 @@ export function Landing() {
       <header className="lp-nav">
         <div className="lp-nav-left">
           <a className="lp-brand" href="#" onClick={enter}>
-            <Brand size={30} />
+            <Wordmark />
           </a>
           <button className={`chat-toggle ${chatOpen ? 'active' : ''}`} onClick={onToggleChat} title={chatOpen ? 'Hide chat' : 'Open chat'}>
             💬 Chat
@@ -253,7 +253,7 @@ export function Landing() {
       </section>
 
       <footer className="lp-footer">
-        <BrandMark size={36} />
+        <Wordmark />
         <div className="lp-foot-meta">
           <div>GachaDex — TCG Card Perps</div>
           <div className="lp-foot-fine">
