@@ -54,6 +54,26 @@
 .rip-feed-who { color: var(--accent-lit); }
 .rip-feed-val { color: var(--gold); float: right; }
 
+/* --- set poker --- */
+.sp-table { margin-top: 1rem; }
+.sp-side { margin-bottom: 1.1rem; }
+.sp-side-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.4rem; color: var(--text-muted); }
+.sp-total { font-size: 1.2rem; color: var(--text); }
+.sp-total.up { color: var(--success); }
+.sp-hand { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.sp-card { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; width: 84px; }
+.sp-card-img { width: 84px; height: 117px; object-fit: contain; border-radius: var(--radius); background: var(--bg-3); display: flex; align-items: center; justify-content: center; font-size: 1.8rem; }
+.sp-card-val { color: var(--gold); font-size: 0.85rem; font-weight: var(--weight-strong); }
+.sp-swap { padding: 0.2rem 0.5rem; font-size: 0.7rem; }
+.sp-settle { margin-top: 0.5rem; }
+.sp-result { margin-top: 1rem; padding: 0.8rem; border: var(--border-w) solid var(--border); border-radius: var(--radius); background: var(--bg-2); }
+.sp-result.up { border-color: var(--success); }
+.sp-result.down { border-color: var(--danger); }
+@media (max-width: 768px) {
+  .sp-card, .sp-card-img { width: 64px; }
+  .sp-card-img { height: 90px; }
+}
+
 /* --- provably-fair modal --- */
 .games-modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center;

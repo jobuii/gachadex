@@ -7,7 +7,7 @@ import { getOrCreateSystemAccount, getOrCreateUserAccount, getBalance, postTxn }
 import { handleFor } from './handles.ts';
 import { publish } from './bus.ts';
 import { emitGameWinEvent } from './chat.ts';
-import { packRipConfig, type PackBand } from './game-config.ts';
+import { packRipConfig, setPokerConfig, type PackBand } from './game-config.ts';
 import { commitServerSeed, freshClientSeed, weightedPick, rollInt } from './game-fairness.ts';
 
 /**
@@ -45,6 +45,13 @@ async function ensureSeedForUpdate(q: Queryer, userId: string): Promise<SeedRow>
   return r2.rows[0];
 }
 
+/** Read the caller's rotating seed (locked) and consume one nonce for a play; returns the seed AS USED. */
+export async function consumeSeed(q: Queryer, userId: string): Promise<SeedRow> {
+  const seed = await ensureSeedForUpdate(q, userId);
+  await q.query(`UPDATE game_seeds SET nonce = nonce + 1 WHERE user_id = $1`, [userId]);
+  return seed;
+}
+
 export interface FairnessState {
   serverSeedHash: string;
   clientSeed: string;
@@ -71,6 +78,10 @@ export async function rotateClientSeed(
     throw new HttpError(400, 'client seed must be 1–64 printable ASCII characters');
   }
   return db.tx(async (q) => {
+    // Rotating mid-hand would change the server seed an open Set Poker hand's swaps still draw against,
+    // breaking its provable fairness — block it until the hand is settled.
+    const open = await q.query(`SELECT 1 FROM game_plays WHERE user_id = $1 AND game_type = 'set-poker' AND result->>'status' = 'open' LIMIT 1`, [userId]);
+    if (open.rows[0]) throw new HttpError(409, 'finish your open Set Poker hand before rotating your seed');
     const prev = await ensureSeedForUpdate(q, userId);
     const next = commitServerSeed();
     await q.query(
@@ -87,7 +98,7 @@ export async function rotateClientSeed(
   });
 }
 
-interface CardRow {
+export interface CardRow {
   id: string;
   symbol: string;
   displayName: string;
@@ -95,8 +106,15 @@ interface CardRow {
   markE6: bigint;
 }
 
-/** Featured, oracle-priced card markets (with their latest mark) — the prize pool Pack Rip draws from. */
-async function featuredCards(q: Queryer): Promise<CardRow[]> {
+// The minimal provable-fairness inputs a draw needs (SeedRow satisfies it; Set Poker passes a snapshot).
+export interface FairSeed {
+  server_seed: string;
+  client_seed: string;
+  nonce: number;
+}
+
+/** Featured, oracle-priced card markets (with their latest mark) — the prize pool the games draw from. */
+export async function featuredCards(q: Queryer): Promise<CardRow[]> {
   const r = await q.query<{ id: string; symbol: string; display_name: string; image_small: string | null; mark_e6: string }>(
     `SELECT m.id, m.symbol, m.display_name, m.image_small, lm.mark_e6
        FROM markets m
@@ -136,7 +154,7 @@ export interface PackRipResult {
  * configured band's ceiling. `pool` is ordered by market id (featuredCards) so the eligible slices — and
  * thus the card index — are reproducible by anyone verifying the play.
  */
-function bandEligibility(bands: PackBand[], pool: CardRow[]): { perBand: CardRow[][]; effWeights: number[] } {
+export function bandEligibility(bands: PackBand[], pool: CardRow[]): { perBand: CardRow[][]; effWeights: number[] } {
   const perBand = bands.map((b) => {
     const lo = usdc(b.minUsd);
     const hi = usdc(b.maxUsd);
@@ -158,25 +176,31 @@ export interface RevealFair {
 }
 
 /**
- * Pick the revealed card provably-fairly: a weighted band (cursor 0) over the EFFECTIVE weights, then a
- * card within that band by the pool's stable id order (cursor 1). Empty bands are zeroed so the award can
- * never escalate above a configured band. Only if NO band has any eligible card at all (a tier
- * misconfigured for the live pool — surfaced by packRipEv) do we award the single cheapest card.
+ * Core provably-fair card draw: a weighted band at cursor `cBand` over the EFFECTIVE weights, then a card
+ * within that band by the pool's stable id order at cursor `cCard`. Empty bands are zeroed so the award can
+ * never escalate above a configured band; only if NO band has any eligible card (a misconfigured tier,
+ * surfaced by packRipEv) is the single cheapest card awarded. Shared by Pack Rip (one draw at cursors 0/1)
+ * and Set Poker (ten deal draws + swaps, each at its own cursor pair).
  */
-function revealCard(seed: SeedRow, bands: PackBand[], pool: CardRow[]): { card: CardRow; bandIndex: number; fair: RevealFair } {
+export function drawCardAt(seed: FairSeed, bands: PackBand[], pool: CardRow[], cBand: number, cCard: number): { card: CardRow; fair: RevealFair } {
   const { perBand, effWeights } = bandEligibility(bands, pool);
   const total = effWeights.reduce((a, w) => a + w, 0);
   if (total <= 0) {
-    // No band has an eligible card (a tier misconfigured for the live pool — packRipEv surfaces this).
-    // Award the single deterministic cheapest card. Recorded as a 1-candidate set so the trail stays
+    // Award the single deterministic cheapest card, recorded as a 1-candidate set so the trail stays
     // self-consistent: rollInt(.., candidateCount = 1) === 0 === cardIndex.
     const cheapest = [...pool].sort((a, b) => (a.markE6 < b.markE6 ? -1 : a.markE6 > b.markE6 ? 1 : a.id < b.id ? -1 : 1))[0];
-    return { card: cheapest, bandIndex: -1, fair: { bandWeights: effWeights, bandIndex: -1, candidateCount: 1, cardIndex: 0 } };
+    return { card: cheapest, fair: { bandWeights: effWeights, bandIndex: -1, candidateCount: 1, cardIndex: 0 } };
   }
-  const bandIndex = weightedPick(seed.server_seed, seed.client_seed, seed.nonce, 0, effWeights);
+  const bandIndex = weightedPick(seed.server_seed, seed.client_seed, seed.nonce, cBand, effWeights);
   const candidates = perBand[bandIndex];
-  const cardIndex = rollInt(seed.server_seed, seed.client_seed, seed.nonce, 1, candidates.length);
-  return { card: candidates[cardIndex], bandIndex, fair: { bandWeights: effWeights, bandIndex, candidateCount: candidates.length, cardIndex } };
+  const cardIndex = rollInt(seed.server_seed, seed.client_seed, seed.nonce, cCard, candidates.length);
+  return { card: candidates[cardIndex], fair: { bandWeights: effWeights, bandIndex, candidateCount: candidates.length, cardIndex } };
+}
+
+/** Pack Rip's single reveal — the band at cursor 0, the card at cursor 1. */
+function revealCard(seed: SeedRow, bands: PackBand[], pool: CardRow[]): { card: CardRow; bandIndex: number; fair: RevealFair } {
+  const { card, fair } = drawCardAt(seed, bands, pool, 0, 1);
+  return { card, bandIndex: fair.bandIndex, fair };
 }
 
 /**
@@ -246,14 +270,13 @@ export async function openPack(
       ],
     });
 
-    const seed = await ensureSeedForUpdate(q, userId);
-    await q.query(`UPDATE game_seeds SET nonce = nonce + 1 WHERE user_id = $1`, [userId]);
+    const seed = await consumeSeed(q, userId);
 
     const { card, bandIndex, fair } = revealCard(seed, tier.bands, pool);
     const prizeId = randomUUID();
     await q.query(
-      `INSERT INTO game_prizes(id, play_id, user_id, market_id, value_e6) VALUES($1, $2, $3, $4, $5)`,
-      [prizeId, playId, userId, card.id, card.markE6.toString()],
+      `INSERT INTO game_prizes(id, play_id, user_id, market_id, value_e6, spread_bps, max_prize_e6) VALUES($1, $2, $3, $4, $5, $6, $7)`,
+      [prizeId, playId, userId, card.id, card.markE6.toString(), cfg.buybackSpreadBps, usdc(cfg.maxPrizeUsd).toString()],
     );
 
     const prizeCard: PrizeCard = {
@@ -356,21 +379,25 @@ export async function sellBackPrize(db: Db, userId: string, prizeId: string): Pr
   const cfg = packRipConfig();
 
   const out = await db.tx(async (q) => {
-    const pr = await q.query<{ id: string; market_id: string; status: string }>(
-      `SELECT id, market_id, status FROM game_prizes WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+    const pr = await q.query<{ id: string; market_id: string; status: string; spread_bps: number | null; max_prize_e6: string | null }>(
+      `SELECT id, market_id, status, spread_bps, max_prize_e6::text AS max_prize_e6 FROM game_prizes WHERE id = $1 AND user_id = $2 FOR UPDATE`,
       [prizeId, userId],
     );
     if (!pr.rows[0]) throw new HttpError(404, 'prize not found');
     if (pr.rows[0].status !== 'held') throw new HttpError(409, 'prize already settled');
 
+    // Honour the buyback terms SNAPSHOTTED on the prize at win time (so each game uses its own spread/cap
+    // and a later config change can't alter a prize already won); fall back to Pack Rip config for any
+    // pre-snapshot prize row.
+    const spreadBps = pr.rows[0].spread_bps ?? cfg.buybackSpreadBps;
+    const cap = pr.rows[0].max_prize_e6 != null ? BigInt(pr.rows[0].max_prize_e6) : usdc(cfg.maxPrizeUsd);
     const mk = await q.query<{ mark: string }>(
       `SELECT mark_price_e6::text AS mark FROM marks WHERE market_id = $1 ORDER BY computed_at DESC, id DESC LIMIT 1`,
       [pr.rows[0].market_id],
     );
     if (!mk.rows[0]) throw new HttpError(503, 'no live price for this card');
     const mark = BigInt(mk.rows[0].mark);
-    const cap = usdc(cfg.maxPrizeUsd);
-    let payout = (mark * BigInt(10_000 - cfg.buybackSpreadBps)) / 10_000n;
+    let payout = (mark * BigInt(10_000 - spreadBps)) / 10_000n;
     if (payout > cap) payout = cap;
 
     // Lock collateral THEN the pool (the same order openPack acquires them, and the order postTxn's
@@ -402,7 +429,7 @@ export async function sellBackPrize(db: Db, userId: string, prizeId: string): Pr
 
 export interface GamesView {
   enabled: boolean; // master GAMES_ENABLED gate
-  games: { id: string; name: string; type: string; enabled: boolean; tiers?: number[]; buybackSpreadBps?: number }[];
+  games: { id: string; name: string; type: string; enabled: boolean; tiers?: number[]; buybackSpreadBps?: number; anteUsd?: number; swapFeeUsd?: number; maxSwaps?: number }[];
 }
 
 /**
@@ -475,6 +502,7 @@ export async function packRipEv(db: Db): Promise<TierEv[]> {
 /** Public games list + per-game config (drives the lobby). */
 export function gamesView(): GamesView {
   const pr = packRipConfig();
+  const sp = setPokerConfig();
   return {
     enabled: config.gamesEnabled,
     games: [
@@ -485,6 +513,16 @@ export function gamesView(): GamesView {
         enabled: config.gamesEnabled && pr.enabled,
         tiers: pr.tiers.map((t) => t.price),
         buybackSpreadBps: pr.buybackSpreadBps,
+      },
+      {
+        id: 'set-poker',
+        name: 'Set Poker',
+        type: 'casino',
+        enabled: config.gamesEnabled && sp.enabled,
+        anteUsd: sp.anteUsd,
+        swapFeeUsd: sp.swapFeeUsd,
+        maxSwaps: sp.maxSwaps,
+        buybackSpreadBps: sp.buybackSpreadBps,
       },
     ],
   };

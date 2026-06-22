@@ -18,6 +18,15 @@ export function GamesAdminView({ adminKey }) {
   const [msg, setMsg] = useState(null);
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Set Poker drafts
+  const [spEnabled, setSpEnabled] = useState(false);
+  const [spAnte, setSpAnte] = useState('');
+  const [spSwapFee, setSpSwapFee] = useState('');
+  const [spMaxSwaps, setSpMaxSwaps] = useState('');
+  const [spSpread, setSpSpread] = useState('');
+  const [spMaxPrize, setSpMaxPrize] = useState('');
+  const [spBigWin, setSpBigWin] = useState('');
+  const [spBandsJson, setSpBandsJson] = useState('');
 
   const load = useCallback(() => {
     return api.adminGetGamesConfig(adminKey).then((v) => {
@@ -28,6 +37,15 @@ export function GamesAdminView({ adminKey }) {
       setMaxPrize(String(pr.maxPrizeUsd));
       setBigWin(String(pr.bigWinUsd));
       setTiersJson(JSON.stringify(pr.tiers, null, 2));
+      const sp = v.setPoker;
+      setSpEnabled(sp.enabled);
+      setSpAnte(String(sp.anteUsd));
+      setSpSwapFee(String(sp.swapFeeUsd));
+      setSpMaxSwaps(String(sp.maxSwaps));
+      setSpSpread((sp.buybackSpreadBps / 100).toString());
+      setSpMaxPrize(String(sp.maxPrizeUsd));
+      setSpBigWin(String(sp.bigWinUsd));
+      setSpBandsJson(JSON.stringify(sp.bands, null, 2));
     }).catch((e) => setErr(e.message));
   }, [adminKey]);
 
@@ -67,6 +85,27 @@ export function GamesAdminView({ adminKey }) {
       tiers,
     };
     act(() => api.adminSetGamesConfig({ packRip: patch }, adminKey), 'Saved. (Restart the API if a value doesn’t apply within ~30s.)');
+  };
+
+  const saveSetPoker = () => {
+    let bands;
+    try {
+      bands = JSON.parse(spBandsJson);
+    } catch {
+      setErr('Set Poker bands must be valid JSON');
+      return;
+    }
+    const patch = {
+      enabled: spEnabled,
+      anteUsd: parseInt(spAnte, 10),
+      swapFeeUsd: parseInt(spSwapFee, 10),
+      maxSwaps: parseInt(spMaxSwaps, 10),
+      buybackSpreadBps: Math.round(parseFloat(spSpread) * 100),
+      maxPrizeUsd: parseInt(spMaxPrize, 10),
+      bigWinUsd: parseInt(spBigWin, 10),
+      bands,
+    };
+    act(() => api.adminSetGamesConfig({ setPoker: patch }, adminKey), 'Saved. (Restart the API if a value doesn’t apply within ~30s.)');
   };
 
   const seed = () => act(
@@ -128,6 +167,39 @@ export function GamesAdminView({ adminKey }) {
       <label className="field-label"><span>Tiers + bands (JSON)</span></label>
       <textarea className="games-admin-json" rows={12} value={tiersJson} onChange={(e) => setTiersJson(e.target.value)} />
       <button className="btn-primary" disabled={busy} onClick={saveScalars}>Save Pack Rip config</button>
+
+      <h3 style={{ marginTop: '1.5rem' }}>Set Poker</h3>
+      {view.setPokerEv && (
+        <div className="games-admin-ev">
+          <span className="sc-label">House edge vs the live pool (stand-pat estimate — check before enabling)</span>
+          <table className="games-ev-table">
+            <thead><tr><th>Win rate</th><th>Avg prize / hand</th><th>House edge</th><th>Bands</th></tr></thead>
+            <tbody>
+              <tr className={view.setPokerEv.houseEdgeBps < 0 ? 'ev-negative' : ''}>
+                <td>{view.setPokerEv.winRatePct}%</td>
+                <td>{formatUsd(BigInt(view.setPokerEv.avgPrizePaidE6))}</td>
+                <td>{(view.setPokerEv.houseEdgeBps / 100).toFixed(1)}%</td>
+                <td>{view.setPokerEv.eligibleBands === 0 ? '⚠ none in pool' : view.setPokerEv.eligibleBands}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p className="muted">Monte-Carlo over {view.setPokerEv.samples} stand-pat hands vs {view.setPokerEv.poolSize} cards (real play adds swap-fee revenue + lifts the win rate). Negative edge (red) loses money — retune the ante or bands.</p>
+        </div>
+      )}
+      <label className="games-admin-row">
+        <input type="checkbox" checked={spEnabled} onChange={(e) => setSpEnabled(e.target.checked)} /> Enabled
+      </label>
+      <div className="games-admin-fields">
+        <label className="field-label"><span>Ante (USD)</span><input type="number" value={spAnte} onChange={(e) => setSpAnte(e.target.value)} /></label>
+        <label className="field-label"><span>Swap fee (USD)</span><input type="number" value={spSwapFee} onChange={(e) => setSpSwapFee(e.target.value)} /></label>
+        <label className="field-label"><span>Max swaps</span><input type="number" value={spMaxSwaps} onChange={(e) => setSpMaxSwaps(e.target.value)} /></label>
+        <label className="field-label"><span>Buyback spread (%)</span><input type="number" step="0.1" value={spSpread} onChange={(e) => setSpSpread(e.target.value)} /></label>
+        <label className="field-label"><span>Max prize (USD)</span><input type="number" value={spMaxPrize} onChange={(e) => setSpMaxPrize(e.target.value)} /></label>
+        <label className="field-label"><span>Big-win threshold (USD)</span><input type="number" value={spBigWin} onChange={(e) => setSpBigWin(e.target.value)} /></label>
+      </div>
+      <label className="field-label"><span>Deal value bands (JSON)</span></label>
+      <textarea className="games-admin-json" rows={8} value={spBandsJson} onChange={(e) => setSpBandsJson(e.target.value)} />
+      <button className="btn-primary" disabled={busy} onClick={saveSetPoker}>Save Set Poker config</button>
 
       {msg && <div className="ref-msg up">{msg}</div>}
       {err && <div className="order-error">{err}</div>}

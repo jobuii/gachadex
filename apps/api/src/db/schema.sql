@@ -713,6 +713,10 @@ CREATE TABLE IF NOT EXISTS game_plays (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_game_plays_user_key ON game_plays(user_id, idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_game_plays_user ON game_plays(user_id, created_at DESC);
+-- At most one OPEN Set Poker hand per user — backstops the race between two concurrent deals (whose
+-- "another open hand?" checks both pass while the new rows still have a NULL status): the second hand's
+-- UPDATE to status='open' then fails this constraint and rolls back, instead of leaving two open hands.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_setpoker_open_hand ON game_plays(user_id) WHERE game_type = 'set-poker' AND result->>'status' = 'open';
 
 -- A won card. value_e6 = the oracle mark captured AT WIN; on sell-back it settles to USDC at the live
 -- mark minus the buyback spread (recorded in sell_value_e6). status: held (just won) | sold | kept.
@@ -729,4 +733,8 @@ CREATE TABLE IF NOT EXISTS game_prizes (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   settled_at    TIMESTAMPTZ
 );
+-- Buyback terms SNAPSHOT at win time so the sell-back honours the contract the player won under, even if
+-- the source game's config is retuned afterwards (and so each game's prize uses ITS own spread/cap).
+ALTER TABLE game_prizes ADD COLUMN IF NOT EXISTS spread_bps INT;
+ALTER TABLE game_prizes ADD COLUMN IF NOT EXISTS max_prize_e6 BIGINT;
 CREATE INDEX IF NOT EXISTS idx_game_prizes_user ON game_prizes(user_id, status);

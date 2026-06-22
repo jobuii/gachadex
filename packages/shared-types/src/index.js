@@ -319,6 +319,19 @@ export const PrizeSellRequest = z.object({
   prizeId: z.string().min(1),
 });
 
+// Set Poker: deal a hand / swap one of the player's five cards (slot 0..4). Each carries an idempotency key.
+export const SetPokerDealRequest = z.object({
+  idempotencyKey: z.string().min(8),
+});
+export const SetPokerSwapRequest = z.object({
+  slot: z.coerce.number().int().min(0).max(4),
+  idempotencyKey: z.string().min(8),
+});
+// Settle the open hand; an optional playId targets a specific hand for an idempotent retry.
+export const SetPokerSettleRequest = z.object({
+  playId: z.string().optional(),
+});
+
 // Live-tunable games config (admin Games view). Partial — only provided keys change. Bounds mirror
 // game-config.ts; `tiers` nests a per-tier weighted value-band table the rip draws from.
 const PackBandReq = z.object({
@@ -339,6 +352,19 @@ export const GameConfigRequest = z
         maxPrizeUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
         bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
         tiers: z.array(PackTierReq).min(1).max(12).optional(),
+      })
+      .strict()
+      .optional(),
+    setPoker: z
+      .object({
+        enabled: z.boolean().optional(),
+        anteUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        swapFeeUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+        maxSwaps: z.coerce.number().int().min(0).max(25).optional(),
+        buybackSpreadBps: z.coerce.number().int().min(0).max(9000).optional(),
+        maxPrizeUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+        bands: z.array(PackBandReq).min(1).max(12).optional(),
       })
       .strict()
       .optional(),

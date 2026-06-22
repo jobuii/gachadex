@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { ClientSeedRequest, PackRipOpenRequest, PrizeSellRequest } from '@pokex/shared-types';
+import { ClientSeedRequest, PackRipOpenRequest, PrizeSellRequest, SetPokerDealRequest, SetPokerSwapRequest, SetPokerSettleRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { authenticate } from '../plugins/auth.ts';
 import { rl } from './_ratelimit.ts';
 import { gamesView, getFairness, rotateClientSeed, openPack, sellBackPrize, listHeldPrizes } from '../services/games.ts';
+import { dealHand, swapCard, settleHand, getOpenHand } from '../services/games-setpoker.ts';
 
 const TRADE = { preHandler: authenticate, config: { scope: 'trade' as const } };
 
@@ -32,7 +33,12 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     return openPack(await getDb(), req.userId!, { tier: body.tier, idempotencyKey: body.idempotencyKey });
   });
 
-  // Sell a held prize back for USDC at the live mark minus the buyback spread.
+  // Sell a held prize back for USDC at the live mark minus the buyback spread (any game's won card).
+  app.post('/games/prizes/sell-back', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
+    const { prizeId } = PrizeSellRequest.parse(req.body);
+    return sellBackPrize(await getDb(), req.userId!, prizeId);
+  });
+  // Back-compat alias for the Pack Rip panel.
   app.post('/games/pack-rip/sell-back', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
     const { prizeId } = PrizeSellRequest.parse(req.body);
     return sellBackPrize(await getDb(), req.userId!, prizeId);
@@ -40,4 +46,19 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
 
   // The caller's still-held prizes (the "your pulls" list), valued at the live mark.
   app.get('/games/prizes', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => ({ prizes: await listHeldPrizes(await getDb(), req.userId!) }));
+
+  // Set Poker — deal a hand, swap a card, settle. The open hand can be resumed via GET.
+  app.get('/games/set-poker/hand', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => ({ hand: await getOpenHand(await getDb(), req.userId!) }));
+  app.post('/games/set-poker/deal', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
+    const { idempotencyKey } = SetPokerDealRequest.parse(req.body);
+    return dealHand(await getDb(), req.userId!, idempotencyKey);
+  });
+  app.post('/games/set-poker/swap', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
+    const { slot, idempotencyKey } = SetPokerSwapRequest.parse(req.body);
+    return swapCard(await getDb(), req.userId!, slot, idempotencyKey);
+  });
+  app.post('/games/set-poker/settle', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
+    const { playId } = SetPokerSettleRequest.parse(req.body ?? {});
+    return settleHand(await getDb(), req.userId!, playId);
+  });
 }

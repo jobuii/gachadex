@@ -178,6 +178,12 @@ export const setGamesClientSeed = (clientSeed) => req('/games/fairness/client-se
 export const packRipOpen = (tier, idempotencyKey) => req('/games/pack-rip/open', { method: 'POST', auth: true, body: { tier, idempotencyKey } });
 export const packRipSellBack = (prizeId) => req('/games/pack-rip/sell-back', { method: 'POST', auth: true, body: { prizeId } });
 export const getGamePrizes = () => req('/games/prizes', { auth: true }); // { prizes: [{ prizeId, displayName, imageSmall, valueE6, ... }] }
+export const sellGamePrize = (prizeId) => req('/games/prizes/sell-back', { method: 'POST', auth: true, body: { prizeId } }); // any game's won card
+// Set Poker
+export const getSetPokerHand = () => req('/games/set-poker/hand', { auth: true }); // { hand: SetPokerView | null }
+export const setPokerDeal = (idempotencyKey) => req('/games/set-poker/deal', { method: 'POST', auth: true, body: { idempotencyKey } });
+export const setPokerSwap = (slot, idempotencyKey) => req('/games/set-poker/swap', { method: 'POST', auth: true, body: { slot, idempotencyKey } });
+export const setPokerSettle = (playId) => req('/games/set-poker/settle', { method: 'POST', auth: true, body: { playId } });
 
 // --- LP ---
 export const getPool = () => req('/lp/pool');

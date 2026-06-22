@@ -2,12 +2,13 @@ import { useState, useEffect } from 'react';
 import * as api from '../lib/api.js';
 import { useGames } from '../store/games.js';
 import { PackRip } from './games/PackRip.jsx';
+import { SetPoker } from './games/SetPoker.jsx';
 
-// The 7-game lineup (docs/games-spec.md). Phase 1 ships Pack Rip; the rest render as "coming soon"
-// tiles so the surface shows the full roadmap. id matches the server's games list for the live ones.
+// The 7-game lineup (docs/games-spec.md). Pack Rip + Set Poker are live; the rest render as "coming
+// soon" tiles so the surface shows the full roadmap. id matches the server's games list for live ones.
 const LINEUP = [
   { id: 'pack-rip', name: 'Pack Rip', icon: '🎴', blurb: 'Open a pack, reveal a card, sell it back for USDC.', live: true },
-  { id: 'set-poker', name: 'Set Poker', icon: '🃏', blurb: 'Five-card draw — your cards’ value beats the house.', live: false },
+  { id: 'set-poker', name: 'Set Poker', icon: '🃏', blurb: 'Five-card draw — your cards’ value beats the house.', live: true },
   { id: 'grade-gamble', name: 'Grade Gamble', icon: '🔍', blurb: 'Gamble a raw card up the grade ladder.', live: false },
   { id: 'the-break', name: 'The Break', icon: '📦', blurb: 'Buy spots in a sealed digital case.', live: false },
   { id: 'price-duel', name: 'Price Duel', icon: '⚔️', blurb: 'Pick a card, biggest price move wins.', live: false },
@@ -28,11 +29,13 @@ export function GamesView({ onTradeMarket }) {
   const serverGame = (id) => config?.games?.find((g) => g.id === id) || null;
   const masterOff = config && !config.enabled;
 
-  if (selected === 'pack-rip') {
+  if (selected === 'pack-rip' || selected === 'set-poker') {
     return (
       <div className="page games">
         <button className="link games-back" onClick={() => setSelected(null)}>← All games</button>
-        <PackRip config={serverGame('pack-rip')} onTradeMarket={onTradeMarket} />
+        {selected === 'pack-rip'
+          ? <PackRip config={serverGame('pack-rip')} onTradeMarket={onTradeMarket} />
+          : <SetPoker config={serverGame('set-poker')} onTradeMarket={onTradeMarket} />}
       </div>
     );
   }
