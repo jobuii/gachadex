@@ -7,7 +7,7 @@ import { getOrCreateSystemAccount, getOrCreateUserAccount, getBalance, postTxn }
 import { handleFor } from './handles.ts';
 import { publish } from './bus.ts';
 import { emitGameWinEvent } from './chat.ts';
-import { packRipConfig, setPokerConfig, type PackBand } from './game-config.ts';
+import { packRipConfig, setPokerConfig, gradeGambleConfig, type PackBand } from './game-config.ts';
 import { commitServerSeed, freshClientSeed, weightedPick, rollInt } from './game-fairness.ts';
 
 /**
@@ -346,21 +346,23 @@ export interface HeldPrize {
 
 /** The caller's still-held (unsold, unkept) prizes, valued at the live mark — the "your pulls" list. */
 export async function listHeldPrizes(db: Db, userId: string): Promise<HeldPrize[]> {
-  const r = await db.query<{ id: string; market_id: string; symbol: string; display_name: string; image_small: string | null; won: string; mark: string | null }>(
-    `SELECT p.id, p.market_id, m.symbol, m.display_name, m.image_small, p.value_e6::text AS won,
+  const r = await db.query<{ id: string; market_id: string; symbol: string; display_name: string; image_small: string | null; won: string; mark: string | null; multiplier_bps: number }>(
+    `SELECT p.id, p.market_id, m.symbol, m.display_name, m.image_small, p.value_e6::text AS won, p.multiplier_bps,
             (SELECT mark_price_e6::text FROM marks WHERE market_id = p.market_id ORDER BY computed_at DESC, id DESC LIMIT 1) AS mark
        FROM game_prizes p JOIN markets m ON m.id = p.market_id
       WHERE p.user_id = $1 AND p.status = 'held' ORDER BY p.created_at DESC`,
     [userId],
   );
+  // Grade Gamble prizes carry a grade multiplier; the displayed value is the (live or at-win) mark × it.
+  const graded = (base: string, mult: number) => ((BigInt(base) * BigInt(mult)) / 10_000n).toString();
   return r.rows.map((x) => ({
     prizeId: x.id,
     marketId: x.market_id,
     symbol: x.symbol,
     displayName: x.display_name,
     imageSmall: x.image_small,
-    valueE6: x.mark ?? x.won,
-    wonValueE6: x.won,
+    valueE6: graded(x.mark ?? x.won, x.multiplier_bps),
+    wonValueE6: graded(x.won, x.multiplier_bps),
   }));
 }
 
@@ -379,8 +381,8 @@ export async function sellBackPrize(db: Db, userId: string, prizeId: string): Pr
   const cfg = packRipConfig();
 
   const out = await db.tx(async (q) => {
-    const pr = await q.query<{ id: string; market_id: string; status: string; spread_bps: number | null; max_prize_e6: string | null }>(
-      `SELECT id, market_id, status, spread_bps, max_prize_e6::text AS max_prize_e6 FROM game_prizes WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+    const pr = await q.query<{ id: string; market_id: string; status: string; spread_bps: number | null; max_prize_e6: string | null; multiplier_bps: number }>(
+      `SELECT id, market_id, status, spread_bps, max_prize_e6::text AS max_prize_e6, multiplier_bps FROM game_prizes WHERE id = $1 AND user_id = $2 FOR UPDATE`,
       [prizeId, userId],
     );
     if (!pr.rows[0]) throw new HttpError(404, 'prize not found');
@@ -388,7 +390,7 @@ export async function sellBackPrize(db: Db, userId: string, prizeId: string): Pr
 
     // Honour the buyback terms SNAPSHOTTED on the prize at win time (so each game uses its own spread/cap
     // and a later config change can't alter a prize already won); fall back to Pack Rip config for any
-    // pre-snapshot prize row.
+    // pre-snapshot prize row. multiplier_bps is the Grade Gamble grade (10000 = 1× for the other games).
     const spreadBps = pr.rows[0].spread_bps ?? cfg.buybackSpreadBps;
     const cap = pr.rows[0].max_prize_e6 != null ? BigInt(pr.rows[0].max_prize_e6) : usdc(cfg.maxPrizeUsd);
     const mk = await q.query<{ mark: string }>(
@@ -396,7 +398,7 @@ export async function sellBackPrize(db: Db, userId: string, prizeId: string): Pr
       [pr.rows[0].market_id],
     );
     if (!mk.rows[0]) throw new HttpError(503, 'no live price for this card');
-    const mark = BigInt(mk.rows[0].mark);
+    const mark = (BigInt(mk.rows[0].mark) * BigInt(pr.rows[0].multiplier_bps)) / 10_000n;
     let payout = (mark * BigInt(10_000 - spreadBps)) / 10_000n;
     if (payout > cap) payout = cap;
 
@@ -429,7 +431,7 @@ export async function sellBackPrize(db: Db, userId: string, prizeId: string): Pr
 
 export interface GamesView {
   enabled: boolean; // master GAMES_ENABLED gate
-  games: { id: string; name: string; type: string; enabled: boolean; tiers?: number[]; buybackSpreadBps?: number; anteUsd?: number; swapFeeUsd?: number; maxSwaps?: number }[];
+  games: { id: string; name: string; type: string; enabled: boolean; tiers?: number[]; buybackSpreadBps?: number; anteUsd?: number; swapFeeUsd?: number; maxSwaps?: number; grades?: { label: string; multBps: number }[] }[];
 }
 
 /**
@@ -503,6 +505,7 @@ export async function packRipEv(db: Db): Promise<TierEv[]> {
 export function gamesView(): GamesView {
   const pr = packRipConfig();
   const sp = setPokerConfig();
+  const gg = gradeGambleConfig();
   return {
     enabled: config.gamesEnabled,
     games: [
@@ -523,6 +526,15 @@ export function gamesView(): GamesView {
         swapFeeUsd: sp.swapFeeUsd,
         maxSwaps: sp.maxSwaps,
         buybackSpreadBps: sp.buybackSpreadBps,
+      },
+      {
+        id: 'grade-gamble',
+        name: 'Grade Gamble',
+        type: 'casino',
+        enabled: config.gamesEnabled && gg.enabled,
+        tiers: gg.tiers.map((t) => t.price),
+        grades: gg.grades.map((g) => ({ label: g.label, multBps: g.multBps })),
+        buybackSpreadBps: gg.buybackSpreadBps,
       },
     ],
   };

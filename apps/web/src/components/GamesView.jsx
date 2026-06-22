@@ -3,13 +3,17 @@ import * as api from '../lib/api.js';
 import { useGames } from '../store/games.js';
 import { PackRip } from './games/PackRip.jsx';
 import { SetPoker } from './games/SetPoker.jsx';
+import { GradeGamble } from './games/GradeGamble.jsx';
 
-// The 7-game lineup (docs/games-spec.md). Pack Rip + Set Poker are live; the rest render as "coming
-// soon" tiles so the surface shows the full roadmap. id matches the server's games list for live ones.
+// The playable game panels, keyed by the lobby/server id.
+const PANELS = { 'pack-rip': PackRip, 'set-poker': SetPoker, 'grade-gamble': GradeGamble };
+
+// The 7-game lineup (docs/games-spec.md). The first three are live; the rest render as "coming soon"
+// tiles so the surface shows the full roadmap. id matches the server's games list for live ones.
 const LINEUP = [
   { id: 'pack-rip', name: 'Pack Rip', icon: '🎴', blurb: 'Open a pack, reveal a card, sell it back for USDC.', live: true },
   { id: 'set-poker', name: 'Set Poker', icon: '🃏', blurb: 'Five-card draw — your cards’ value beats the house.', live: true },
-  { id: 'grade-gamble', name: 'Grade Gamble', icon: '🔍', blurb: 'Gamble a raw card up the grade ladder.', live: false },
+  { id: 'grade-gamble', name: 'Grade Gamble', icon: '🔍', blurb: 'Gamble a raw card up the grade ladder.', live: true },
   { id: 'the-break', name: 'The Break', icon: '📦', blurb: 'Buy spots in a sealed digital case.', live: false },
   { id: 'price-duel', name: 'Price Duel', icon: '⚔️', blurb: 'Pick a card, biggest price move wins.', live: false },
   { id: 'fantasy', name: 'Card Fantasy', icon: '🏆', blurb: 'Draft a roster, climb the weekly board.', live: false },
@@ -29,13 +33,12 @@ export function GamesView({ onTradeMarket }) {
   const serverGame = (id) => config?.games?.find((g) => g.id === id) || null;
   const masterOff = config && !config.enabled;
 
-  if (selected === 'pack-rip' || selected === 'set-poker') {
+  const Panel = selected ? PANELS[selected] : null;
+  if (Panel) {
     return (
       <div className="page games">
         <button className="link games-back" onClick={() => setSelected(null)}>← All games</button>
-        {selected === 'pack-rip'
-          ? <PackRip config={serverGame('pack-rip')} onTradeMarket={onTradeMarket} />
-          : <SetPoker config={serverGame('set-poker')} onTradeMarket={onTradeMarket} />}
+        <Panel config={serverGame(selected)} onTradeMarket={onTradeMarket} />
       </div>
     );
   }

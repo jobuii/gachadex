@@ -1,11 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import { ClientSeedRequest, PackRipOpenRequest, PrizeSellRequest, SetPokerDealRequest, SetPokerSwapRequest, SetPokerSettleRequest } from '@pokex/shared-types';
+import { ClientSeedRequest, PackRipOpenRequest, PrizeSellRequest, SetPokerDealRequest, SetPokerSwapRequest, SetPokerSettleRequest, GradeOpenRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { authenticate } from '../plugins/auth.ts';
 import { rl } from './_ratelimit.ts';
 import { gamesView, getFairness, rotateClientSeed, openPack, sellBackPrize, listHeldPrizes } from '../services/games.ts';
 import { dealHand, swapCard, settleHand, getOpenHand } from '../services/games-setpoker.ts';
+import { gradeOpen } from '../services/games-grade.ts';
 
 const TRADE = { preHandler: authenticate, config: { scope: 'trade' as const } };
 
@@ -60,5 +61,11 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
   app.post('/games/set-poker/settle', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
     const { playId } = SetPokerSettleRequest.parse(req.body ?? {});
     return settleHand(await getDb(), req.userId!, playId);
+  });
+
+  // Grade Gamble — pay an ante, draw + grade a card (a held prize sold back at the graded value).
+  app.post('/games/grade/open', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
+    const { tier, idempotencyKey } = GradeOpenRequest.parse(req.body);
+    return gradeOpen(await getDb(), req.userId!, tier, idempotencyKey);
   });
 }

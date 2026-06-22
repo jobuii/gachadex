@@ -332,6 +332,12 @@ export const SetPokerSettleRequest = z.object({
   playId: z.string().optional(),
 });
 
+// Grade Gamble: pay an ante tier to draw + grade a card.
+export const GradeOpenRequest = z.object({
+  tier: z.coerce.number().int().positive().max(10_000_000),
+  idempotencyKey: z.string().min(8),
+});
+
 // Live-tunable games config (admin Games view). Partial — only provided keys change. Bounds mirror
 // game-config.ts; `tiers` nests a per-tier weighted value-band table the rip draws from.
 const PackBandReq = z.object({
@@ -365,6 +371,21 @@ export const GameConfigRequest = z
         maxPrizeUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
         bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
         bands: z.array(PackBandReq).min(1).max(12).optional(),
+      })
+      .strict()
+      .optional(),
+    gradeGamble: z
+      .object({
+        enabled: z.boolean().optional(),
+        buybackSpreadBps: z.coerce.number().int().min(0).max(9000).optional(),
+        maxPrizeUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+        tiers: z.array(PackTierReq).min(1).max(12).optional(),
+        grades: z.array(z.object({
+          label: z.string().min(1).max(24),
+          multBps: z.coerce.number().int().min(1).max(100_000_000),
+          weight: z.coerce.number().min(0).max(1_000_000_000),
+        })).min(2).max(12).optional(),
       })
       .strict()
       .optional(),

@@ -27,6 +27,13 @@ export function GamesAdminView({ adminKey }) {
   const [spMaxPrize, setSpMaxPrize] = useState('');
   const [spBigWin, setSpBigWin] = useState('');
   const [spBandsJson, setSpBandsJson] = useState('');
+  // Grade Gamble drafts
+  const [ggEnabled, setGgEnabled] = useState(false);
+  const [ggSpread, setGgSpread] = useState('');
+  const [ggMaxPrize, setGgMaxPrize] = useState('');
+  const [ggBigWin, setGgBigWin] = useState('');
+  const [ggTiersJson, setGgTiersJson] = useState('');
+  const [ggGradesJson, setGgGradesJson] = useState('');
 
   const load = useCallback(() => {
     return api.adminGetGamesConfig(adminKey).then((v) => {
@@ -46,6 +53,13 @@ export function GamesAdminView({ adminKey }) {
       setSpMaxPrize(String(sp.maxPrizeUsd));
       setSpBigWin(String(sp.bigWinUsd));
       setSpBandsJson(JSON.stringify(sp.bands, null, 2));
+      const gg = v.gradeGamble;
+      setGgEnabled(gg.enabled);
+      setGgSpread((gg.buybackSpreadBps / 100).toString());
+      setGgMaxPrize(String(gg.maxPrizeUsd));
+      setGgBigWin(String(gg.bigWinUsd));
+      setGgTiersJson(JSON.stringify(gg.tiers, null, 2));
+      setGgGradesJson(JSON.stringify(gg.grades, null, 2));
     }).catch((e) => setErr(e.message));
   }, [adminKey]);
 
@@ -106,6 +120,26 @@ export function GamesAdminView({ adminKey }) {
       bands,
     };
     act(() => api.adminSetGamesConfig({ setPoker: patch }, adminKey), 'Saved. (Restart the API if a value doesn’t apply within ~30s.)');
+  };
+
+  const saveGradeGamble = () => {
+    let tiers, grades;
+    try {
+      tiers = JSON.parse(ggTiersJson);
+      grades = JSON.parse(ggGradesJson);
+    } catch {
+      setErr('Grade Gamble tiers + grades must be valid JSON');
+      return;
+    }
+    const patch = {
+      enabled: ggEnabled,
+      buybackSpreadBps: Math.round(parseFloat(ggSpread) * 100),
+      maxPrizeUsd: parseInt(ggMaxPrize, 10),
+      bigWinUsd: parseInt(ggBigWin, 10),
+      tiers,
+      grades,
+    };
+    act(() => api.adminSetGamesConfig({ gradeGamble: patch }, adminKey), 'Saved. (Restart the API if a value doesn’t apply within ~30s.)');
   };
 
   const seed = () => act(
@@ -200,6 +234,40 @@ export function GamesAdminView({ adminKey }) {
       <label className="field-label"><span>Deal value bands (JSON)</span></label>
       <textarea className="games-admin-json" rows={8} value={spBandsJson} onChange={(e) => setSpBandsJson(e.target.value)} />
       <button className="btn-primary" disabled={busy} onClick={saveSetPoker}>Save Set Poker config</button>
+
+      <h3 style={{ marginTop: '1.5rem' }}>Grade Gamble</h3>
+      {view.gradeGambleEv && (
+        <div className="games-admin-ev">
+          <span className="sc-label">House edge vs the live pool — E[grade] {(view.gradeGambleEv.expGradeMultBps / 10000).toFixed(2)}× (check before enabling)</span>
+          <table className="games-ev-table">
+            <thead><tr><th>Tier</th><th>Exp. payout</th><th>House edge</th><th>Bands</th></tr></thead>
+            <tbody>
+              {view.gradeGambleEv.tiers.map((e) => (
+                <tr key={e.tier} className={e.houseEdgeBps < 0 ? 'ev-negative' : ''}>
+                  <td>${e.tier}</td>
+                  <td>{formatUsd(BigInt(e.expectedPayoutE6))}</td>
+                  <td>{(e.houseEdgeBps / 100).toFixed(1)}%</td>
+                  <td>{e.eligibleBands === 0 ? '⚠ none in pool' : e.eligibleBands}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="muted">Edge = ante − E[base card] × E[grade] × (1 − spread). Negative (red) loses money — retune the ante, bands, or grade table.</p>
+        </div>
+      )}
+      <label className="games-admin-row">
+        <input type="checkbox" checked={ggEnabled} onChange={(e) => setGgEnabled(e.target.checked)} /> Enabled
+      </label>
+      <div className="games-admin-fields">
+        <label className="field-label"><span>Buyback spread (%)</span><input type="number" step="0.1" value={ggSpread} onChange={(e) => setGgSpread(e.target.value)} /></label>
+        <label className="field-label"><span>Max prize (USD)</span><input type="number" value={ggMaxPrize} onChange={(e) => setGgMaxPrize(e.target.value)} /></label>
+        <label className="field-label"><span>Big-win threshold (USD)</span><input type="number" value={ggBigWin} onChange={(e) => setGgBigWin(e.target.value)} /></label>
+      </div>
+      <label className="field-label"><span>Tiers + base-card bands (JSON)</span></label>
+      <textarea className="games-admin-json" rows={8} value={ggTiersJson} onChange={(e) => setGgTiersJson(e.target.value)} />
+      <label className="field-label"><span>Grade table (JSON)</span></label>
+      <textarea className="games-admin-json" rows={8} value={ggGradesJson} onChange={(e) => setGgGradesJson(e.target.value)} />
+      <button className="btn-primary" disabled={busy} onClick={saveGradeGamble}>Save Grade Gamble config</button>
 
       {msg && <div className="ref-msg up">{msg}</div>}
       {err && <div className="order-error">{err}</div>}

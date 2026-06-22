@@ -18,9 +18,10 @@ import { listChatUsers } from '../services/chat.ts';
 import { chatConfigView, setChatThresholds } from '../services/chat-config.ts';
 import { dropConfigView, setDropConfig, getDropView } from '../services/drop-config.ts';
 import { totalTippedE6, recentTips } from '../services/drop.ts';
-import { gamesAdminView, setPackRipConfig, setSetPokerConfig } from '../services/game-config.ts';
+import { gamesAdminView, setPackRipConfig, setSetPokerConfig, setGradeGambleConfig } from '../services/game-config.ts';
 import { seedGamePool, packRipEv } from '../services/games.ts';
 import { setPokerEv } from '../services/games-setpoker.ts';
+import { gradeGambleEv } from '../services/games-grade.ts';
 import { getUserPositions, liquidateAllEligible } from '../services/engine.ts';
 import { withdrawalAutoProcessView, setWithdrawalAutoProcess } from '../services/withdrawal-config.ts';
 import { getCustomerHistory } from '../services/history.ts';
@@ -230,15 +231,16 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   // Current games config + defaults + the GAME_POOL balance + per-game EV/house-edge vs the live pool.
   app.get('/admin/games/config', rl(config.routeRateLimits.admin), async () => {
     const db = await getDb();
-    return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db), setPokerEv: await setPokerEv(db) };
+    return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db), setPokerEv: await setPokerEv(db), gradeGambleEv: await gradeGambleEv(db) };
   });
-  // Apply a partial games config patch (Pack Rip and/or Set Poker knobs).
+  // Apply a partial games config patch (Pack Rip / Set Poker / Grade Gamble knobs).
   app.post('/admin/games/config', rl(config.routeRateLimits.admin), async (req) => {
     const b = GameConfigRequest.parse(req.body);
     const db = await getDb();
     if (b.packRip) await setPackRipConfig(db, b.packRip);
     if (b.setPoker) await setSetPokerConfig(db, b.setPoker);
-    return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db), setPokerEv: await setPokerEv(db) };
+    if (b.gradeGamble) await setGradeGambleConfig(db, b.gradeGamble);
+    return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db), setPokerEv: await setPokerEv(db), gradeGambleEv: await gradeGambleEv(db) };
   });
   // Seed the GAME_POOL bankroll (play-money: from FAUCET_SOURCE) so prizes can be paid out.
   app.post('/admin/games/seed-pool', rl(config.routeRateLimits.admin), async (req) => {

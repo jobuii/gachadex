@@ -74,6 +74,11 @@
   .sp-card-img { height: 90px; }
 }
 
+/* --- grade gamble --- */
+.gg-odds { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.6rem 0; }
+.gg-odd { font-size: 0.8rem; padding: 0.25rem 0.55rem; border: 1px solid var(--border); border-radius: var(--pill); background: var(--bg-2); color: var(--text-muted); }
+.gg-grade { color: var(--accent-lit); font-weight: var(--weight-strong); font-size: 0.95rem; }
+
 /* --- provably-fair modal --- */
 .games-modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center;

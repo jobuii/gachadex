@@ -85,16 +85,18 @@ function validateBands(bandsIn: unknown): PackBand[] {
   return bands;
 }
 
+/** Coerce + bound a list of priced tiers, each with its own value-band table (Pack Rip + Grade Gamble). */
+function validateTiers(tiersIn: unknown): PackTier[] {
+  const arr = Array.isArray(tiersIn) ? tiersIn : [];
+  if (arr.length < 1 || arr.length > 12) throw new Error('needs 1..12 tiers');
+  return arr.map((t) => ({ price: num(t?.price, 'tier price (USD)', 1, MAX_USD), bands: validateBands(t?.bands) }));
+}
+
 /** Coerce + bound an arbitrary stored/posted value into a valid PackRipConfig (throws on a bad shape). */
 function validatePackRip(value: unknown): PackRipConfig {
   const v = (typeof value === 'string' ? JSON.parse(value) : value) as Partial<PackRipConfig>;
   if (!v || typeof v !== 'object') throw new Error('pack-rip config must be an object');
-  const tiersIn = Array.isArray(v.tiers) ? v.tiers : [];
-  if (tiersIn.length < 1 || tiersIn.length > 12) throw new Error('pack-rip needs 1..12 tiers');
-  const tiers: PackTier[] = tiersIn.map((t) => ({
-    price: num(t?.price, 'tier price (USD)', 1, MAX_USD),
-    bands: validateBands(t?.bands),
-  }));
+  const tiers = validateTiers(v.tiers);
   return {
     enabled: Boolean(v.enabled),
     buybackSpreadBps: num(v.buybackSpreadBps, 'buyback spread (bps)', 0, 9000),
@@ -153,31 +155,99 @@ function validateSetPoker(value: unknown): SetPokerConfig {
   };
 }
 
+// --- Grade Gamble (docs/games-spec.md). Pay an ante → draw a base card → a provably-fair GRADE roll
+// (Damaged … PSA 10) multiplies the card's value; you win it "graded", sold back at mark × grade × (1 −
+// spread). The edge is structural — the weighted grade table's E[multiplier] (NOT real PSA odds, which the
+// research found unpublished) plus the spread — so `gradeGambleEv` reports the realised per-tier edge.
+export interface GradeTier {
+  label: string;
+  multBps: number; // value multiplier, 10000 = 1× the card's mark
+  weight: number;
+}
+export interface GradeGambleConfig {
+  enabled: boolean;
+  buybackSpreadBps: number;
+  maxPrizeUsd: number;
+  bigWinUsd: number;
+  tiers: PackTier[]; // ante + the base-card value bands per tier
+  grades: GradeTier[]; // weighted grade table
+}
+
+const DEFAULT_GRADE_GAMBLE: GradeGambleConfig = {
+  enabled: false,
+  buybackSpreadBps: 1200,
+  maxPrizeUsd: 5000,
+  bigWinUsd: 250,
+  tiers: [
+    { price: 25, bands: [
+      { minUsd: 0, maxUsd: 20, weight: 60 },
+      { minUsd: 20, maxUsd: 60, weight: 40 },
+    ] },
+  ],
+  grades: [
+    { label: 'Damaged', multBps: 2500, weight: 22 },
+    { label: 'PSA 7', multBps: 6000, weight: 30 },
+    { label: 'PSA 8', multBps: 10000, weight: 28 },
+    { label: 'PSA 9', multBps: 20000, weight: 15 },
+    { label: 'PSA 10', multBps: 60000, weight: 5 },
+  ],
+};
+
+function validateGrades(gradesIn: unknown): GradeTier[] {
+  const arr = Array.isArray(gradesIn) ? gradesIn : [];
+  if (arr.length < 2 || arr.length > 12) throw new Error('grade gamble needs 2..12 grades');
+  const grades = arr.map((g) => ({
+    label: String(g?.label ?? '').slice(0, 24) || 'grade',
+    multBps: num(g?.multBps, 'grade multiplier (bps)', 1, 100_000_000), // >= 1 so a grade can't zero a prize
+    weight: num(g?.weight, 'grade weight', 0, 1_000_000_000),
+  }));
+  if (grades.reduce((a, g) => a + g.weight, 0) <= 0) throw new Error('grade gamble needs a positive grade weight');
+  return grades;
+}
+
+function validateGradeGamble(value: unknown): GradeGambleConfig {
+  const v = (typeof value === 'string' ? JSON.parse(value) : value) as Partial<GradeGambleConfig>;
+  if (!v || typeof v !== 'object') throw new Error('grade gamble config must be an object');
+  return {
+    enabled: Boolean(v.enabled),
+    buybackSpreadBps: num(v.buybackSpreadBps, 'buyback spread (bps)', 0, 9000),
+    maxPrizeUsd: num(v.maxPrizeUsd, 'max prize (USD)', 1, MAX_USD),
+    bigWinUsd: num(v.bigWinUsd, 'big-win threshold (USD)', 0, MAX_USD),
+    tiers: validateTiers(v.tiers),
+    grades: validateGrades(v.grades),
+  };
+}
+
 const packRip = liveKnob<PackRipConfig>('game_pack_rip', DEFAULT_PACK_RIP, validatePackRip, JSON.stringify);
 const setPoker = liveKnob<SetPokerConfig>('game_set_poker', DEFAULT_SET_POKER, validateSetPoker, JSON.stringify);
+const gradeGamble = liveKnob<GradeGambleConfig>('game_grade_gamble', DEFAULT_GRADE_GAMBLE, validateGradeGamble, JSON.stringify);
 
 /** Current Pack Rip config (sync read on the play hot path). */
 export const packRipConfig = (): PackRipConfig => packRip.get();
 /** Current Set Poker config (sync read on the play hot path). */
 export const setPokerConfig = (): SetPokerConfig => setPoker.get();
+/** Current Grade Gamble config (sync read on the play hot path). */
+export const gradeGambleConfig = (): GradeGambleConfig => gradeGamble.get();
 
 /** Load every games knob from settings (boot + periodic refresh, for multi-instance convergence). */
 export async function loadGameConfig(db: Db): Promise<void> {
-  await Promise.all([packRip.load(db), setPoker.load(db)]);
+  await Promise.all([packRip.load(db), setPoker.load(db), gradeGamble.load(db)]);
 }
 
 /** The full config + defaults + the GAME_POOL bankroll balance — for the admin Games view. */
 export async function gamesAdminView(db: Db): Promise<{
   packRip: PackRipConfig;
   setPoker: SetPokerConfig;
-  defaults: { packRip: PackRipConfig; setPoker: SetPokerConfig };
+  gradeGamble: GradeGambleConfig;
+  defaults: { packRip: PackRipConfig; setPoker: SetPokerConfig; gradeGamble: GradeGambleConfig };
   poolE6: string;
 }> {
   const acct = await getOrCreateSystemAccount(db, 'GAME_POOL');
   return {
     packRip: packRip.get(),
     setPoker: setPoker.get(),
-    defaults: { packRip: packRip.default, setPoker: setPoker.default },
+    gradeGamble: gradeGamble.get(),
+    defaults: { packRip: packRip.default, setPoker: setPoker.default, gradeGamble: gradeGamble.default },
     poolE6: (await getBalance(db, acct)).toString(),
   };
 }
@@ -194,4 +264,11 @@ export async function setSetPokerConfig(db: Db, patch: Partial<SetPokerConfig>):
   const merged = { ...setPoker.get(), ...patch };
   await setPoker.set(db, merged);
   return setPoker.get();
+}
+
+/** Apply a partial Grade Gamble patch, then re-load. */
+export async function setGradeGambleConfig(db: Db, patch: Partial<GradeGambleConfig>): Promise<GradeGambleConfig> {
+  const merged = { ...gradeGamble.get(), ...patch };
+  await gradeGamble.set(db, merged);
+  return gradeGamble.get();
 }

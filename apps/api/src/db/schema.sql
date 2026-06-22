@@ -737,4 +737,7 @@ CREATE TABLE IF NOT EXISTS game_prizes (
 -- the source game's config is retuned afterwards (and so each game's prize uses ITS own spread/cap).
 ALTER TABLE game_prizes ADD COLUMN IF NOT EXISTS spread_bps INT;
 ALTER TABLE game_prizes ADD COLUMN IF NOT EXISTS max_prize_e6 BIGINT;
+-- Value multiplier applied to the card's live mark at sell-back (Grade Gamble's rolled grade). 10000 = 1×
+-- (Pack Rip / Set Poker prizes leave it at the default, so they sell at the plain mark).
+ALTER TABLE game_prizes ADD COLUMN IF NOT EXISTS multiplier_bps INT NOT NULL DEFAULT 10000;
 CREATE INDEX IF NOT EXISTS idx_game_prizes_user ON game_prizes(user_id, status);

@@ -184,6 +184,8 @@ export const getSetPokerHand = () => req('/games/set-poker/hand', { auth: true }
 export const setPokerDeal = (idempotencyKey) => req('/games/set-poker/deal', { method: 'POST', auth: true, body: { idempotencyKey } });
 export const setPokerSwap = (slot, idempotencyKey) => req('/games/set-poker/swap', { method: 'POST', auth: true, body: { slot, idempotencyKey } });
 export const setPokerSettle = (playId) => req('/games/set-poker/settle', { method: 'POST', auth: true, body: { playId } });
+// Grade Gamble
+export const gradeOpen = (tier, idempotencyKey) => req('/games/grade/open', { method: 'POST', auth: true, body: { tier, idempotencyKey } });
 
 // --- LP ---
 export const getPool = () => req('/lp/pool');
