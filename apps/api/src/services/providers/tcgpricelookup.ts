@@ -279,6 +279,17 @@ export interface GradeRow {
 
 const GRADER_ORDER: Record<string, number> = { PSA: 0, BGS: 1, CGC: 2 };
 
+/** Canonical grade-ladder order: PSA/BGS/CGC first (others after, alphabetical), then grade desc.
+ *  Shared so the Scrydex ladder sorts identically to this provider's. */
+export function sortGradeRows(rows: GradeRow[]): GradeRow[] {
+  return [...rows].sort(
+    (a, b) =>
+      (GRADER_ORDER[a.grader] ?? 9) - (GRADER_ORDER[b.grader] ?? 9) ||
+      a.grader.localeCompare(b.grader) ||
+      Number(b.grade) - Number(a.grade),
+  );
+}
+
 /** The full grade ladder out of this provider's graded prices object ({ psa: { '10': { ebay: … }}, …}),
  *  each rung priced through the same chain as the PSA-10 oracle price. Sorted PSA/BGS/CGC (other
  *  graders after, alphabetical), grade desc. Grade keys are VALIDATED to (0, 10]: the live data
@@ -295,12 +306,7 @@ export function gradeLadder(graded: unknown): GradeRow[] {
       if (v != null) rows.push({ grader: grader.toUpperCase(), grade, priceE6: toE6(v).toString() });
     }
   }
-  return rows.sort(
-    (a, b) =>
-      (GRADER_ORDER[a.grader] ?? 9) - (GRADER_ORDER[b.grader] ?? 9) ||
-      a.grader.localeCompare(b.grader) ||
-      Number(b.grade) - Number(a.grade),
-  );
+  return sortGradeRows(rows);
 }
 
 /** The tracked market row a provider card re-prices. Identity (game/symbol/card_id) comes from OUR

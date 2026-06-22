@@ -37,6 +37,15 @@ test('POST /webhooks/scrydex acks a genuinely-signed raw_updated event with 200'
   assert.deepEqual(res.json(), { ok: true });
 });
 
+test('POST /webhooks/scrydex also re-prices on a signed graded_updated event (acked 200)', async () => {
+  // graded_updated now drives a reprice too (refreshes the Scrydex graded ladder); same short-circuit
+  // as raw_updated in test env, so it acks 200 without a live fetch.
+  const body = JSON.stringify({ id: 'evt_g', name: 'pokemon.expansions.prices.graded_updated', data: { expansion_ids: ['no-such-expansion'] } });
+  const res = await post(body, { 'x-scrydex-signature': signed(body) });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), { ok: true });
+});
+
 test('POST /webhooks/scrydex rejects a bad or missing signature with 401', async () => {
   const body = JSON.stringify({ id: 'evt_2', name: 'pokemon.expansions.prices.raw_updated', data: { expansion_ids: ['x'] } });
   assert.equal((await post(body, { 'x-scrydex-signature': 't=1,v1=deadbeef' })).statusCode, 401);

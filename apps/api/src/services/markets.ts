@@ -3,7 +3,7 @@ import { config } from '../config.ts';
 import type { Db, Queryer } from '../db/client.ts';
 import { usdc } from '../money.ts';
 import { getFeeBps, getFundingFactorBps } from './fees.ts';
-import { gradeLadder, type GradeRow } from './providers/tcgpricelookup.ts';
+import { gradeLadder, sortGradeRows, type GradeRow } from './providers/tcgpricelookup.ts';
 
 // Per-side open-interest caps (risk parameters). Indices are diversified -> deeper books.
 const CARD_OI_CAP = usdc(50_000).toString();
@@ -74,6 +74,9 @@ export interface CardUpsert {
   // Creation-only: the per-market quantity floor (a fine step; the $1 dollar dust floor is the
   // engine's min-notional check). Never touched on re-upsert — the operator may retune a live market's min.
   minQtyE6?: bigint | null;
+  // PSA-10 graded price (micro-USD), Scrydex-first / tcgpl fallback. Persisted on every print so the
+  // detail-panel + Graded index stay current (incl. via the webhook); COALESCEd so a null never clobbers.
+  gradedE6?: bigint | null;
 }
 
 /** Symbol for a provider-created card market: game-namespaced so provider ids can never collide across
@@ -88,18 +91,19 @@ export async function upsertCardMarket(q: Queryer, opts: CardUpsert): Promise<st
   const meta = opts.metadata != null ? JSON.stringify(opts.metadata) : null;
   await q.query(
     `INSERT INTO markets(id, kind, game, symbol, display_name, card_id, variant, image_small, image_large, set_logo, metadata, tradeable,
-       max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id, featured, min_qty_e6)
-     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13, COALESCE($14, false), COALESCE($15, 100))
+       max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id, featured, min_qty_e6, graded_psa10_e6)
+     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13, COALESCE($14, false), COALESCE($15, 100), $16)
      ON CONFLICT(symbol) DO UPDATE
        SET display_name = EXCLUDED.display_name, image_small = EXCLUDED.image_small, image_large = EXCLUDED.image_large,
            set_logo = EXCLUDED.set_logo, metadata = EXCLUDED.metadata, variant = EXCLUDED.variant,
            tcgplayer_id = COALESCE(EXCLUDED.tcgplayer_id, markets.tcgplayer_id),
            provider_card_id = COALESCE(EXCLUDED.provider_card_id, markets.provider_card_id),
-           featured = COALESCE($14, markets.featured)`,
+           featured = COALESCE($14, markets.featured),
+           graded_psa10_e6 = COALESCE($16, markets.graded_psa10_e6)`,
     [
       id, opts.symbol, opts.displayName, opts.cardId, opts.variant, opts.imageSmall, opts.imageLarge ?? null,
       opts.setLogo ?? null, meta, CARD_OI_CAP, opts.game ?? 'pokemon', opts.tcgplayerId ?? null, opts.providerCardId ?? null,
-      opts.featured ?? null, opts.minQtyE6?.toString() ?? null,
+      opts.featured ?? null, opts.minQtyE6?.toString() ?? null, opts.gradedE6?.toString() ?? null,
     ],
   );
   const r = await q.query<{ id: string }>(`SELECT id FROM markets WHERE symbol = $1`, [opts.symbol]);
@@ -184,21 +188,24 @@ export async function getMarketDetails(db: Db, id: string): Promise<MarketDetail
          FROM markets m WHERE m.id = $1`,
       [id],
     ),
-    db.query<{ graded: unknown }>(
-      // Latest accepted print THAT CARRIES a graded object — a manual admin print or a legacy
-      // pokemontcg print on top must not blank the ladder until the next provider print.
-      `SELECT raw_payload #> '{tcgpricelookup,prices,graded}' AS graded
-         FROM oracle_prices WHERE market_id = $1 AND is_accepted
-          AND raw_payload #> '{tcgpricelookup,prices,graded}' IS NOT NULL
-        ORDER BY source_observed_at DESC LIMIT 1`,
+    db.query<{ sx: unknown; tpl: unknown }>(
+      // Latest accepted print carrying a graded ladder from each source. Scrydex (a pre-built GradeRow[])
+      // is preferred; tcgpl's eBay graded object is the fallback (parsed via gradeLadder). Either query
+      // alone never blanks the ladder if a later print (manual admin / legacy feed) lacks graded data.
+      `SELECT
+         (SELECT raw_payload #> '{scrydex,graded}' FROM oracle_prices WHERE market_id = $1 AND is_accepted
+            AND raw_payload #> '{scrydex,graded}' IS NOT NULL ORDER BY source_observed_at DESC LIMIT 1) AS sx,
+         (SELECT raw_payload #> '{tcgpricelookup,prices,graded}' FROM oracle_prices WHERE market_id = $1 AND is_accepted
+            AND raw_payload #> '{tcgpricelookup,prices,graded}' IS NOT NULL ORDER BY source_observed_at DESC LIMIT 1) AS tpl`,
       [id],
     ),
   ]);
   const row = r.rows[0];
   if (!row) return null;
   const metadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : (row.metadata ?? null);
-  const graded = p.rows[0]?.graded;
-  const grades = gradeLadder(typeof graded === 'string' ? JSON.parse(graded) : graded);
+  const sxGraded = typeof p.rows[0]?.sx === 'string' ? JSON.parse(p.rows[0].sx as string) : p.rows[0]?.sx;
+  const tplGraded = typeof p.rows[0]?.tpl === 'string' ? JSON.parse(p.rows[0].tpl as string) : p.rows[0]?.tpl;
+  const grades = Array.isArray(sxGraded) && sxGraded.length ? sortGradeRows(sxGraded as GradeRow[]) : gradeLadder(tplGraded);
   return {
     imageLarge: row.image_large, setLogo: row.set_logo, variant: row.variant, metadata,
     gradedPsa10E6: row.graded, grades, releaseYear: row.release_year ?? null,
