@@ -102,7 +102,8 @@ async function featuredCards(q: Queryer): Promise<CardRow[]> {
        FROM markets m
        JOIN (SELECT DISTINCT ON (market_id) market_id, mark_price_e6::text AS mark_e6
                FROM marks ORDER BY market_id, computed_at DESC, id DESC) lm ON lm.market_id = m.id
-      WHERE m.featured AND m.kind = 'card' AND m.status = 'active'`,
+      WHERE m.featured AND m.kind = 'card' AND m.status = 'active'
+      ORDER BY m.id`,
   );
   return r.rows.map((x) => ({ id: x.id, symbol: x.symbol, displayName: x.display_name, imageSmall: x.image_small, markE6: BigInt(x.mark_e6) }));
 }
@@ -121,27 +122,61 @@ export interface PackRipResult {
   tier: number;
   bandIndex: number;
   card: PrizeCard;
+  fair: RevealFair; // recorded so the reveal can be independently verified
   balanceE6: string;
   serverSeedHash: string;
   clientSeed: string;
   nonce: number;
 }
 
-/** Pick the revealed card: a weighted band (cursor 0), then a card within it (cursor 1). Empty band ->
- *  any featured card, so a play never fails for lack of a card in some range. */
-function revealCard(
-  seed: SeedRow,
-  bands: PackBand[],
-  pool: CardRow[],
-): { card: CardRow; bandIndex: number } {
-  const bandIndex = weightedPick(seed.server_seed, seed.client_seed, seed.nonce, 0, bands.map((b) => b.weight));
-  const band = bands[bandIndex];
-  const lo = usdc(band.minUsd);
-  const hi = usdc(band.maxUsd);
-  const eligible = pool.filter((c) => c.markE6 >= lo && c.markE6 <= hi);
-  const from = eligible.length > 0 ? eligible : pool;
-  const card = from[rollInt(seed.server_seed, seed.client_seed, seed.nonce, 1, from.length)];
-  return { card, bandIndex };
+/**
+ * Per-band eligible cards + the EFFECTIVE band weights (a band with no card in its [minUsd, maxUsd] range
+ * is zeroed so it can't be rolled). Zeroing empty bands instead of falling back to the whole pool is what
+ * BOUNDS the house's downside: a cheap pack can never escalate into awarding a card above its richest
+ * configured band's ceiling. `pool` is ordered by market id (featuredCards) so the eligible slices — and
+ * thus the card index — are reproducible by anyone verifying the play.
+ */
+function bandEligibility(bands: PackBand[], pool: CardRow[]): { perBand: CardRow[][]; effWeights: number[] } {
+  const perBand = bands.map((b) => {
+    const lo = usdc(b.minUsd);
+    const hi = usdc(b.maxUsd);
+    return pool.filter((c) => c.markE6 >= lo && c.markE6 <= hi);
+  });
+  const effWeights = bands.map((b, i) => (perBand[i].length > 0 ? b.weight : 0));
+  return { perBand, effWeights };
+}
+
+// The verification trail recorded on a play so it can be recomputed independently from the (revealed)
+// server seed + client seed + nonce: weightedPick(bandWeights) must give bandIndex; rollInt(candidateCount)
+// must give cardIndex. bandIndex = -1 marks the cheapest-card fallback (no band had any eligible card): the
+// candidate set is the single deterministic cheapest card, so candidateCount = 1 and rollInt(.., 1) === 0.
+export interface RevealFair {
+  bandWeights: number[];
+  bandIndex: number;
+  candidateCount: number;
+  cardIndex: number;
+}
+
+/**
+ * Pick the revealed card provably-fairly: a weighted band (cursor 0) over the EFFECTIVE weights, then a
+ * card within that band by the pool's stable id order (cursor 1). Empty bands are zeroed so the award can
+ * never escalate above a configured band. Only if NO band has any eligible card at all (a tier
+ * misconfigured for the live pool — surfaced by packRipEv) do we award the single cheapest card.
+ */
+function revealCard(seed: SeedRow, bands: PackBand[], pool: CardRow[]): { card: CardRow; bandIndex: number; fair: RevealFair } {
+  const { perBand, effWeights } = bandEligibility(bands, pool);
+  const total = effWeights.reduce((a, w) => a + w, 0);
+  if (total <= 0) {
+    // No band has an eligible card (a tier misconfigured for the live pool — packRipEv surfaces this).
+    // Award the single deterministic cheapest card. Recorded as a 1-candidate set so the trail stays
+    // self-consistent: rollInt(.., candidateCount = 1) === 0 === cardIndex.
+    const cheapest = [...pool].sort((a, b) => (a.markE6 < b.markE6 ? -1 : a.markE6 > b.markE6 ? 1 : a.id < b.id ? -1 : 1))[0];
+    return { card: cheapest, bandIndex: -1, fair: { bandWeights: effWeights, bandIndex: -1, candidateCount: 1, cardIndex: 0 } };
+  }
+  const bandIndex = weightedPick(seed.server_seed, seed.client_seed, seed.nonce, 0, effWeights);
+  const candidates = perBand[bandIndex];
+  const cardIndex = rollInt(seed.server_seed, seed.client_seed, seed.nonce, 1, candidates.length);
+  return { card: candidates[cardIndex], bandIndex, fair: { bandWeights: effWeights, bandIndex, candidateCount: candidates.length, cardIndex } };
 }
 
 /**
@@ -171,19 +206,20 @@ export async function openPack(
     );
     if (!ins.rows[0]) {
       // Replay: a duplicate request returns the original reveal (no second charge).
-      const ex = await q.query<{ result: unknown; server_seed_hash: string; client_seed: string; nonce: number }>(
-        `SELECT result, server_seed_hash, client_seed, nonce::int AS nonce FROM game_plays WHERE user_id = $1 AND idempotency_key = $2`,
+      const ex = await q.query<{ id: string; result: unknown; server_seed_hash: string; client_seed: string; nonce: number }>(
+        `SELECT id, result, server_seed_hash, client_seed, nonce::int AS nonce FROM game_plays WHERE user_id = $1 AND idempotency_key = $2`,
         [userId, opts.idempotencyKey],
       );
       const row = ex.rows[0];
-      const res = (typeof row.result === 'string' ? JSON.parse(row.result) : row.result) as { tier: number; bandIndex: number; card: PrizeCard };
+      const res = (typeof row.result === 'string' ? JSON.parse(row.result) : row.result) as { tier: number; bandIndex: number; card: PrizeCard; fair: RevealFair };
       const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
       return {
         duplicate: true,
-        playId: '',
+        playId: row.id,
         tier: res.tier,
         bandIndex: res.bandIndex,
         card: res.card,
+        fair: res.fair,
         balanceE6: (await getBalance(q, coll)).toString(),
         serverSeedHash: row.server_seed_hash,
         clientSeed: row.client_seed,
@@ -213,7 +249,7 @@ export async function openPack(
     const seed = await ensureSeedForUpdate(q, userId);
     await q.query(`UPDATE game_seeds SET nonce = nonce + 1 WHERE user_id = $1`, [userId]);
 
-    const { card, bandIndex } = revealCard(seed, tier.bands, pool);
+    const { card, bandIndex, fair } = revealCard(seed, tier.bands, pool);
     const prizeId = randomUUID();
     await q.query(
       `INSERT INTO game_prizes(id, play_id, user_id, market_id, value_e6) VALUES($1, $2, $3, $4, $5)`,
@@ -230,7 +266,7 @@ export async function openPack(
     };
     await q.query(
       `UPDATE game_plays SET result = $1, server_seed_hash = $2, client_seed = $3, nonce = $4, txn_id = $5 WHERE id = $6`,
-      [JSON.stringify({ tier: tier.price, bandIndex, card: prizeCard }), seed.server_seed_hash, seed.client_seed, seed.nonce, txnId, playId],
+      [JSON.stringify({ tier: tier.price, bandIndex, card: prizeCard, fair }), seed.server_seed_hash, seed.client_seed, seed.nonce, txnId, playId],
     );
 
     return {
@@ -239,6 +275,7 @@ export async function openPack(
       tier: tier.price,
       bandIndex,
       card: prizeCard,
+      fair,
       balanceE6: (available - price).toString(),
       serverSeedHash: seed.server_seed_hash,
       clientSeed: seed.client_seed,
@@ -336,18 +373,23 @@ export async function sellBackPrize(db: Db, userId: string, prizeId: string): Pr
     let payout = (mark * BigInt(10_000 - cfg.buybackSpreadBps)) / 10_000n;
     if (payout > cap) payout = cap;
 
+    // Lock collateral THEN the pool (the same order openPack acquires them, and the order postTxn's
+    // entries lock below) so a concurrent open + sell-back can't deadlock. Locking the pool row makes the
+    // solvency check atomic: racing sell-backs can't both pass it and drive GAME_POOL negative past its float.
+    const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
+    await q.query(`SELECT 1 FROM balances WHERE account_id = $1 FOR UPDATE`, [coll]);
     const poolAcct = await getOrCreateSystemAccount(q, 'GAME_POOL');
-    const poolBal = await getBalance(q, poolAcct);
+    const poolLock = await q.query<{ amount_uusdc: string }>(`SELECT amount_uusdc FROM balances WHERE account_id = $1 FOR UPDATE`, [poolAcct]);
+    const poolBal = poolLock.rows[0] ? BigInt(poolLock.rows[0].amount_uusdc) : 0n;
     if (poolBal < payout) throw new HttpError(503, 'prize pool is being topped up — try again shortly');
 
-    const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
     const txnId = await postTxn(q, {
       reason: 'GAME_PRIZE',
       refType: 'game_prize',
       refId: prizeId,
       entries: [
-        { accountId: poolAcct, amount: -payout },
         { accountId: coll, amount: payout },
+        { accountId: poolAcct, amount: -payout },
       ],
     });
     await q.query(`UPDATE game_prizes SET status = 'sold', sell_value_e6 = $2, txn_id = $3, settled_at = now() WHERE id = $1`, [prizeId, payout.toString(), txnId]);
@@ -385,6 +427,49 @@ export async function seedGamePool(db: Db, amountUsd: number): Promise<{ poolE6:
     return getBalance(q, pool);
   });
   return { poolE6: poolE6.toString() };
+}
+
+export interface TierEv {
+  tier: number;
+  expectedPayoutE6: string; // expected USDC paid on sell-back (E[card value]·(1 − spread)) vs the live pool
+  houseEdgeBps: number; // (price − expectedPayout) / price; NEGATIVE means the house loses on this tier
+  eligibleBands: number; // bands that actually contain a card right now (0 ⇒ cheapest-card fallback)
+  poolSize: number;
+}
+
+/**
+ * Expected payout + implied house edge per tier against the CURRENT featured pool. The house edge is NOT
+ * simply the buyback spread — it is `price − E[card value]·(1 − spread)`, which depends on how the live
+ * pool falls into each band. The operator reads this in the admin Games view to confirm a tier is
+ * house-positive (and that its bands aren't empty) BEFORE enabling it.
+ */
+export async function packRipEv(db: Db): Promise<TierEv[]> {
+  const cfg = packRipConfig();
+  const pool = await featuredCards(db);
+  const spreadKeep = BigInt(10_000 - cfg.buybackSpreadBps);
+  const cap = usdc(cfg.maxPrizeUsd);
+  return cfg.tiers.map((t) => {
+    const { perBand, effWeights } = bandEligibility(t.bands, pool);
+    const total = effWeights.reduce((a, w) => a + w, 0);
+    let expCardE6 = 0n;
+    let eligibleBands = 0;
+    if (total > 0) {
+      t.bands.forEach((_b, i) => {
+        if (effWeights[i] <= 0) return;
+        eligibleBands++;
+        const cards = perBand[i];
+        const avg = cards.reduce((a, c) => a + c.markE6, 0n) / BigInt(cards.length);
+        expCardE6 += (avg * BigInt(effWeights[i])) / BigInt(total);
+      });
+    } else if (pool.length > 0) {
+      expCardE6 = pool.reduce((m, c) => (c.markE6 < m ? c.markE6 : m), pool[0].markE6);
+    }
+    let expPayout = (expCardE6 * spreadKeep) / 10_000n;
+    if (expPayout > cap) expPayout = cap; // the sell-back cap also caps the house's expected outflow
+    const priceE6 = usdc(t.price);
+    const houseEdgeBps = priceE6 > 0n ? Number(((priceE6 - expPayout) * 10_000n) / priceE6) : 0;
+    return { tier: t.price, expectedPayoutE6: expPayout.toString(), houseEdgeBps, eligibleBands, poolSize: pool.length };
+  });
 }
 
 /** Public games list + per-game config (drives the lobby). */

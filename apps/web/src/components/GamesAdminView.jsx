@@ -92,6 +92,25 @@ export function GamesAdminView({ adminKey }) {
       </div>
 
       <h3 style={{ marginTop: '1.5rem' }}>Pack Rip</h3>
+      {Array.isArray(view.packRipEv) && view.packRipEv.length > 0 && (
+        <div className="games-admin-ev">
+          <span className="sc-label">House edge vs the live pool (check before enabling)</span>
+          <table className="games-ev-table">
+            <thead><tr><th>Tier</th><th>Exp. payout</th><th>House edge</th><th>Bands</th></tr></thead>
+            <tbody>
+              {view.packRipEv.map((e) => (
+                <tr key={e.tier} className={e.houseEdgeBps < 0 ? 'ev-negative' : ''}>
+                  <td>${e.tier}</td>
+                  <td>{formatUsd(BigInt(e.expectedPayoutE6))}</td>
+                  <td>{(e.houseEdgeBps / 100).toFixed(1)}%</td>
+                  <td>{e.eligibleBands === 0 ? '⚠ none in pool' : e.eligibleBands}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="muted">Negative edge (red) or “none in pool” means the tier would lose money against the {view.packRipEv[0]?.poolSize ?? 0} featured cards — retune the bands or pause the tier.</p>
+        </div>
+      )}
       <label className="games-admin-row">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled
       </label>

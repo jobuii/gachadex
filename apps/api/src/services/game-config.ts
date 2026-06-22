@@ -7,9 +7,12 @@ import type { Db } from '../db/client.ts';
  * as the fee + DROP knobs (live-knob.ts). Surfaced + edited in the admin Games view. Phase 1 ships
  * Pack Rip; later games add their own block here.
  *
- * House edge is the BUYBACK SPREAD (a won card sells back at mark·(1 − spread)), matching the
- * Collector Crypt model in docs/games-spec.md — the band weights are tuned for feel, NOT to encode the
- * edge. The Pack Rip config is stored as ONE JSON settings row (it nests a per-tier band table), so the
+ * House edge is `price − E[card value]·(1 − buybackSpread)` — it depends on BOTH the buyback spread AND
+ * how the live featured pool falls into each tier's value bands, so the bands DO encode the edge (a tier
+ * whose common bands are empty against the live pool can be house-NEGATIVE). The buyback spread is one
+ * lever (the Collector Crypt model, docs/games-spec.md); the bands are the other. `packRipEv` (games.ts)
+ * computes the realised per-tier edge against the current pool — check it in the admin Games view before
+ * enabling a tier. The config is stored as ONE JSON settings row (it nests a per-tier band table), so the
  * knob serializes with JSON.stringify and the validator JSON.parses + normalizes on load.
  */
 
@@ -27,7 +30,7 @@ export interface PackTier {
 }
 export interface PackRipConfig {
   enabled: boolean;
-  buybackSpreadBps: number; // sell-back pays mark·(1 − bps/10000); the house edge
+  buybackSpreadBps: number; // sell-back pays mark·(1 − bps/10000); one house-edge lever (see packRipEv)
   maxPrizeUsd: number; // per-prize sell-back cap (tail-risk bound, like an OI cap)
   bigWinUsd: number; // a pull worth >= this fires a chat BIG WIN + headlines the live feed
   tiers: PackTier[];

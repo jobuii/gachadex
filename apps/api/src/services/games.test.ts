@@ -12,9 +12,9 @@ const { migrate } = await import('../db/migrate.ts');
 const { creditFaucet, getUserBalances } = await import('./faucet.ts');
 const { reconcile } = await import('./reconcile.ts');
 const { usdc } = await import('../money.ts');
-const { openPack, sellBackPrize, seedGamePool, getFairness, rotateClientSeed } = await import('./games.ts');
+const { openPack, sellBackPrize, seedGamePool, getFairness, rotateClientSeed, packRipEv } = await import('./games.ts');
 const { setPackRipConfig } = await import('./game-config.ts');
-const { roll, verify, sha256, commitServerSeed } = await import('./game-fairness.ts');
+const { roll, verify, sha256, commitServerSeed, weightedPick, rollInt } = await import('./game-fairness.ts');
 
 const db = await getDb();
 await migrate();
@@ -105,4 +105,73 @@ test('rotating the client seed reveals the prior server seed and commits a new o
   assert.equal(rot.clientSeed, 'my-lucky-seed');
   assert.equal(rot.nonce, 0, 'nonce resets on rotation');
   assert.notEqual(rot.serverSeedHash, before.serverSeedHash, 'a fresh server seed is committed');
+});
+
+test('a cheap tier never escalates above its richest band ceiling (empty bands are zeroed, not full-pool)', async () => {
+  // The $0–5 band is empty vs the pool (cheapest card is $10) and carries 70% weight; the OLD code fell
+  // back to the WHOLE pool there and could award the $400 card for a $5 pack. It must now never exceed $60.
+  await setPackRipConfig(db, {
+    enabled: true, buybackSpreadBps: SPREAD_BPS, maxPrizeUsd: 5000, bigWinUsd: 1_000_000,
+    tiers: [{ price: 5, bands: [
+      { minUsd: 0, maxUsd: 5, weight: 70 },
+      { minUsd: 5, maxUsd: 60, weight: 30 },
+    ] }],
+  });
+  const user = await newUser();
+  for (let i = 0; i < 40; i++) {
+    const r = await openPack(db, user, { tier: 5, idempotencyKey: randomUUID() });
+    assert.ok(BigInt(r.card.valueE6) <= usdc(60), `awarded ${r.card.valueE6} exceeds the $60 ceiling`);
+    assert.notEqual(r.card.symbol, 'CARD-C', 'the $400 card is out of range and never awarded');
+  }
+});
+
+test('packRipEv reports per-tier house edge and flags an underpriced tier', async () => {
+  // Pool cards in [0,60] are $10 + $50 → avg $30; with a 12% spread the expected payout is $26.40.
+  await setPackRipConfig(db, {
+    enabled: true, buybackSpreadBps: 1200, maxPrizeUsd: 5000, bigWinUsd: 1_000_000,
+    tiers: [
+      { price: 100, bands: [{ minUsd: 0, maxUsd: 60, weight: 1 }] }, // $100 in, ~$26.40 out → house-positive
+      { price: 5, bands: [{ minUsd: 0, maxUsd: 60, weight: 1 }] },   // $5 in, ~$26.40 out → house-NEGATIVE
+    ],
+  });
+  const ev = await packRipEv(db);
+  const t100 = ev.find((e) => e.tier === 100)!;
+  const t5 = ev.find((e) => e.tier === 5)!;
+  assert.equal(t100.expectedPayoutE6, usdc(26.4).toString(), 'expected payout = avg·(1 − spread)');
+  assert.ok(t100.houseEdgeBps > 0 && t100.eligibleBands === 1, 'a well-priced tier is house-positive');
+  assert.ok(t5.houseEdgeBps < 0, 'an underpriced tier is flagged house-negative');
+});
+
+test('a rip is independently verifiable from the recorded fair trail', async () => {
+  await setPackRipConfig(db, {
+    enabled: true, buybackSpreadBps: SPREAD_BPS, maxPrizeUsd: 5000, bigWinUsd: 1_000_000,
+    tiers: [{ price: 25, bands: [
+      { minUsd: 0, maxUsd: 30, weight: 3 },
+      { minUsd: 30, maxUsd: 1000, weight: 1 },
+    ] }],
+  });
+  const user = await newUser();
+  const r = await openPack(db, user, { tier: 25, idempotencyKey: randomUUID() });
+  const rot = await rotateClientSeed(db, user, 'verify-seed'); // reveals the server seed the play used
+  assert.ok(verify(rot.revealedServerSeed, r.serverSeedHash), 'revealed seed matches the play commitment');
+  const band = weightedPick(rot.revealedServerSeed, r.clientSeed, r.nonce, 0, r.fair.bandWeights);
+  assert.equal(band, r.fair.bandIndex, 'band index recomputes from the public trail');
+  const cardIdx = rollInt(rot.revealedServerSeed, r.clientSeed, r.nonce, 1, r.fair.candidateCount);
+  assert.equal(cardIdx, r.fair.cardIndex, 'card index recomputes from the public trail');
+});
+
+test('an all-empty tier falls back to the deterministic cheapest card with a self-consistent trail', async () => {
+  // No featured card is <= $1, so every band is empty → the bounded cheapest-card fallback ($10 CARD-A).
+  await setPackRipConfig(db, {
+    enabled: true, buybackSpreadBps: SPREAD_BPS, maxPrizeUsd: 5000, bigWinUsd: 1_000_000,
+    tiers: [{ price: 25, bands: [{ minUsd: 0, maxUsd: 1, weight: 1 }] }],
+  });
+  const user = await newUser();
+  const r = await openPack(db, user, { tier: 25, idempotencyKey: randomUUID() });
+  assert.equal(r.bandIndex, -1, 'fallback path taken');
+  assert.equal(r.card.symbol, 'CARD-A', 'the cheapest card ($10) is awarded — never an expensive one');
+  assert.equal(r.fair.candidateCount, 1);
+  assert.equal(r.fair.cardIndex, 0);
+  const rot = await rotateClientSeed(db, user, 'fallback-seed');
+  assert.equal(rollInt(rot.revealedServerSeed, r.clientSeed, r.nonce, 1, r.fair.candidateCount), r.fair.cardIndex, 'fallback trail recomputes');
 });

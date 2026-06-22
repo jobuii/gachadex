@@ -19,7 +19,7 @@ import { chatConfigView, setChatThresholds } from '../services/chat-config.ts';
 import { dropConfigView, setDropConfig, getDropView } from '../services/drop-config.ts';
 import { totalTippedE6, recentTips } from '../services/drop.ts';
 import { gamesAdminView, setPackRipConfig } from '../services/game-config.ts';
-import { seedGamePool } from '../services/games.ts';
+import { seedGamePool, packRipEv } from '../services/games.ts';
 import { getUserPositions, liquidateAllEligible } from '../services/engine.ts';
 import { withdrawalAutoProcessView, setWithdrawalAutoProcess } from '../services/withdrawal-config.ts';
 import { getCustomerHistory } from '../services/history.ts';
@@ -226,14 +226,17 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   // --- GAMES admin view (docs/games-spec.md). Per-game config (live knobs) + the GAME_POOL bankroll.
   // Registers in both fund modes (no real funds move); seeding the pool is play-money only.
 
-  // Current games config + defaults + the GAME_POOL balance.
-  app.get('/admin/games/config', rl(config.routeRateLimits.admin), async () => gamesAdminView(await getDb()));
+  // Current games config + defaults + the GAME_POOL balance + per-tier EV/house-edge vs the live pool.
+  app.get('/admin/games/config', rl(config.routeRateLimits.admin), async () => {
+    const db = await getDb();
+    return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db) };
+  });
   // Apply a partial Pack Rip config patch (enabled/spread/max-prize/big-win/tiers).
   app.post('/admin/games/config', rl(config.routeRateLimits.admin), async (req) => {
     const b = GameConfigRequest.parse(req.body);
     const db = await getDb();
     if (b.packRip) await setPackRipConfig(db, b.packRip);
-    return gamesAdminView(db);
+    return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db) };
   });
   // Seed the GAME_POOL bankroll (play-money: from FAUCET_SOURCE) so prizes can be paid out.
   app.post('/admin/games/seed-pool', rl(config.routeRateLimits.admin), async (req) => {
