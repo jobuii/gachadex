@@ -183,13 +183,12 @@ function drawCard(canvas, d, bgImg) {
   }
 }
 
-// Share-card trigger icon (upload glyph) — shared by the open-positions + history PnL cells.
+// Share-card trigger icon (curved "share/export" arrow) — shared by the open-positions + history PnL cells.
 export function ShareIcon() {
   return (
     <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7" />
-      <path d="M12 16V3" />
-      <path d="M8 7l4-4 4 4" />
+      <path d="M4 20c0-6.6 5.4-12 12-12" />
+      <path d="M11 13l5-5-5-5" />
     </svg>
   );
 }
@@ -275,7 +274,7 @@ export function PnlShareModal({ position, onClose }) {
           <button className="btn-secondary sm" disabled={!ready} onClick={onCopy}>
             {status === 'copied' ? 'Copied!' : status === 'copyfail' ? 'Copy failed — Download' : 'Copy image'}
           </button>
-          <button className="btn-primary sm" disabled={!ready} onClick={onDownload}>Download PNG</button>
+          <button className="btn-primary sm" disabled={!ready} onClick={onDownload}>Download</button>
           <button className="btn-ghost sm" onClick={onClose}>Close</button>
         </div>
       </div>

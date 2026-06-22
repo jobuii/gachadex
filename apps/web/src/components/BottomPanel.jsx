@@ -178,12 +178,12 @@ export function BottomPanel({ market, height, onGoToMarket }) {
                     <td>{usd(p.entryE6)}</td>
                     <td>{p.avgCloseE6 ? usd(p.avgCloseE6) : '—'}</td>
                     <td>
-                      <div className="pnl-cell">
+                      <span className="pnl-cell-line">
                         <Signed e6={p.realizedPnlUusdc} />
                         <button className="pnl-share-btn" title="Share PnL card" onClick={() => setShareP(closedShare(p))}>
                           <ShareIcon />
                         </button>
-                      </div>
+                      </span>
                     </td>
                     <td>{qty(p.closedQtyE6)}</td>
                     <td>{fmtTime(p.openedAt)}</td>

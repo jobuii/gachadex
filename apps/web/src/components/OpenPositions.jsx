@@ -58,13 +58,13 @@ export function OpenPositions({ positions, onChanged, onSelect, emptyLabel = 'No
               )}
               <td className={up ? 'up' : 'down'}>
                 <div className="pnl-cell">
-                  <span className="pnl-cell-vals">
+                  <span className="pnl-cell-line">
                     <span>{formatSignedUsd(p.unrealizedPnlUusdc ?? '0')}</span>
-                    <span className="pnl-cell-roe">{formatPct(roePct)}</span>
+                    <button className="pnl-share-btn" title="Share PnL card" onClick={() => setShareP(p)}>
+                      <ShareIcon />
+                    </button>
                   </span>
-                  <button className="pnl-share-btn" title="Share PnL card" onClick={() => setShareP(p)}>
-                    <ShareIcon />
-                  </button>
+                  <span className="pnl-cell-roe">{formatPct(roePct)}</span>
                 </div>
               </td>
               <td>
