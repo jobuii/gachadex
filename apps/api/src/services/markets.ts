@@ -164,6 +164,7 @@ export interface MarketView {
 
 /** Per-market details (card metadata + graded prices) for the detail panel. */
 export interface MarketDetails {
+  displayName: string; // the card's display name (e.g. "Charizard δ (Dragon Frontiers) #100")
   imageLarge: string | null;
   setLogo: string | null;
   variant: string | null; // printing ('Standard', 'Holofoil', …) — the market row's own column
@@ -179,8 +180,8 @@ export async function getMarketDetails(db: Db, id: string): Promise<MarketDetail
   // graded subtree — the full payload is the entire provider print. release_year joins the cached set
   // metadata by slug first (precise), falling back to game+name so already-listed markets resolve too.
   const [r, p] = await Promise.all([
-    db.query<{ image_large: string | null; set_logo: string | null; variant: string | null; metadata: unknown; graded: string | null; release_year: number | null }>(
-      `SELECT m.image_large, m.set_logo, m.variant, m.metadata, m.graded_psa10_e6::text AS graded,
+    db.query<{ display_name: string; image_large: string | null; set_logo: string | null; variant: string | null; metadata: unknown; graded: string | null; release_year: number | null }>(
+      `SELECT m.display_name, m.image_large, m.set_logo, m.variant, m.metadata, m.graded_psa10_e6::text AS graded,
               COALESCE(
                 (SELECT release_year FROM tcg_sets WHERE game = m.game AND slug = m.metadata->>'setSlug'),
                 (SELECT release_year FROM tcg_sets WHERE game = m.game AND name = m.metadata->>'setName' ORDER BY slug LIMIT 1)
@@ -207,6 +208,7 @@ export async function getMarketDetails(db: Db, id: string): Promise<MarketDetail
   const tplGraded = typeof p.rows[0]?.tpl === 'string' ? JSON.parse(p.rows[0].tpl as string) : p.rows[0]?.tpl;
   const grades = Array.isArray(sxGraded) && sxGraded.length ? sortGradeRows(sxGraded as GradeRow[]) : gradeLadder(tplGraded);
   return {
+    displayName: row.display_name,
     imageLarge: row.image_large, setLogo: row.set_logo, variant: row.variant, metadata,
     gradedPsa10E6: row.graded, grades, releaseYear: row.release_year ?? null,
   };

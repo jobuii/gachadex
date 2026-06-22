@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext';
 import { FaucetButton } from './FaucetButton';
 import { WalletPanel } from './WalletPanel';
 import { OpenPositions } from './OpenPositions';
+import { PositionHistory } from './PositionHistory';
 import { ReferralPanel } from './ReferralPanel';
 import * as api from '../lib/api.js';
 
@@ -13,10 +14,21 @@ export function Portfolio({ markets, onSelect }) {
   const [positions, setPositions] = useState([]);
   const [lp, setLp] = useState(null);
   const [realFunds, setRealFunds] = useState(false);
+  const [posTab, setPosTab] = useState('open'); // 'open' | 'history'
+  const [history, setHistory] = useState(null);
 
   useEffect(() => {
     api.getHealth().then((h) => setRealFunds(Boolean(h.realFunds))).catch(() => {});
   }, []);
+
+  // load closed-position history on demand (when the History tab is opened)
+  useEffect(() => {
+    if (!user || posTab !== 'history') return;
+    let alive = true;
+    setHistory(null); // show "Loading…" instead of stale rows while (re)fetching
+    api.getPositionHistory().then((r) => alive && setHistory(r.positions)).catch(() => {});
+    return () => { alive = false; };
+  }, [user, posTab]);
 
   const refresh = useCallback(() => {
     if (!user) return;
@@ -58,15 +70,31 @@ export function Portfolio({ markets, onSelect }) {
         <FaucetButton onFunded={refresh} className="btn-primary" />
       </div>
       {realFunds && <WalletPanel onChanged={refresh} />}
-      <h3>Open Positions</h3>
-      <OpenPositions
-        positions={positions}
-        onChanged={refresh}
-        onSelect={(mid) => {
-          const m = markets.find((x) => x.id === mid);
-          if (m) onSelect(m);
-        }}
-      />
+      <div className="pf-pos-head">
+        <h3>Positions</h3>
+        <div className="sub-tabs">
+          <button className={`sub-tab-btn ${posTab === 'open' ? 'active' : ''}`} onClick={() => setPosTab('open')}>Open</button>
+          <button className={`sub-tab-btn ${posTab === 'history' ? 'active' : ''}`} onClick={() => setPosTab('history')}>History</button>
+        </div>
+      </div>
+      {posTab === 'open' ? (
+        <OpenPositions
+          positions={positions}
+          onChanged={refresh}
+          onSelect={(mid) => {
+            const m = markets.find((x) => x.id === mid);
+            if (m) onSelect(m);
+          }}
+        />
+      ) : (
+        <PositionHistory
+          positions={history}
+          onSelect={(mid) => {
+            const m = markets.find((x) => x.id === mid);
+            if (m) onSelect(m);
+          }}
+        />
+      )}
 
       <ReferralPanel onRedeemed={refresh} />
     </div>

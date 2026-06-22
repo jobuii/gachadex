@@ -10,13 +10,28 @@
  * swirl / mandala), never official artwork.
  * ======================================================================== */
 /* only weights the app actually renders: 400 (body) + 600/700 (headings/brand). */
-@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Bebas+Neue&family=Barlow:wght@400;600;700&family=Cinzel:wght@600;700&family=EB+Garamond:wght@400;600&family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;500&family=JetBrains+Mono:wght@400;500&family=Pixelify+Sans:wght@400;500;700&family=Spectral:wght@400;600&family=VT323&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Bebas+Neue&family=Barlow:wght@400;600;700&family=Cinzel:wght@600;700&family=EB+Garamond:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=JetBrains+Mono:wght@400;500;600;700&family=Pixelify+Sans:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&family=Spectral:wght@400;600&family=VT323&display=swap');
 
 /* Chat reads in a legible font: non-arcade skins reuse their body font; the arcade/pixel skin gets a
    readable PIXEL companion (Pixelify Sans — 8-bit character but built for text). Press Start 2P stays
    for the brand/headers only (unreadable at chat density). */
 :root { --font-chat: var(--font-base); }
 [data-theme="arcade"] { --font-chat: 'Pixelify Sans', 'VT323', monospace; }
+
+/* ---- GachaDex (DEFAULT) · near-black + cyan/violet/pink memecoin brand.
+   Space Grotesk display · IBM Plex Sans body (distinctive, not Inter) · JetBrains Mono numerals.
+   The cyan→violet→pink gradient (--grad) is a SPARING signature accent (wordmark / primary CTA / key
+   highlights), never on every surface — that restraint is what keeps it off the generic-template look. */
+[data-theme="gachadex"] {
+  --bg:#06060a; --bg-2:#0d0d14; --bg-3:#15151f; --border:#22222a; --border-bright:#8B5CF6;
+  --text:#F5F5F7; --text-muted:#8B8B95;
+  --gold:#22D3EE; --accent:#8B5CF6; --accent-lit:#A78BFA; --success:#34D399; --danger:#F43F5E;
+  --violet:#8B5CF6; --cyan:#22D3EE; --pink:#F472B6;
+  --grad:linear-gradient(120deg, var(--cyan), var(--violet), var(--pink));
+  --font-base:'IBM Plex Sans',sans-serif; --font-display:'Space Grotesk',sans-serif; --font-num:'JetBrains Mono',monospace;
+  --cb-opacity:.5; --emblem-ink:var(--violet);
+  --radius:9px; --pill:7px; --border-w:1px; --weight-strong:600; --root-fs:19px;
+}
 
 /* ---- Pokémon · Indigo (navy-blue, Baloo) ---- */
 [data-theme="indigo"] {
@@ -147,35 +162,35 @@
   .navbar { padding: 0 0.85rem; }
   .nav-left { gap: 0.8rem; }
   .nav-brand { font-size: 0.95rem; letter-spacing: 1px; gap: 0.5rem; }
-  .nav-brand img { width: 26px; height: 26px; }
   .nav-links { gap: 0.2rem; }
   .nav-link { padding: 0.45rem 0.35rem; letter-spacing: 0.5px; }
   :root:not([data-theme="arcade"]) .nav-link { font-size: 0.6rem; }
   [data-theme="arcade"] .nav-link { font-size: 0.55rem; }
 }
 :root:not([data-theme="arcade"]) .market-item-name,
-:root:not([data-theme="arcade"]) .market-item-price { font-size: 0.6rem; }
+:root:not([data-theme="arcade"]) .market-item-price { font-size: 0.72rem; }
 :root:not([data-theme="arcade"]) .market-item-set,
 :root:not([data-theme="arcade"]) .market-item-change,
 :root:not([data-theme="arcade"]) .sidebar-col-headers,
 :root:not([data-theme="arcade"]) .card-header-set,
-:root:not([data-theme="arcade"]) .stat-label { font-size: 0.52rem; }
+:root:not([data-theme="arcade"]) .stat-label { font-size: 0.62rem; }
 :root:not([data-theme="arcade"]) .sidebar-tab-btn,
 :root:not([data-theme="arcade"]) .game-tab-btn,
 :root:not([data-theme="arcade"]) .bottom-tab-btn,
-:root:not([data-theme="arcade"]) .preview-label { font-size: 0.56rem; }
+:root:not([data-theme="arcade"]) .preview-label { font-size: 0.64rem; }
 /* live-chat panel is tuned for the pixel font too — floor it for modern skins (message body first) */
+:root:not([data-theme="arcade"]) .chat-toggle { font-size: 0.62rem; letter-spacing: 0.3px; }
 :root:not([data-theme="arcade"]) .chat-title,
 :root:not([data-theme="arcade"]) .chat-collapse { font-size: 0.66rem; }
 :root:not([data-theme="arcade"]) .chat-text,
 :root:not([data-theme="arcade"]) .chat-input input,
-:root:not([data-theme="arcade"]) .chat-name-row input { font-size: 0.62rem; }
-:root:not([data-theme="arcade"]) .chat-handle,
+:root:not([data-theme="arcade"]) .chat-name-row input { font-size: 0.72rem; }
+:root:not([data-theme="arcade"]) .chat-handle { font-size: 0.8rem; }
+:root:not([data-theme="arcade"]) .chat-signin { font-size: 0.78rem; font-weight: 700; }
 :root:not([data-theme="arcade"]) .chat-empty,
-:root:not([data-theme="arcade"]) .chat-signin,
 :root:not([data-theme="arcade"]) .chat-quote,
 :root:not([data-theme="arcade"]) .chat-reply-btn,
-:root:not([data-theme="arcade"]) .chat-reply-banner { font-size: 0.56rem; }
+:root:not([data-theme="arcade"]) .chat-reply-banner { font-size: 0.58rem; }
 :root:not([data-theme="arcade"]) .chat-time,
 :root:not([data-theme="arcade"]) .chat-name-label,
 :root:not([data-theme="arcade"]) .chat-badge { font-size: 0.5rem; }
@@ -264,6 +279,14 @@
 [data-theme="antiquity"] .skin-emblem::after { inset:70px; border-width:7px; }
 [data-theme="mythic"] .skin-emblem::after { inset:88px; border-width:2px; }
 [data-theme="mythic"] .skin-cardback { background:radial-gradient(circle at 78% 22%, rgba(122,79,181,.10), transparent 60%); }
+/* GachaDex: faint violet + cyan ambient glow (no emblem) + a whisper of the gradient grid */
+[data-theme="gachadex"] .skin-cardback {
+  background:
+    radial-gradient(circle at 82% 10%, rgba(139,92,246,.16), transparent 52%),
+    radial-gradient(circle at 12% 92%, rgba(34,211,238,.12), transparent 52%),
+    linear-gradient(rgba(139,92,246,.05) 1px, transparent 1px) 0 0/26px 26px,
+    linear-gradient(90deg, rgba(139,92,246,.05) 1px, transparent 1px) 0 0/26px 26px;
+}
 
 /* Keep navbar controls on one line (the larger non-retro font otherwise wraps + overflows 64px). */
 .wallet-adapter-button { white-space: nowrap !important; }

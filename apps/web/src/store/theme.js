@@ -3,9 +3,11 @@ import { create } from 'zustand';
 /**
  * Selectable skins. `id` is the value written to <html data-theme>; themes.css holds
  * the token overrides. `label` is shown grouped (Family - Name); `sw` is the picker swatch.
- * Default = 'arcade' (the original Retro pixel look, defined in index.css :root).
+ * Default = 'gachadex' (the house brand — near-black + cyan/violet/pink, defined in themes.css).
+ * 'arcade' (the original Retro pixel look) lives in index.css :root and stays selectable.
  */
 export const SKINS = [
+  { id: 'gachadex',  label: 'GachaDex',               sw: 'linear-gradient(135deg,#22D3EE,#8B5CF6,#F472B6)' },
   { id: 'arcade',    label: 'Retro - Arcade',         sw: 'linear-gradient(135deg,#111418,#f0c040)' },
   { id: 'indigo',    label: 'Pokémon - Indigo',       sw: 'linear-gradient(135deg,#0a1430,#ffcb05)' },
   { id: 'voltage',   label: 'Pokémon - Voltage',      sw: 'linear-gradient(135deg,#FFCB05,#3D7DCA)' },
@@ -15,11 +17,14 @@ export const SKINS = [
   { id: 'mythic',    label: 'Magic - Mythic',         sw: 'linear-gradient(135deg,#C9A227,#7A4FB5)' },
 ];
 
-const KEY = 'pokeX_skin';
+// Bumped for the GachaDex rebrand: existing users had the old skin saved under 'pokeX_skin',
+// which would pin them to (e.g.) arcade. The new key ignores those, so everyone resets to the
+// new 'gachadex' default once on go-live; they can re-pick a skin afterward.
+const KEY = 'gachadex_skin';
 const isValid = (id) => SKINS.some((s) => s.id === id);
 export const initialSkin = () => {
   const s = typeof localStorage !== 'undefined' ? localStorage.getItem(KEY) : null;
-  return isValid(s) ? s : 'arcade';
+  return isValid(s) ? s : 'gachadex';
 };
 
 export const useTheme = create((set) => ({
