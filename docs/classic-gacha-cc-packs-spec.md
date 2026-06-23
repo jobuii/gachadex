@@ -21,8 +21,9 @@ Three independent reviews grounded against the real rare.win + GDEX code. Surviv
 - **Turbo bugs:** §9 said the turbo cut was 5% (everywhere else 10%); turbo only auto-sells **Common** wins
   (a turbo Rare/Epic is *kept*). → fixed to branch on the buyback signal at 10% (§9).
 - **Token math/accounting:** fractional Tokens (a $25 open earned 62.5) and an unpostable lone-leg token-pack
-  entry that also corrupted `FEE_REVENUE`. → unit is now **1 Token = $0.001** (integer earns), a dedicated
-  `GACHA_REWARDS_BUDGET` account, and the markup is **mandatory when Tokens are on** (§6b).
+  entry that also corrupted `FEE_REVENUE`. → unit is now **1 Token = $0.001** (integer earns) + a dedicated
+  `GACHA_REWARDS_BUDGET` account. **No markup required** at the operator's expected ~90% sell-back rate (revised
+  §6 with the operator's CC-data model); the **free-pack threshold is an admin liveKnob** (default $1000, §6b).
 - **Smaller:** `payWith` missing from §9's open body; inventory INSERT not idempotent; "saved withdraw address"
   doesn't exist in GDEX (it's per-request + step-up); the signer must be a port of rare.win's `signBase64Tx`;
   machine-price drift; buyback-unavailable path; held-forever custody. All fixed below.
@@ -153,11 +154,14 @@ user-supplied external dest; `status=withdrawn`.
 when one exists — earns the cut + perp fees + funding; see §9, and the honest reach caveat §15); **(E)** Tokens
 loyalty (§6b — a cost, not margin); **(held)** NFT-withdraw fee.
 
-**Funding flag (be honest, confirmed by the QA model):** with no markup, the only pack margin is the sell-back
-cut, *and only on packs that are sold back*. Modeled net revenue per pack is **negative** at realistic sell-back
-rates (e.g. ~−$0.13 on a $25 pack at a 50% sell-back rate, CC buyback 0.8) once the ≈2.5% Token rebate is paid on
-*every* open. **So the markup is mandatory whenever Tokens are on** (§6b) — model the sell-back fraction `f` and CC
-buyback ratio `r` from the live machine EVs before launch.
+**Economics (operator model — no markup for now):** the sell-back cut funds the Token rebate with margin at the
+expected sell-back rate. Worked from CC data: a $25 pack's EV ≈ $26, CC buyback ≈ $22.1, GDEX's **5% cut ≈ $1.10
+per sold-back pack** (10% on turbo). CC data shows **~90% of players sell back** (don't keep). Per **$1,000 of
+pulls** (~40 packs): ~36 sell-backs × $1.10 ≈ **$40 cut** vs the **$25** free pack given away → **≈ +$15 net per
+$1,000** (≈ +$19 at the ~100% sell-back the operator quoted). **Break-even ≈ 57% sell-back** at these params, so
+~90% is comfortably profitable — **no purchase markup is charged.** `gacha_markup_bps` stays an *optional* lever,
+and the live net is **monitored** (admin readout: cut revenue vs rebate cost + the actual sell-back rate); if
+sell-back drifts toward ~57%, turn the markup on.
 
 ## 6b. Tokens — loyalty & rewards (lever E)
 
@@ -165,11 +169,12 @@ A per-player **loyalty points currency** ("Tokens" — working name; a coin with
 the on-chain `$GDEX` token** (you *earn* Tokens partly by holding `$GDEX`; Tokens are internal, **non-transferable,
 non-withdrawable** points). Packs are bought with **USDC or Tokens**.
 
-**Unit + calibration** (anchor: *"$1000 of pack spend → one free $25 pack"*). **1 Token = $0.001** (×1000 — chosen
-so per-open earns are integers, fixing the v1 fractional bug):
-- Pack **Token price** = USD price × 1000 → a $25 pack = **25,000 Tokens** ($50 = 50,000, $100 = 100,000).
-- **Earn on PAID opens: 25 Tokens per $1** (`token_earn_per_usd`). → $1,000 spend = 25,000 Tokens = one free $25
-  pack. A $25 open earns 625, a $100 open earns 2,500 — all integers. ≈**2.5% rebate**.
+**Unit + calibration (admin-adjustable threshold).** **1 Token = $0.001**; a pack's Token price = USD price × 1000
+(a $25 pack = **25,000 Tokens**, $50 = 50,000, $100 = 100,000). The pack-open earn rate is **derived from an admin
+liveKnob `gacha_free_pack_threshold_usd`** = the USD of pack spend that earns one free $25 pack (**default $1000**
+→ 25 Tokens/$1 → ≈**2.5% rebate**; a $25 open earns 625, a $100 open 2,500). The operator changes the threshold
+live in the admin panel ($500 = more generous, $2000 = less); the earn rate recomputes from it. Per-open earn is
+`floor`ed (fractional Tokens dropped), so the threshold is approximate to the cent — fine for a loyalty program.
 - **Other earn (each a tunable knob; all = future cost):** holding `$GDEX` (daily accrual ∝ balance — reuse the
   on-chain `$GDEX` read DROP already uses), trading (∝ **fees paid**, wash-resistant), LP contribution (∝ stake ×
   duration).
@@ -184,7 +189,8 @@ so per-open earns are integers, fixing the v1 fractional bug):
   ```
   No `USER_COLLATERAL` debit. Pre-fund/cap the budget — an unfunded budget running negative is an unbacked promise,
   not a reserved liability. Outstanding Tokens = a **deferred USDC liability**.
-- **Markup gate:** `TOKENS_ENABLED` requires `gacha_markup_bps > 0` (the rebate must be funded — see §6 flag).
+- **No markup required** at the expected sell-back rate (§6); `gacha_markup_bps` stays an optional lever, with the
+  live net monitored (admin readout of cut revenue vs rebate cost + sell-back rate).
 
 **Anti-abuse:** earn only on **paid (USDC)** opens (token opens earn nothing); per-account daily earn cap;
 trade/LP earn tied to fees paid; Tokens non-transferable.
@@ -328,6 +334,11 @@ GET  /tokens/history                  -> token_ledger rows
 - **Portfolio → Inventory:** held NFTs (image/grade/value/status) with per-row Sell back / Withdraw / Convert.
   Withdraw collects a dest + triggers the step-up signature.
 
+**Admin (Games config tab):** adjust the **free-pack threshold** (`gacha_free_pack_threshold_usd`, default $1000),
+the cut %s, the optional markup, and per-machine enable — plus a **monitoring readout**: cut revenue vs Token-rebate
+cost and the live **sell-back rate**, so the operator can watch the §6 net (break-even ≈ 57%) and turn the markup
+on if sell-back drops.
+
 Visual: GDEX retro/arcade skin + cyan/violet/pink brand; not a pixel clone of CC.
 
 ## 13. Config / env
@@ -337,9 +348,10 @@ Visual: GDEX retro/arcade skin + cyan/violet/pink brand; not a pixel clone of CC
 - **NFT custody: a dedicated, un-swept derivation path** (mandatory, §5) — `m/44'/501'/{index}'/1'` from
   `DEPOSIT_MASTER_SEED`, excluded from `scanDeposits`.
 - Knobs: `CLASSIC_GACHA_ENABLED` (off), `gacha_buyback_cut_bps`=500, `gacha_turbo_cut_bps`=1000, `gacha_markup_bps`
-  (default 0; **required > 0 when `TOKENS_ENABLED`**). **Tokens:** `TOKENS_ENABLED` (off), `token_unit_usd_thou`=1
-  (1 Token=$0.001), `token_earn_per_usd`=25, `token_earn_gdex_per_day`, `token_earn_per_fee_usd`,
-  `token_earn_lp_per_day_per_usd`, per-account daily earn cap.
+  (default 0, **optional — not required**). **Tokens:** `TOKENS_ENABLED` (off), **`gacha_free_pack_threshold_usd`=1000
+  (admin-adjustable — $ of pack spend per free $25 pack; derives the earn rate)**, `token_unit_usd_thou`=1
+  (1 Token=$0.001), `token_earn_gdex_per_day`, `token_earn_per_fee_usd`, `token_earn_lp_per_day_per_usd`,
+  per-account daily earn cap. All editable in the admin panel.
 
 ## 14. Build phasing
 
@@ -374,7 +386,9 @@ Visual: GDEX retro/arcade skin + cyan/violet/pink brand; not a pixel clone of CC
    Treasury reporting tracks NFT inventory separately from USDC PoR.
 6. **KYC / gambling / jurisdiction** — real-money gacha on real assets. Reuse GDEX geofence/restrictions; specialist
    advice (per rare.win/docs/backend-plan.md). 
-7. **Funding (§6 flag)** — markup mandatory when Tokens on; model `f`/`r` from machine EVs before launch.
+7. **Funding** — at the operator's expected ~90% sell-back (CC data) the cut funds the rebate (~+$15/$1,000);
+   **break-even ≈ 57% sell-back**, so **no markup for now**. Monitor the live net (admin readout); turn on
+   `gacha_markup_bps` only if the sell-back rate drifts toward break-even.
 8. **DECIDE before P0 — build branch:** Classic Gacha lives on the Games surface, which is on the unpushed `game`
    branch (currently behind master). Either build on `game` as a Pack Rip sibling, or merge the Games surface to
    master first. This blocks P0 start.
