@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { ClientSeedRequest, PackRipOpenRequest, PrizeSellRequest, SetPokerDealRequest, SetPokerSwapRequest, SetPokerSettleRequest, GradeOpenRequest, BreakJoinRequest, DuelJoinRequest, DuelCancelRequest } from '@pokex/shared-types';
+import { ClientSeedRequest, PackRipOpenRequest, PrizeSellRequest, SetPokerDealRequest, SetPokerSwapRequest, SetPokerSettleRequest, GradeOpenRequest, BreakJoinRequest, DuelJoinRequest, DuelCancelRequest, FantasyEnterRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { authenticate } from '../plugins/auth.ts';
@@ -9,6 +9,7 @@ import { dealHand, swapCard, settleHand, getOpenHand } from '../services/games-s
 import { gradeOpen } from '../services/games-grade.ts';
 import { currentBreak, getBreakRound, joinBreak } from '../services/games-break.ts';
 import { joinOrCreateDuel, myDuel, getDuel, cancelDuel } from '../services/games-duel.ts';
+import { currentLeague, getLeague, enterFantasy } from '../services/games-fantasy.ts';
 
 const TRADE = { preHandler: authenticate, config: { scope: 'trade' as const } };
 
@@ -89,5 +90,13 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
   app.post('/games/duel/cancel', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
     const { duelId } = DuelCancelRequest.parse(req.body);
     return cancelDuel(await getDb(), req.userId!, duelId);
+  });
+
+  // Card Fantasy — the open league (+ your roster + leaderboard), a specific league to poll, and enter.
+  app.get('/games/fantasy', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => ({ league: await currentLeague(await getDb(), req.userId!) }));
+  app.get('/games/fantasy/:leagueId', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => ({ league: await getLeague(await getDb(), req.userId!, (req.params as { leagueId: string }).leagueId) }));
+  app.post('/games/fantasy/enter', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
+    const { marketIds, idempotencyKey } = FantasyEnterRequest.parse(req.body);
+    return enterFantasy(await getDb(), req.userId!, marketIds, idempotencyKey);
   });
 }

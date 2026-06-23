@@ -49,6 +49,15 @@ export function GamesAdminView({ adminKey }) {
   const [pdWindow, setPdWindow] = useState('');
   const [pdRake, setPdRake] = useState('');
   const [pdBigWin, setPdBigWin] = useState('');
+  // Card Fantasy drafts
+  const [cfEnabled, setCfEnabled] = useState(false);
+  const [cfEntry, setCfEntry] = useState('');
+  const [cfCap, setCfCap] = useState('');
+  const [cfRoster, setCfRoster] = useState('');
+  const [cfWindow, setCfWindow] = useState('');
+  const [cfRake, setCfRake] = useState('');
+  const [cfMin, setCfMin] = useState('');
+  const [cfBigWin, setCfBigWin] = useState('');
 
   const load = useCallback(() => {
     return api.adminGetGamesConfig(adminKey).then((v) => {
@@ -89,6 +98,15 @@ export function GamesAdminView({ adminKey }) {
       setPdWindow(String(pd.windowHours));
       setPdRake((pd.rakeBps / 100).toString());
       setPdBigWin(String(pd.bigWinUsd));
+      const cf = v.cardFantasy;
+      setCfEnabled(cf.enabled);
+      setCfEntry(String(cf.entryUsd));
+      setCfCap(String(cf.capUsd));
+      setCfRoster(String(cf.rosterSize));
+      setCfWindow(String(cf.windowHours));
+      setCfRake((cf.rakeBps / 100).toString());
+      setCfMin(String(cf.minEntries));
+      setCfBigWin(String(cf.bigWinUsd));
     }).catch((e) => setErr(e.message));
   }, [adminKey]);
 
@@ -204,6 +222,20 @@ export function GamesAdminView({ adminKey }) {
       bigWinUsd: parseInt(pdBigWin, 10),
     };
     act(() => api.adminSetGamesConfig({ priceDuel: patch }, adminKey), 'Saved. (Restart the API if a value doesn’t apply within ~30s.)');
+  };
+
+  const saveCardFantasy = () => {
+    const patch = {
+      enabled: cfEnabled,
+      entryUsd: parseInt(cfEntry, 10),
+      capUsd: parseInt(cfCap, 10),
+      rosterSize: parseInt(cfRoster, 10),
+      windowHours: parseInt(cfWindow, 10),
+      rakeBps: Math.round(parseFloat(cfRake) * 100),
+      minEntries: parseInt(cfMin, 10),
+      bigWinUsd: parseInt(cfBigWin, 10),
+    };
+    act(() => api.adminSetGamesConfig({ cardFantasy: patch }, adminKey), 'Saved. (Restart the API if a value doesn’t apply within ~30s.)');
   };
 
   const seed = () => act(
@@ -384,6 +416,22 @@ export function GamesAdminView({ adminKey }) {
         <label className="field-label"><span>Big-win threshold (USD)</span><input type="number" value={pdBigWin} onChange={(e) => setPdBigWin(e.target.value)} /></label>
       </div>
       <button className="btn-primary" disabled={busy} onClick={savePriceDuel}>Save Price Duel config</button>
+
+      <h3 style={{ marginTop: '1.5rem' }}>Card Fantasy</h3>
+      <p className="muted">DFS-style skill — the house edge is the rake on the prize pool. A league below min entries refunds everyone.</p>
+      <label className="games-admin-row">
+        <input type="checkbox" checked={cfEnabled} onChange={(e) => setCfEnabled(e.target.checked)} /> Enabled
+      </label>
+      <div className="games-admin-fields">
+        <label className="field-label"><span>Entry (USD)</span><input type="number" value={cfEntry} onChange={(e) => setCfEntry(e.target.value)} /></label>
+        <label className="field-label"><span>Salary cap (USD)</span><input type="number" value={cfCap} onChange={(e) => setCfCap(e.target.value)} /></label>
+        <label className="field-label"><span>Roster size</span><input type="number" value={cfRoster} onChange={(e) => setCfRoster(e.target.value)} /></label>
+        <label className="field-label"><span>Window (hours)</span><input type="number" value={cfWindow} onChange={(e) => setCfWindow(e.target.value)} /></label>
+        <label className="field-label"><span>Rake (%) — the edge</span><input type="number" step="0.1" value={cfRake} onChange={(e) => setCfRake(e.target.value)} /></label>
+        <label className="field-label"><span>Min entries</span><input type="number" value={cfMin} onChange={(e) => setCfMin(e.target.value)} /></label>
+        <label className="field-label"><span>Big-win threshold (USD)</span><input type="number" value={cfBigWin} onChange={(e) => setCfBigWin(e.target.value)} /></label>
+      </div>
+      <button className="btn-primary" disabled={busy} onClick={saveCardFantasy}>Save Card Fantasy config</button>
 
       {msg && <div className="ref-msg up">{msg}</div>}
       {err && <div className="order-error">{err}</div>}

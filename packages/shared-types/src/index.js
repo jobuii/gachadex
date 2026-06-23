@@ -356,6 +356,12 @@ export const DuelCancelRequest = z.object({
   duelId: z.string().min(1).max(128),
 });
 
+// Card Fantasy: enter the open league with a roster of distinct card market ids.
+export const FantasyEnterRequest = z.object({
+  marketIds: z.array(z.string().min(1).max(128)).min(2).max(15),
+  idempotencyKey: z.string().min(8).max(128),
+});
+
 // Live-tunable games config (admin Games view). Partial — only provided keys change. Bounds mirror
 // game-config.ts; `tiers` nests a per-tier weighted value-band table the rip draws from.
 const PackBandReq = z.object({
@@ -425,6 +431,19 @@ export const GameConfigRequest = z
         anteUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
         windowHours: z.coerce.number().int().min(1).max(720).optional(),
         rakeBps: z.coerce.number().int().min(0).max(5000).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+      })
+      .strict()
+      .optional(),
+    cardFantasy: z
+      .object({
+        enabled: z.boolean().optional(),
+        entryUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        capUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        rosterSize: z.coerce.number().int().min(2).max(15).optional(),
+        windowHours: z.coerce.number().int().min(1).max(720).optional(),
+        rakeBps: z.coerce.number().int().min(0).max(5000).optional(),
+        minEntries: z.coerce.number().int().min(2).max(1000).optional(),
         bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
       })
       .strict()

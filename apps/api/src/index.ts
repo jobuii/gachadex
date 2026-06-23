@@ -13,6 +13,7 @@ import { loadChatConfig } from './services/chat-config.ts';
 import { loadDropConfig } from './services/drop-config.ts';
 import { loadGameConfig } from './services/game-config.ts';
 import { settleExpiredDuels } from './services/games-duel.ts';
+import { settleExpiredLeagues } from './services/games-fantasy.ts';
 import { loadWithdrawalAutoProcess, getWithdrawalAutoProcess } from './services/withdrawal-config.ts';
 import { tryAcquireLease, releaseLease } from './services/lease.ts';
 import { getDefaultClient } from './services/providers/tcgpricelookup.ts';
@@ -111,19 +112,20 @@ function startFundingLoop(db: Db, log: FastifyBaseLogger) {
   setInterval(() => void run(), config.fundingIntervalMs);
 }
 
-/** Price Duel settlement sweep: settle every matched duel whose window has closed. Fast local-DB work,
- *  lease-guarded so only one instance pays out. settle-on-read covers the instant case when a player
- *  returns; this backstops duels neither party reopens. Runs even when the game is disabled, so escrow
- *  from an enabled→disabled transition still releases. */
-function startDuelLoop(db: Db, log: FastifyBaseLogger) {
+/** Time-based games settlement sweep (Price Duel + Card Fantasy): settle every duel/league whose window
+ *  has closed. Fast local-DB work, lease-guarded so only one instance pays out; settle-on-read covers the
+ *  instant case when a participant returns, this backstops anything neither party reopens. Runs even when a
+ *  game is disabled, so escrow from an enabled→disabled transition still releases. */
+function startGamesSettleLoop(db: Db, log: FastifyBaseLogger) {
   const run = async () => {
-    if (!(await tryAcquireLease(db, 'duel-settle', INSTANCE_ID, 55_000))) return;
+    if (!(await tryAcquireLease(db, 'games-settle', INSTANCE_ID, 55_000))) return;
     try {
       await settleExpiredDuels(db);
+      await settleExpiredLeagues(db);
     } catch (e) {
-      log.error(e, 'price-duel settle pass failed');
+      log.error(e, 'games settle pass failed');
     } finally {
-      await releaseLease(db, 'duel-settle', INSTANCE_ID).catch(() => {});
+      await releaseLease(db, 'games-settle', INSTANCE_ID).catch(() => {});
     }
   };
   setInterval(() => void run(), 60_000);
@@ -234,7 +236,7 @@ async function main() {
       .catch((e) => app.log.warn(e, 'set-year seed failed (release years unavailable)'));
     startFundingLoop(db, app.log);
     startLiquidationLoop(db, app.log);
-    startDuelLoop(db, app.log);
+    startGamesSettleLoop(db, app.log);
     // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
     // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.
     const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);

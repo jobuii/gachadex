@@ -6,11 +6,12 @@ import { SetPoker } from './games/SetPoker.jsx';
 import { GradeGamble } from './games/GradeGamble.jsx';
 import { TheBreak } from './games/TheBreak.jsx';
 import { PriceDuel } from './games/PriceDuel.jsx';
+import { CardFantasy } from './games/CardFantasy.jsx';
 
 // The playable game panels, keyed by the lobby/server id.
-const PANELS = { 'pack-rip': PackRip, 'set-poker': SetPoker, 'grade-gamble': GradeGamble, 'the-break': TheBreak, 'price-duel': PriceDuel };
+const PANELS = { 'pack-rip': PackRip, 'set-poker': SetPoker, 'grade-gamble': GradeGamble, 'the-break': TheBreak, 'price-duel': PriceDuel, fantasy: CardFantasy };
 
-// The 7-game lineup (docs/games-spec.md). The first five are live; the rest render as "coming soon"
+// The 7-game lineup (docs/games-spec.md). The first six are live; the rest render as "coming soon"
 // tiles so the surface shows the full roadmap. id matches the server's games list for live ones.
 const LINEUP = [
   { id: 'pack-rip', name: 'Pack Rip', icon: '🎴', blurb: 'Open a pack, reveal a card, sell it back for USDC.', live: true },
@@ -18,7 +19,7 @@ const LINEUP = [
   { id: 'grade-gamble', name: 'Grade Gamble', icon: '🔍', blurb: 'Gamble a raw card up the grade ladder.', live: true },
   { id: 'the-break', name: 'The Break', icon: '📦', blurb: 'Buy spots in a shared case; the cards shuffle to spots.', live: true },
   { id: 'price-duel', name: 'Price Duel', icon: '⚔️', blurb: 'Pick a card; the bigger %-move wins the pot.', live: true },
-  { id: 'fantasy', name: 'Card Fantasy', icon: '🏆', blurb: 'Draft a roster, climb the weekly board.', live: false },
+  { id: 'fantasy', name: 'Card Fantasy', icon: '🏆', blurb: 'Draft a roster under a cap; biggest %-move wins.', live: true },
   { id: 'draft-arena', name: 'Draft Arena', icon: '🎯', blurb: 'Snake-draft, rosters battle on price.', live: false },
 ];
 

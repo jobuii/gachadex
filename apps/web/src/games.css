@@ -123,6 +123,32 @@
   .duel-card-img { height: 112px; }
 }
 
+/* --- card fantasy --- */
+.fan-capbar { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; margin-bottom: 0.6rem; }
+.fan-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.7rem; }
+.fan-chip { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.25rem 0.5rem; border: var(--border-w) solid var(--border); border-radius: var(--radius); background: var(--bg-2); color: var(--text); cursor: pointer; font-size: 0.72rem; }
+.fan-chip img, .fan-chip .idx-thumb { width: 22px; height: 30px; object-fit: contain; border-radius: 3px; }
+.fan-chip-x { color: var(--text-muted); font-weight: var(--weight-strong); }
+.fan-chip:hover { border-color: var(--accent-lit); }
+.fan-enter { margin-bottom: 0.8rem; }
+.duel-pick.picked { border-color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
+.fan-league { padding: 1.1rem; margin-top: 1rem; }
+.fan-league-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+.fan-pool { font-size: 1.3rem; font-weight: var(--weight-strong); color: var(--gold); }
+.fan-clock { font-size: 0.85rem; color: var(--text-muted); }
+.fan-settled { color: var(--gold); text-transform: uppercase; letter-spacing: 0.05em; }
+.fan-roster-title { display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 0.9rem 0 0.5rem; }
+.fan-score { font-size: 0.95rem; font-weight: var(--weight-strong); }
+.fan-row { display: grid; grid-template-columns: 34px 1fr auto auto; align-items: center; gap: 0.6rem; padding: 0.35rem 0; border-bottom: 1px solid var(--border); }
+.fan-row-img { width: 34px; height: 47px; object-fit: contain; border-radius: 4px; background: var(--bg-3); display: flex; align-items: center; justify-content: center; }
+.fan-row-name { font-size: 0.82rem; }
+.fan-row-val { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; }
+.fan-row-move { font-size: 0.85rem; font-weight: var(--weight-strong); min-width: 56px; text-align: right; }
+.fan-board-row { display: grid; grid-template-columns: 32px 1fr auto; align-items: center; gap: 0.5rem; padding: 0.3rem 0.4rem; border-radius: var(--radius); font-size: 0.85rem; }
+.fan-board-row.you { background: color-mix(in srgb, var(--gold) 14%, transparent); }
+.fan-rank { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.fan-board-score { font-weight: var(--weight-strong); font-variant-numeric: tabular-nums; }
+
 /* --- provably-fair modal --- */
 .games-modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center;

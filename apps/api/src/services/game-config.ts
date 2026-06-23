@@ -284,11 +284,43 @@ function validatePriceDuel(value: unknown): PriceDuelConfig {
   };
 }
 
+// --- Card Fantasy (docs/games-spec.md, game #6). A recurring DFS-style league: pay an entry, draft a
+// roster of `rosterSize` distinct cards whose combined value is under `capUsd` (a salary cap), and over a
+// window each roster scores the SUM of its cards' oracle %-moves. Top score takes the prize pool (entries
+// minus a rake = the edge); below `minEntries` the league refunds. Skill-predominant — the oracle is the
+// scoreboard, no house RNG, the lowest regulatory posture of the lineup.
+export interface CardFantasyConfig {
+  enabled: boolean;
+  entryUsd: number;
+  capUsd: number; // the roster's combined-value salary cap
+  rosterSize: number; // distinct cards per roster
+  windowHours: number; // how long a league runs before it scores
+  rakeBps: number; // the house cut of the prize pool (the edge)
+  minEntries: number; // below this the league refunds (no contest)
+  bigWinUsd: number; // a prize >= this fires a chat BIG WIN
+}
+const DEFAULT_CARD_FANTASY: CardFantasyConfig = { enabled: false, entryUsd: 25, capUsd: 1000, rosterSize: 5, windowHours: 168, rakeBps: 1000, minEntries: 2, bigWinUsd: 250 };
+function validateCardFantasy(value: unknown): CardFantasyConfig {
+  const v = (typeof value === 'string' ? JSON.parse(value) : value) as Partial<CardFantasyConfig>;
+  if (!v || typeof v !== 'object') throw new Error('card-fantasy config must be an object');
+  return {
+    enabled: Boolean(v.enabled),
+    entryUsd: num(v.entryUsd, 'entry (USD)', 1, MAX_USD),
+    capUsd: num(v.capUsd, 'salary cap (USD)', 1, MAX_USD),
+    rosterSize: num(v.rosterSize, 'roster size', 2, 15),
+    windowHours: num(v.windowHours, 'window (hours)', 1, 24 * 30),
+    rakeBps: num(v.rakeBps, 'rake (bps)', 0, 5000),
+    minEntries: num(v.minEntries, 'min entries', 2, 1000),
+    bigWinUsd: num(v.bigWinUsd, 'big-win threshold (USD)', 0, MAX_USD),
+  };
+}
+
 const packRip = liveKnob<PackRipConfig>('game_pack_rip', DEFAULT_PACK_RIP, validatePackRip, JSON.stringify);
 const setPoker = liveKnob<SetPokerConfig>('game_set_poker', DEFAULT_SET_POKER, validateSetPoker, JSON.stringify);
 const gradeGamble = liveKnob<GradeGambleConfig>('game_grade_gamble', DEFAULT_GRADE_GAMBLE, validateGradeGamble, JSON.stringify);
 const theBreak = liveKnob<TheBreakConfig>('game_the_break', DEFAULT_THE_BREAK, validateTheBreak, JSON.stringify);
 const priceDuel = liveKnob<PriceDuelConfig>('game_price_duel', DEFAULT_PRICE_DUEL, validatePriceDuel, JSON.stringify);
+const cardFantasy = liveKnob<CardFantasyConfig>('game_card_fantasy', DEFAULT_CARD_FANTASY, validateCardFantasy, JSON.stringify);
 
 /** Current Pack Rip config (sync read on the play hot path). */
 export const packRipConfig = (): PackRipConfig => packRip.get();
@@ -300,10 +332,12 @@ export const gradeGambleConfig = (): GradeGambleConfig => gradeGamble.get();
 export const theBreakConfig = (): TheBreakConfig => theBreak.get();
 /** Current Price Duel config (sync read on the play hot path). */
 export const priceDuelConfig = (): PriceDuelConfig => priceDuel.get();
+/** Current Card Fantasy config (sync read on the play hot path). */
+export const cardFantasyConfig = (): CardFantasyConfig => cardFantasy.get();
 
 /** Load every games knob from settings (boot + periodic refresh, for multi-instance convergence). */
 export async function loadGameConfig(db: Db): Promise<void> {
-  await Promise.all([packRip.load(db), setPoker.load(db), gradeGamble.load(db), theBreak.load(db), priceDuel.load(db)]);
+  await Promise.all([packRip.load(db), setPoker.load(db), gradeGamble.load(db), theBreak.load(db), priceDuel.load(db), cardFantasy.load(db)]);
 }
 
 /** The full config + defaults + the GAME_POOL bankroll balance — for the admin Games view. */
@@ -313,7 +347,8 @@ export async function gamesAdminView(db: Db): Promise<{
   gradeGamble: GradeGambleConfig;
   theBreak: TheBreakConfig;
   priceDuel: PriceDuelConfig;
-  defaults: { packRip: PackRipConfig; setPoker: SetPokerConfig; gradeGamble: GradeGambleConfig; theBreak: TheBreakConfig; priceDuel: PriceDuelConfig };
+  cardFantasy: CardFantasyConfig;
+  defaults: { packRip: PackRipConfig; setPoker: SetPokerConfig; gradeGamble: GradeGambleConfig; theBreak: TheBreakConfig; priceDuel: PriceDuelConfig; cardFantasy: CardFantasyConfig };
   poolE6: string;
 }> {
   const acct = await getOrCreateSystemAccount(db, 'GAME_POOL');
@@ -323,7 +358,8 @@ export async function gamesAdminView(db: Db): Promise<{
     gradeGamble: gradeGamble.get(),
     theBreak: theBreak.get(),
     priceDuel: priceDuel.get(),
-    defaults: { packRip: packRip.default, setPoker: setPoker.default, gradeGamble: gradeGamble.default, theBreak: theBreak.default, priceDuel: priceDuel.default },
+    cardFantasy: cardFantasy.get(),
+    defaults: { packRip: packRip.default, setPoker: setPoker.default, gradeGamble: gradeGamble.default, theBreak: theBreak.default, priceDuel: priceDuel.default, cardFantasy: cardFantasy.default },
     poolE6: (await getBalance(db, acct)).toString(),
   };
 }
@@ -361,4 +397,11 @@ export async function setPriceDuelConfig(db: Db, patch: Partial<PriceDuelConfig>
   const merged = { ...priceDuel.get(), ...patch };
   await priceDuel.set(db, merged);
   return priceDuel.get();
+}
+
+/** Apply a partial Card Fantasy patch, then re-load. */
+export async function setCardFantasyConfig(db: Db, patch: Partial<CardFantasyConfig>): Promise<CardFantasyConfig> {
+  const merged = { ...cardFantasy.get(), ...patch };
+  await cardFantasy.set(db, merged);
+  return cardFantasy.get();
 }

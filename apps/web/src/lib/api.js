@@ -195,6 +195,10 @@ export const getMyDuel = () => req('/games/duel', { auth: true }); // { duel: Du
 export const getDuelById = (duelId) => req(`/games/duel/${duelId}`, { auth: true });
 export const duelJoin = (marketId, idempotencyKey) => req('/games/duel/join', { method: 'POST', auth: true, body: { marketId, idempotencyKey } });
 export const duelCancel = (duelId) => req('/games/duel/cancel', { method: 'POST', auth: true, body: { duelId } });
+// Card Fantasy
+export const getFantasyLeague = () => req('/games/fantasy', { auth: true }); // { league: LeagueView | null }
+export const getFantasyLeagueById = (leagueId) => req(`/games/fantasy/${leagueId}`, { auth: true });
+export const fantasyEnter = (marketIds, idempotencyKey) => req('/games/fantasy/enter', { method: 'POST', auth: true, body: { marketIds, idempotencyKey } });
 
 // --- LP ---
 export const getPool = () => req('/lp/pool');
