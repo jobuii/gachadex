@@ -52,41 +52,47 @@ export async function assignReferralCode(q: Queryer, userId: string): Promise<st
  * Change a user's own referral code to a custom one. Normalizes to uppercase, validates the format,
  * and enforces global uniqueness: the pre-check returns a clean error for the common case, and the
  * uq_users_referral_code unique index (a caught 23505) closes the race against a concurrent claim.
+ *
+ * Runs on the caller's queryer so it can join a larger transaction (e.g. affiliate setup, where the
+ * code change must be atomic with upserting the user + terms). `setReferralCode` wraps this in its
+ * own tx for standalone callers.
  */
-export async function setReferralCode(db: Db, userId: string, rawCode: string): Promise<{ code: string }> {
+export async function setReferralCodeTx(q: Queryer, userId: string, rawCode: string): Promise<{ code: string }> {
   const code = rawCode.trim().toUpperCase();
   if (code.length < 4 || code.length > 20 || !/^[A-Z0-9-]+$/.test(code) || code.startsWith('-') || code.endsWith('-')) {
     throw new HttpError(400, 'code must be 4-20 characters: letters, numbers and dashes (not starting or ending with a dash)');
   }
   if (code.startsWith('POKE-')) throw new HttpError(400, 'the POKE- prefix is reserved for auto-assigned codes');
 
-  return db.tx(async (q) => {
-    const cur = await q.query<{ referral_code: string | null }>(`SELECT referral_code FROM users WHERE id=$1`, [userId]);
-    const current = cur.rows[0]?.referral_code ?? null;
-    if (current === code) return { code }; // no-op
+  const cur = await q.query<{ referral_code: string | null }>(`SELECT referral_code FROM users WHERE id=$1`, [userId]);
+  const current = cur.rows[0]?.referral_code ?? null;
+  if (current === code) return { code }; // no-op
 
-    // uniqueness spans live codes AND reserved (renamed-away) aliases, excluding this user's own
-    const taken = await q.query(
-      `SELECT 1 FROM users WHERE referral_code=$1 AND id<>$2
-       UNION ALL SELECT 1 FROM referral_code_aliases WHERE code=$1 AND user_id<>$2`,
-      [code, userId],
-    );
-    if (taken.rows[0]) throw new HttpError(409, 'that referral code is already taken');
+  // uniqueness spans live codes AND reserved (renamed-away) aliases, excluding this user's own
+  const taken = await q.query(
+    `SELECT 1 FROM users WHERE referral_code=$1 AND id<>$2
+     UNION ALL SELECT 1 FROM referral_code_aliases WHERE code=$1 AND user_id<>$2`,
+    [code, userId],
+  );
+  if (taken.rows[0]) throw new HttpError(409, 'that referral code is already taken');
 
-    // reserve the prior code permanently so it can't be hijacked and old links still resolve here
-    if (current) {
-      await q.query(`INSERT INTO referral_code_aliases(code, user_id) VALUES($1,$2) ON CONFLICT(code) DO NOTHING`, [current, userId]);
-    }
-    try {
-      await q.query(`UPDATE users SET referral_code=$1 WHERE id=$2`, [code, userId]);
-    } catch (e) {
-      if ((e as { code?: string })?.code === '23505') throw new HttpError(409, 'that referral code is already taken');
-      throw e;
-    }
-    // if the new code was previously this user's reserved alias, it's now their live code
-    await q.query(`DELETE FROM referral_code_aliases WHERE code=$1 AND user_id=$2`, [code, userId]);
-    return { code };
-  });
+  // reserve the prior code permanently so it can't be hijacked and old links still resolve here
+  if (current) {
+    await q.query(`INSERT INTO referral_code_aliases(code, user_id) VALUES($1,$2) ON CONFLICT(code) DO NOTHING`, [current, userId]);
+  }
+  try {
+    await q.query(`UPDATE users SET referral_code=$1 WHERE id=$2`, [code, userId]);
+  } catch (e) {
+    if ((e as { code?: string })?.code === '23505') throw new HttpError(409, 'that referral code is already taken');
+    throw e;
+  }
+  // if the new code was previously this user's reserved alias, it's now their live code
+  await q.query(`DELETE FROM referral_code_aliases WHERE code=$1 AND user_id=$2`, [code, userId]);
+  return { code };
+}
+
+export async function setReferralCode(db: Db, userId: string, rawCode: string): Promise<{ code: string }> {
+  return db.tx((q) => setReferralCodeTx(q, userId, rawCode));
 }
 
 export interface ReferralInfo {

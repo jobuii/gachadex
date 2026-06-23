@@ -2,7 +2,7 @@ import { HttpError } from '../errors.ts';
 import { config } from '../config.ts';
 import type { Db, Queryer } from '../db/client.ts';
 import { upsertUser } from './auth.ts';
-import { setReferralCode } from './referral.ts';
+import { setReferralCodeTx } from './referral.ts';
 
 /**
  * Affiliate / KOL referral economics. An affiliate is a user; their shared code is `users.referral_code`
@@ -131,16 +131,21 @@ export async function setAffiliateTerms(
   // one the operator deactivated; defaults to true on create.
   const active = opts.active ?? null;
 
-  const userId = await upsertUser(db, pubkey);
-  if (opts.code) await setReferralCode(db, userId, opts.code); // validates length/charset + uniqueness, reserves old code
-  await db.query(
-    `INSERT INTO affiliate_terms(user_id, cashback_bps, fee_discount_bps, label, active, updated_at)
-       VALUES($1, $2, $3, $4, COALESCE($5, true), now())
-     ON CONFLICT(user_id) DO UPDATE SET
-       cashback_bps = EXCLUDED.cashback_bps, fee_discount_bps = EXCLUDED.fee_discount_bps,
-       label = EXCLUDED.label, active = COALESCE($5, affiliate_terms.active), updated_at = now()`,
-    [userId, cashbackBps, feeDiscountBps, opts.label ?? null, active],
-  );
+  // All three writes (account upsert → branded code → terms) run in ONE transaction so a mid-way
+  // failure can't leave a half-made affiliate (a code with no terms, or terms with no code).
+  const userId = await db.tx(async (q) => {
+    const uid = await upsertUser(q, pubkey);
+    if (opts.code) await setReferralCodeTx(q, uid, opts.code); // validates length/charset + uniqueness, reserves old code
+    await q.query(
+      `INSERT INTO affiliate_terms(user_id, cashback_bps, fee_discount_bps, label, active, updated_at)
+         VALUES($1, $2, $3, $4, COALESCE($5, true), now())
+       ON CONFLICT(user_id) DO UPDATE SET
+         cashback_bps = EXCLUDED.cashback_bps, fee_discount_bps = EXCLUDED.fee_discount_bps,
+         label = EXCLUDED.label, active = COALESCE($5, affiliate_terms.active), updated_at = now()`,
+      [uid, cashbackBps, feeDiscountBps, opts.label ?? null, active],
+    );
+    return uid;
+  });
   const r = await db.query<AffiliateDbRow>(`${SELECT_AFFILIATES} WHERE t.user_id = $1`, [userId]);
   return toRow(r.rows[0]);
 }

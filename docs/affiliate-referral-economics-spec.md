@@ -200,7 +200,8 @@ Hook points confirmed real (`engine.ts:18-36` chargeFee; open `:364`/`:408`, clo
   `cashbackTotalUusdc` on `/account/balance`; the `/admin/affiliates` API; and the sign-in auto-redeem.
   348 API tests (7 new) + typecheck + web build green. Adversarial review done — fixed: deactivated-affiliate
   silently re-enabled on a terms edit · missing ledger index · clear the held `?ref=` only on a permanent 4xx.
-- **Follow-up (deferred, low):** make `setAffiliateTerms` atomic — it runs `upsertUser` → `setReferralCode`
-  (own tx) → the `affiliate_terms` upsert as separate ops, so a crash mid-way leaves a partial state.
-  Admin-only, retryable, no fund impact → deferred (needs `setReferralCode` to accept a shared queryer).
+- **`setAffiliateTerms` atomicity — DONE** (commit `b1079da`): the three writes (`upsertUser` →
+  branded code → `affiliate_terms` upsert) now run in one `db.tx`. Extracted `setReferralCodeTx(q)` (the
+  transactional core) so it joins the outer tx; `setReferralCode(db)` keeps its standalone wrapper, and
+  `upsertUser` now takes a `Queryer` (Db extends Queryer → existing callers unaffected).
 - **Remaining:** P2 (admin Affiliates tab) · P3 (Portfolio "Cashback" card + ReferralPanel earnings).
