@@ -406,7 +406,7 @@ async function openPositionInTx(
 
       const opp = input.side === 'long' ? 'short' : 'long';
       if (await getOpenPosition(q, userId, market.id, opp)) {
-        throw new HttpError(400, `close your ${opp} position before opening a ${input.side}`);
+        throw new HttpError(400, `close your ${opp} position before opening a ${input.side}`, 'opposite_open');
       }
 
       const notion = notional(input.qtyE6, markE6);
@@ -657,9 +657,20 @@ export interface RestingOrderView {
   createdAt: string;
 }
 
-// transient open-rejects: the market is momentarily un-openable — leave the order resting + retry next
-// sweep. Anything else is terminal → cancel with the reason. (Codes from openPositionInTx's gates.)
-const RESTING_TRANSIENT_CODES = new Set(['market_repricing', 'market_halted', 'market_restricted', 'oi_cap_exceeded', 'pool_paused']);
+// transient open-rejects: the market is momentarily un-openable (repricing / halted / low-confidence) —
+// leave the order resting + retry next sweep; the user can always cancel for the refund. EVERYTHING else
+// is terminal → cancel + refund. Per spec §3, OI cap / slippage / opposite-side / insufficient are
+// terminal; pool-paused is terminal too, so a never-clearing pause can't freeze a user's reserve forever.
+const RESTING_TRANSIENT_CODES = new Set(['market_repricing', 'market_halted', 'market_restricted']);
+
+// Return a resting-order reserve to the user's collateral (one balanced posting; no-op if zero). Used by
+// the fill (release), a user cancel, and a terminal-reject cancel — one place to get the posting sign right.
+async function refundReserve(q: Queryer, userId: string, refId: string, reason: string, amount: bigint): Promise<void> {
+  if (amount <= 0n) return;
+  const collAcct = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
+  const restAcct = await getOrCreateUserAccount(q, userId, 'RESTING_ORDER_MARGIN');
+  await postTxn(q, { reason, refType: 'resting_order', refId, entries: [{ accountId: restAcct, amount: -amount }, { accountId: collAcct, amount }] });
+}
 
 export async function placeRestingOrder(db: Db, userId: string, input: RestingOrderInput): Promise<{ id: string; duplicate?: boolean }> {
   // P1: only limit-OPEN. reduce-only limit + SL/TP are P2.
@@ -713,12 +724,7 @@ export async function cancelRestingOrder(db: Db, userId: string, id: string): Pr
       [id, userId],
     );
     if (!r.rows[0]) return { cancelled: false };
-    const reserve = BigInt(r.rows[0].reserved_margin_uusdc);
-    if (reserve > 0n) {
-      const collAcct = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
-      const restAcct = await getOrCreateUserAccount(q, userId, 'RESTING_ORDER_MARGIN');
-      await postTxn(q, { reason: 'RESTING_REFUND', refType: 'resting_order', refId: id, entries: [{ accountId: restAcct, amount: -reserve }, { accountId: collAcct, amount: reserve }] });
-    }
+    await refundReserve(q, userId, id, 'RESTING_REFUND', BigInt(r.rows[0].reserved_margin_uusdc));
     publish(`orders:${userId}`, 'update', {});
     return { cancelled: true };
   });
@@ -746,16 +752,20 @@ export async function getUserRestingOrders(db: Db, userId: string): Promise<Rest
  * A transient reject is then retried next sweep; a terminal reject cancels + refunds in a fresh tx.
  */
 export async function checkRestingOrderTriggers(db: Db, marketId: string): Promise<number> {
-  const snap = await db.query<{ mark_price_e6: string }>(`SELECT mark_price_e6 FROM marks WHERE market_id=$1 ORDER BY computed_at DESC LIMIT 1`, [marketId]);
+  // Trigger on the ORACLE index (index_price_e6), NOT the live mark: the mark carries the OI-skew premium
+  // a trade can shove within a sweep, so triggering on it would let a user self-trigger / stop-hunt by
+  // pushing the mark (spec §1a). The index moves only on an oracle print → manipulation-resistant. The
+  // FILL still executes at the live mark, capped by the limit as the slippage bound.
+  const snap = await db.query<{ index_price_e6: string }>(`SELECT index_price_e6 FROM marks WHERE market_id=$1 ORDER BY computed_at DESC LIMIT 1`, [marketId]);
   if (!snap.rows[0]) return 0;
-  const oracleMarkE6 = BigInt(snap.rows[0].mark_price_e6);
-  // long buys the dip → fills when mark ≤ trigger (trigger ≥ mark); short sells the rip → mark ≥ trigger.
+  const oracleIndexE6 = BigInt(snap.rows[0].index_price_e6);
+  // long buys the dip → fires when index ≤ trigger (trigger ≥ index); short sells the rip → index ≥ trigger.
   const due = await db.query<{ id: string }>(
     `SELECT id FROM resting_orders
       WHERE market_id=$1 AND status='active' AND kind='limit'
         AND ((side='long' AND trigger_price_e6 >= $2) OR (side='short' AND trigger_price_e6 <= $2))
       ORDER BY created_at LIMIT $3`,
-    [marketId, oracleMarkE6.toString(), config.restingMaxPerSweep],
+    [marketId, oracleIndexE6.toString(), config.restingMaxPerSweep],
   );
   let filled = 0;
   for (const { id } of due.rows) {
@@ -771,12 +781,9 @@ export async function checkRestingOrderTriggers(db: Db, marketId: string): Promi
           );
           if (!claim.rows[0]) throw new HttpError(409, 'order already resolved', 'resting_gone');
           const ro = claim.rows[0];
-          const reserve = BigInt(ro.reserved_margin_uusdc);
-          if (reserve > 0n) {
-            const collAcct = await getOrCreateUserAccount(q, ro.user_id, 'USER_COLLATERAL');
-            const restAcct = await getOrCreateUserAccount(q, ro.user_id, 'RESTING_ORDER_MARGIN');
-            await postTxn(q, { reason: 'RESTING_RELEASE', refType: 'resting_order', refId: id, entries: [{ accountId: restAcct, amount: -reserve }, { accountId: collAcct, amount: reserve }] });
-          }
+          // release the reserve to collateral so the open locks the real margin from collateral (net = one
+          // charge). On any throw the whole tx rolls back and this release is undone with it.
+          await refundReserve(q, ro.user_id, id, 'RESTING_RELEASE', BigInt(ro.reserved_margin_uusdc));
           // fill at the live mark, bounded by the limit as the slippage cap. If this throws, the whole tx
           // (claim + release) rolls back — the order stays active + reserved, no partial state.
           await openPositionInTx(q, ro.user_id, {
@@ -791,7 +798,10 @@ export async function checkRestingOrderTriggers(db: Db, marketId: string): Promi
       );
       filled++;
     } catch (e) {
-      const code = e instanceof HttpError ? e.code : undefined;
+      // an unexpected NON-HttpError (a deadlock, a transient infra blip) must not cancel a good order —
+      // leave it resting + retry next sweep. Only a deliberate engine reject (HttpError) is classifiable.
+      if (!(e instanceof HttpError)) continue;
+      const code = e.code;
       if (code === 'resting_gone' || (code && RESTING_TRANSIENT_CODES.has(code))) continue; // gone / retry next sweep
       terminal = code ?? 'fill_failed';
     }
@@ -804,12 +814,7 @@ export async function checkRestingOrderTriggers(db: Db, marketId: string): Promi
             [id, terminal],
           );
           if (!r.rows[0]) return;
-          const reserve = BigInt(r.rows[0].reserved_margin_uusdc);
-          if (reserve > 0n) {
-            const collAcct = await getOrCreateUserAccount(q, r.rows[0].user_id, 'USER_COLLATERAL');
-            const restAcct = await getOrCreateUserAccount(q, r.rows[0].user_id, 'RESTING_ORDER_MARGIN');
-            await postTxn(q, { reason: 'RESTING_REFUND', refType: 'resting_order', refId: id, entries: [{ accountId: restAcct, amount: -reserve }, { accountId: collAcct, amount: reserve }] });
-          }
+          await refundReserve(q, r.rows[0].user_id, id, 'RESTING_REFUND', BigInt(r.rows[0].reserved_margin_uusdc));
           publish(`orders:${r.rows[0].user_id}`, 'update', {});
         })
         .catch(() => {});

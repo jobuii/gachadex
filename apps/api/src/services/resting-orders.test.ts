@@ -14,7 +14,7 @@ const { ingest } = await import('./oracle.ts');
 const { fromPokemontcg } = await import('./providers/pokemontcg.ts');
 const { listMarketsWithData } = await import('./markets.ts');
 const { creditFaucet, getUserBalances } = await import('./faucet.ts');
-const { placeRestingOrder, cancelRestingOrder, getUserRestingOrders, checkRestingOrderTriggers, getUserPositions, closePosition } =
+const { openPosition, placeRestingOrder, cancelRestingOrder, getUserRestingOrders, checkRestingOrderTriggers, getUserPositions, closePosition } =
   await import('./engine.ts');
 const { reconcile } = await import('./reconcile.ts');
 const { usdc } = await import('../money.ts');
@@ -37,6 +37,11 @@ async function newUser(): Promise<string> {
 const U = (n: number) => usdc(n).toString();
 const E6 = (n: number) => BigInt(n) * 1_000_000n;
 const LIMIT = { kind: 'limit' as const, reduceOnly: false };
+async function closeAll(userId: string): Promise<void> {
+  for (const p of await getUserPositions(db, userId)) {
+    await closePosition(db, userId, { positionId: p.id, fractionBps: 10_000, idempotencyKey: randomUUID() });
+  }
+}
 
 test('placing a limit reserves margin (equity stays whole); cancelling refunds it', async () => {
   const userId = await newUser();
@@ -113,6 +118,33 @@ test('SL/TP / reduce-only are rejected in P1 (limit-open only)', async () => {
     placeRestingOrder(db, userId, { marketId: market.id, kind: 'stop_loss', reduceOnly: true, positionId: 'x', triggerPriceE6: E6(900), idempotencyKey: randomUUID() }),
     /only limit/,
   );
+});
+
+test('a short limit fills at the mark (mark-or-better) when the index is at/above its price', async () => {
+  const userId = await newUser();
+  // short limit at $900 (<= the $1000 index): a short fires when index >= trigger -> immediately due
+  await placeRestingOrder(db, userId, { ...LIMIT, marketId: market.id, side: 'short', qtyE6: 5_000_000n, leverage: 10, triggerPriceE6: E6(900), idempotencyKey: randomUUID() });
+  assert.equal(await checkRestingOrderTriggers(db, market.id), 1);
+  const [pos] = await getUserPositions(db, userId);
+  assert.equal(pos.side, 'short');
+  assert.equal(pos.qtyE6, '5000000');
+  assert.equal(pos.avgEntryE6, E6(1000).toString()); // sold at the $1000 mark, better than the $900 limit
+  assert.equal((await getUserRestingOrders(db, userId)).length, 0);
+  await closeAll(userId);
+});
+
+test('a triggered limit that hits an opposing position is cancelled + refunded (terminal, not stuck)', async () => {
+  const userId = await newUser();
+  await openPosition(db, userId, { marketId: market.id, side: 'short', qtyE6: 1_000_000n, leverage: 5, idempotencyKey: randomUUID() });
+  const before = await getUserBalances(db, userId); // after the short is open
+  // a long limit that fires now (index 1000 <= trigger 1100) but hits the opposite-side guard at fill
+  await placeRestingOrder(db, userId, { ...LIMIT, marketId: market.id, side: 'long', qtyE6: 1_000_000n, leverage: 5, triggerPriceE6: E6(1100), idempotencyKey: randomUUID() });
+  assert.equal(await checkRestingOrderTriggers(db, market.id), 0); // not filled
+  assert.equal((await getUserRestingOrders(db, userId)).length, 0); // cancelled (terminal), not left resting
+  const after = await getUserBalances(db, userId);
+  assert.equal(after.availableUusdc.toString(), before.availableUusdc.toString()); // reserve refunded in full
+  assert.equal((await getUserPositions(db, userId)).filter((p) => p.side === 'long').length, 0); // no long opened
+  await closeAll(userId);
 });
 
 test('the ledger reconciles after place / cancel / fill activity', async () => {
