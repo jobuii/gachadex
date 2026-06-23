@@ -180,8 +180,10 @@ export async function joinBreak(db: Db, userId: string, idempotencyKey: string):
       [playId, open?.id ?? null, userId, idempotencyKey, entry.toString()],
     );
     if (!ins.rows[0]) {
-      // Replay: this key already bought a spot — return that spot's round (which may now be settled).
-      const ex = await q.query<{ round_id: string }>(`SELECT round_id FROM game_plays WHERE user_id = $1 AND idempotency_key = $2`, [userId, idempotencyKey]);
+      // Replay: this key already bought a spot — return that spot's round (which may now be settled). Filter
+      // by game_type (the (user, key) index is shared) so a cross-game key collision returns a clean 409.
+      const ex = await q.query<{ round_id: string }>(`SELECT round_id FROM game_plays WHERE user_id = $1 AND idempotency_key = $2 AND game_type = 'the-break'`, [userId, idempotencyKey]);
+      if (!ex.rows[0]) throw new HttpError(409, 'that idempotency key was already used');
       return { roundId: ex.rows[0].round_id, resolved: false, top: null };
     }
     // Genuinely new entry — open a fresh case now if none was open, and link this play to it.

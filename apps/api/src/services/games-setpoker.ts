@@ -220,7 +220,9 @@ export async function swapCard(db: Db, userId: string, slot: number, idempotency
     if (hand.swaps >= hand.maxSwaps) throw new HttpError(409, 'no swaps left this hand', 'no_swaps_left');
 
     const coll = await userCollateral(q, userId);
-    const balanceAfter = await chargeToPool(q, coll.id, coll.balance, usdc(cfg.swapFeeUsd), 'GAME_SWAP', row.id);
+    // Charge the fee SNAPSHOTTED at deal time (what the player was shown), not the live knob — a mid-hand
+    // admin change must not silently bill a different amount than the hand displays.
+    const balanceAfter = await chargeToPool(q, coll.id, coll.balance, usdc(hand.swapFeeUsd), 'GAME_SWAP', row.id);
 
     const pool = await featuredCards(q);
     if (pool.length === 0) throw new HttpError(503, 'no cards available right now');

@@ -183,6 +183,7 @@ export interface RevealFair {
  * and Set Poker (ten deal draws + swaps, each at its own cursor pair).
  */
 export function drawCardAt(seed: FairSeed, bands: PackBand[], pool: CardRow[], cBand: number, cCard: number): { card: CardRow; fair: RevealFair } {
+  if (pool.length === 0) throw new HttpError(503, 'no priceable cards available right now'); // every caller already guards this; defend the shared util too
   const { perBand, effWeights } = bandEligibility(bands, pool);
   const total = effWeights.reduce((a, w) => a + w, 0);
   if (total <= 0) {
@@ -229,11 +230,14 @@ export async function openPack(
       [playId, userId, opts.idempotencyKey, price.toString()],
     );
     if (!ins.rows[0]) {
-      // Replay: a duplicate request returns the original reveal (no second charge).
+      // Replay: a duplicate request returns the original reveal (no second charge). Filter by game_type —
+      // the (user, key) index is shared across games, so a key reused from another game would otherwise
+      // decode the wrong result shape; a cross-game collision returns a clean 409, not garbage.
       const ex = await q.query<{ id: string; result: unknown; server_seed_hash: string; client_seed: string; nonce: number }>(
-        `SELECT id, result, server_seed_hash, client_seed, nonce::int AS nonce FROM game_plays WHERE user_id = $1 AND idempotency_key = $2`,
+        `SELECT id, result, server_seed_hash, client_seed, nonce::int AS nonce FROM game_plays WHERE user_id = $1 AND idempotency_key = $2 AND game_type = 'pack-rip'`,
         [userId, opts.idempotencyKey],
       );
+      if (!ex.rows[0]) throw new HttpError(409, 'that idempotency key was already used');
       const row = ex.rows[0];
       const res = (typeof row.result === 'string' ? JSON.parse(row.result) : row.result) as { tier: number; bandIndex: number; card: PrizeCard; fair: RevealFair };
       const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');

@@ -157,7 +157,10 @@ export async function joinOrCreateDuel(db: Db, userId: string, marketId: string,
       [playId, open?.id ?? null, userId, idempotencyKey, ante.toString(), JSON.stringify({ marketId, role: open ? 'opponent' : 'creator' })],
     );
     if (!ins.rows[0]) {
-      const ex = await q.query<{ round_id: string }>(`SELECT round_id FROM game_plays WHERE user_id = $1 AND idempotency_key = $2`, [userId, idempotencyKey]);
+      // Replay: filter by game_type (the (user, key) index is shared) so a cross-game key collision returns
+      // a clean 409 instead of a foreign round_id that would dereference to null below.
+      const ex = await q.query<{ round_id: string }>(`SELECT round_id FROM game_plays WHERE user_id = $1 AND idempotency_key = $2 AND game_type = 'price-duel'`, [userId, idempotencyKey]);
+      if (!ex.rows[0]) throw new HttpError(409, 'that idempotency key was already used');
       return ex.rows[0].round_id;
     }
 

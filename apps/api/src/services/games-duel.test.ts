@@ -133,6 +133,15 @@ test('joining is idempotent — the same key does not ante twice', async () => {
   await cancelDuel(db, p1, a.duelId);
 });
 
+test('a cross-game idempotency-key collision returns a clean 409, not a crash', async () => {
+  await cfg();
+  const u = await newUser();
+  const key = randomUUID();
+  // The (user, key) index is global — simulate the key already used by another game.
+  await db.query(`INSERT INTO game_plays(id, game_type, user_id, idempotency_key, wager_uusdc) VALUES($1, 'pack-rip', $2, $3, 0)`, [randomUUID(), u, key]);
+  await assert.rejects(joinOrCreateDuel(db, u, CARD_A, key), /already used/, 'the foreign key is rejected, not dereferenced to null');
+});
+
 test('only the creator can cancel, and only while unmatched', async () => {
   await cfg();
   const p1 = await newUser();
