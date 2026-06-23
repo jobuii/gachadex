@@ -324,6 +324,9 @@ export interface CloseInput {
   fractionBps: number;
   idempotencyKey: string;
   actorPubkey?: string;
+  // optional worst-acceptable fill for the close leg (resting SL/TP). long = floor, short = cap.
+  // unset = no bound (every caller today). Enforced in closePositionInTx.
+  slippageE6?: bigint;
 }
 
 async function validateMarketAndOrder(q: Queryer, input: OpenInput): Promise<MarketRow> {
@@ -350,10 +353,29 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
 
   // BIG BET action bar — captured inside the tx (where the notional is known), broadcast AFTER commit so
   // a chat failure can never roll back the trade. Stays null on a duplicate/replay, so we don't re-announce.
-  let bigBet: ChatEventInput | null = null;
-  const result = await withMarketLock(input.marketId, () =>
+  const out = await withMarketLock(input.marketId, () =>
     db.tx(async (q) => {
       await advisoryXactLock(q, input.marketId); // DB-level single-writer per market
+      return openPositionInTx(q, userId, input);
+    }),
+  );
+  if (out.chat) await emitChatEvent(db, out.chat).catch(() => {}); // post-commit, non-fatal
+  return out.result;
+}
+
+/**
+ * Open/increase a position INSIDE an existing market lock + tx — the caller already holds
+ * withMarketLock + db.tx + advisoryXactLock. The public openPosition is a thin wrapper; the
+ * resting-order trigger loop (limit fills) calls this directly so a fill runs in one tx with no
+ * nested db.tx / withMarketLock re-entry. Returns the result + a post-commit chat event (the caller
+ * emits it AFTER commit so a chat failure can't roll back the trade).
+ */
+async function openPositionInTx(
+  q: Queryer,
+  userId: string,
+  input: OpenInput,
+): Promise<{ result: { orderId: string; positionId: string; duplicate?: boolean }; chat: ChatEventInput | null }> {
+      let bigBet: ChatEventInput | null = null;
       const market = await validateMarketAndOrder(q, input);
       const mi = await getLatestMarkIndex(q, market.id);
       if (!mi) throw new HttpError(400, 'no price available for market');
@@ -380,7 +402,7 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
       // nothing and replays the prior result instead of running the side effects twice.
       const orderId = randomUUID();
       const anchor = await anchorOrder(q, { id: orderId, userId, marketId: market.id, idempotencyKey: input.idempotencyKey, kind: 'market', side: input.side, qtyE6: input.qtyE6, leverageE2, actorPubkey: input.actorPubkey });
-      if (!anchor.inserted) return replayOpen(q, anchor.orderId);
+      if (!anchor.inserted) return { result: await replayOpen(q, anchor.orderId), chat: null };
 
       const opp = input.side === 'long' ? 'short' : 'long';
       if (await getOpenPosition(q, userId, market.id, opp)) {
@@ -472,11 +494,7 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
       if (notion >= usdc(getBigBetUsd())) {
         bigBet = { userId, marketId: market.id, variant: 'big_bet', side: input.side, notionalE6: notion };
       }
-      return { orderId, positionId };
-    }),
-  );
-  if (bigBet) await emitChatEvent(db, bigBet).catch(() => {}); // post-commit, non-fatal
-  return result;
+      return { result: { orderId, positionId }, chat: bigBet };
 }
 
 export async function closePosition(db: Db, userId: string, input: CloseInput): Promise<{ orderId: string; realizedPnlUusdc: string; closedQtyE6: string; remainingQtyE6: string }> {
@@ -489,16 +507,41 @@ export async function closePosition(db: Db, userId: string, input: CloseInput): 
 
   // BIG WIN action bar — captured in the tx (where realized PnL + the closed leg's margin are known),
   // broadcast AFTER commit (non-fatal). Stays null on a duplicate/replay, so we don't re-announce.
-  let bigWin: ChatEventInput | null = null;
-  const result = await withMarketLock(pos0.market_id, () =>
+  const out = await withMarketLock(pos0.market_id, () =>
     db.tx(async (q) => {
       await advisoryXactLock(q, pos0.market_id); // DB-level single-writer per market
+      return closePositionInTx(q, userId, input);
+    }),
+  );
+  if (out.chat) await emitChatEvent(db, out.chat).catch(() => {}); // post-commit, non-fatal
+  return out.result;
+}
+
+/**
+ * Close/reduce a position INSIDE an existing market lock + tx — the caller already holds
+ * withMarketLock + db.tx + advisoryXactLock. The public closePosition is a thin wrapper; the
+ * resting-order trigger loop (stop-loss / take-profit fills) calls this directly so a close runs in
+ * one tx. `input.slippageE6` (optional) bounds the fill. Returns the result + a post-commit chat event.
+ */
+async function closePositionInTx(
+  q: Queryer,
+  userId: string,
+  input: CloseInput,
+): Promise<{ result: { orderId: string; realizedPnlUusdc: string; closedQtyE6: string; remainingQtyE6: string }; chat: ChatEventInput | null }> {
+      let bigWin: ChatEventInput | null = null;
+      const pos0 = await getPositionById(q, input.positionId);
+      if (!pos0 || pos0.user_id !== userId) throw new HttpError(404, 'position not found');
+      if (pos0.status !== 'open') throw new HttpError(400, 'position not open');
       const pos = await getOpenPosition(q, userId, pos0.market_id, pos0.side);
       if (!pos || pos.id !== input.positionId) throw new HttpError(400, 'position not open');
       const market = (await getMarketById(q, pos.market_id))!;
       const mi = await getLatestMarkIndex(q, market.id);
       if (!mi) throw new HttpError(400, 'no price available');
       const { markE6, indexE6 } = mi;
+      // optional slippage bound (resting SL/TP fills): long close = floor, short close = cap; unset = no bound
+      if (input.slippageE6 != null && (pos.side === 'long' ? markE6 < input.slippageE6 : markE6 > input.slippageE6)) {
+        throw new HttpError(400, 'fill price moved past the slippage bound', 'slippage_exceeded');
+      }
 
       // an under-margined position must go through liquidation (loss-capped), not a voluntary
       // close that would drive the user's collateral negative.
@@ -514,7 +557,7 @@ export async function closePosition(db: Db, userId: string, input: CloseInput): 
       // replays the prior result instead of re-running margin/PnL/fee.
       const orderId = randomUUID();
       const anchor = await anchorOrder(q, { id: orderId, userId, marketId: market.id, idempotencyKey: input.idempotencyKey, kind: 'reduce_only', side: pos.side, qtyE6: closeQty, leverageE2: pos.leverage_e2, actorPubkey: input.actorPubkey });
-      if (!anchor.inserted) return replayClose(q, anchor.orderId);
+      if (!anchor.inserted) return { result: await replayClose(q, anchor.orderId), chat: null };
 
       await settlePositionFunding(q, pos, market.id); // settle accrued funding first
       const entry = BigInt(pos.avg_entry_e6);
@@ -578,11 +621,7 @@ export async function closePosition(db: Db, userId: string, input: CloseInput): 
         const roeBps = marginRel > 0n ? Number((pnl * 10_000n) / marginRel) : 0; // return on the closed leg's margin
         bigWin = { userId, marketId: market.id, variant: 'big_win', side: pos.side as 'long' | 'short', notionalE6: notional(closeQty, markE6), pnlE6: pnl, roeBps };
       }
-      return { orderId, realizedPnlUusdc: pnl.toString(), closedQtyE6: closeQty.toString(), remainingQtyE6: remQty.toString() };
-    }),
-  );
-  if (bigWin) await emitChatEvent(db, bigWin).catch(() => {}); // post-commit, non-fatal
-  return result;
+      return { result: { orderId, realizedPnlUusdc: pnl.toString(), closedQtyE6: closeQty.toString(), remainingQtyE6: remQty.toString() }, chat: bigWin };
 }
 
 // ---- read models ----------------------------------------------------------
