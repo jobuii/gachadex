@@ -7,7 +7,7 @@ import { getOrCreateSystemAccount, getOrCreateUserAccount, getBalance, postTxn }
 import { handleFor } from './handles.ts';
 import { publish } from './bus.ts';
 import { emitGameWinEvent } from './chat.ts';
-import { packRipConfig, setPokerConfig, gradeGambleConfig, type PackBand } from './game-config.ts';
+import { packRipConfig, setPokerConfig, gradeGambleConfig, theBreakConfig, type PackBand } from './game-config.ts';
 import { commitServerSeed, freshClientSeed, weightedPick, rollInt } from './game-fairness.ts';
 
 /**
@@ -431,7 +431,7 @@ export async function sellBackPrize(db: Db, userId: string, prizeId: string): Pr
 
 export interface GamesView {
   enabled: boolean; // master GAMES_ENABLED gate
-  games: { id: string; name: string; type: string; enabled: boolean; tiers?: number[]; buybackSpreadBps?: number; anteUsd?: number; swapFeeUsd?: number; maxSwaps?: number; grades?: { label: string; multBps: number }[] }[];
+  games: { id: string; name: string; type: string; enabled: boolean; tiers?: number[]; buybackSpreadBps?: number; anteUsd?: number; swapFeeUsd?: number; maxSwaps?: number; grades?: { label: string; multBps: number }[]; spots?: number; entryUsd?: number }[];
 }
 
 /**
@@ -506,6 +506,7 @@ export function gamesView(): GamesView {
   const pr = packRipConfig();
   const sp = setPokerConfig();
   const gg = gradeGambleConfig();
+  const tb = theBreakConfig();
   return {
     enabled: config.gamesEnabled,
     games: [
@@ -535,6 +536,15 @@ export function gamesView(): GamesView {
         tiers: gg.tiers.map((t) => t.price),
         grades: gg.grades.map((g) => ({ label: g.label, multBps: g.multBps })),
         buybackSpreadBps: gg.buybackSpreadBps,
+      },
+      {
+        id: 'the-break',
+        name: 'The Break',
+        type: 'casino',
+        enabled: config.gamesEnabled && tb.enabled,
+        spots: tb.spots,
+        entryUsd: tb.entryUsd,
+        buybackSpreadBps: tb.buybackSpreadBps,
       },
     ],
   };

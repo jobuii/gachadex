@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, WithdrawalAutoProcessRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest, GameConfigRequest, GamePoolSeedRequest } from '@pokex/shared-types';
+import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, WithdrawalAutoProcessRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest, GameConfigRequest, GamePoolSeedRequest, BreakCancelRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { rl } from './_ratelimit.ts';
@@ -18,10 +18,11 @@ import { listChatUsers } from '../services/chat.ts';
 import { chatConfigView, setChatThresholds } from '../services/chat-config.ts';
 import { dropConfigView, setDropConfig, getDropView } from '../services/drop-config.ts';
 import { totalTippedE6, recentTips } from '../services/drop.ts';
-import { gamesAdminView, setPackRipConfig, setSetPokerConfig, setGradeGambleConfig } from '../services/game-config.ts';
+import { gamesAdminView, setPackRipConfig, setSetPokerConfig, setGradeGambleConfig, setTheBreakConfig } from '../services/game-config.ts';
 import { seedGamePool, packRipEv } from '../services/games.ts';
 import { setPokerEv } from '../services/games-setpoker.ts';
 import { gradeGambleEv } from '../services/games-grade.ts';
+import { breakEv, cancelBreak } from '../services/games-break.ts';
 import { getUserPositions, liquidateAllEligible } from '../services/engine.ts';
 import { withdrawalAutoProcessView, setWithdrawalAutoProcess } from '../services/withdrawal-config.ts';
 import { getCustomerHistory } from '../services/history.ts';
@@ -231,17 +232,20 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   // Current games config + defaults + the GAME_POOL balance + per-game EV/house-edge vs the live pool.
   app.get('/admin/games/config', rl(config.routeRateLimits.admin), async () => {
     const db = await getDb();
-    return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db), setPokerEv: await setPokerEv(db), gradeGambleEv: await gradeGambleEv(db) };
+    return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db), setPokerEv: await setPokerEv(db), gradeGambleEv: await gradeGambleEv(db), breakEv: await breakEv(db) };
   });
-  // Apply a partial games config patch (Pack Rip / Set Poker / Grade Gamble knobs).
+  // Apply a partial games config patch (Pack Rip / Set Poker / Grade Gamble / The Break knobs).
   app.post('/admin/games/config', rl(config.routeRateLimits.admin), async (req) => {
     const b = GameConfigRequest.parse(req.body);
     const db = await getDb();
     if (b.packRip) await setPackRipConfig(db, b.packRip);
     if (b.setPoker) await setSetPokerConfig(db, b.setPoker);
     if (b.gradeGamble) await setGradeGambleConfig(db, b.gradeGamble);
-    return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db), setPokerEv: await setPokerEv(db), gradeGambleEv: await gradeGambleEv(db) };
+    if (b.theBreak) await setTheBreakConfig(db, b.theBreak);
+    return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db), setPokerEv: await setPokerEv(db), gradeGambleEv: await gradeGambleEv(db), breakEv: await breakEv(db) };
   });
+  // Cancel + refund an open case (the safety valve for a break that won't fill).
+  app.post('/admin/games/break/cancel', rl(config.routeRateLimits.admin), async (req) => cancelBreak(await getDb(), BreakCancelRequest.parse(req.body).roundId));
   // Seed the GAME_POOL bankroll (play-money: from FAUCET_SOURCE) so prizes can be paid out.
   app.post('/admin/games/seed-pool', rl(config.routeRateLimits.admin), async (req) => {
     const { amountUsd } = GamePoolSeedRequest.parse(req.body);

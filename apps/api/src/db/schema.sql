@@ -717,6 +717,11 @@ CREATE INDEX IF NOT EXISTS idx_game_plays_user ON game_plays(user_id, created_at
 -- "another open hand?" checks both pass while the new rows still have a NULL status): the second hand's
 -- UPDATE to status='open' then fails this constraint and rolls back, instead of leaving two open hands.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_setpoker_open_hand ON game_plays(user_id) WHERE game_type = 'set-poker' AND result->>'status' = 'open';
+-- The Break: list a case's entrants (every game_plays row in the round settles on fill).
+CREATE INDEX IF NOT EXISTS idx_game_plays_round ON game_plays(round_id) WHERE round_id IS NOT NULL;
+-- At most one OPEN round per game type — backstops the race between two concurrent The Break joins that
+-- both find no open case and create one; the second create then fails this constraint and rolls back.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_open_round_per_game ON game_rounds(game_type) WHERE status = 'open';
 
 -- A won card. value_e6 = the oracle mark captured AT WIN; on sell-back it settles to USDC at the live
 -- mark minus the buyback spread (recorded in sell_value_e6). status: held (just won) | sold | kept.

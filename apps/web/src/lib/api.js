@@ -186,6 +186,10 @@ export const setPokerSwap = (slot, idempotencyKey) => req('/games/set-poker/swap
 export const setPokerSettle = (playId) => req('/games/set-poker/settle', { method: 'POST', auth: true, body: { playId } });
 // Grade Gamble
 export const gradeOpen = (tier, idempotencyKey) => req('/games/grade/open', { method: 'POST', auth: true, body: { tier, idempotencyKey } });
+// The Break
+export const getBreak = () => req('/games/break', { auth: true }); // { round: BreakView | null }
+export const getBreakRound = (roundId) => req(`/games/break/${roundId}`, { auth: true });
+export const breakJoin = (idempotencyKey) => req('/games/break/join', { method: 'POST', auth: true, body: { idempotencyKey } });
 
 // --- LP ---
 export const getPool = () => req('/lp/pool');
@@ -235,6 +239,7 @@ export const adminGetDrop = (adminKey) => adminGet('/admin/chat/drop', adminKey)
 export const adminGetGamesConfig = (adminKey) => adminGet('/admin/games/config', adminKey);
 export const adminSetGamesConfig = (body, adminKey) => adminReq('/admin/games/config', adminKey, body);
 export const adminSeedGamePool = (amountUsd, adminKey) => adminReq('/admin/games/seed-pool', adminKey, { amountUsd });
+export const adminCancelBreak = (roundId, adminKey) => adminReq('/admin/games/break/cancel', adminKey, { roundId });
 // Treasury + insurance. /admin/treasury (full PoR view incl. insurance + allocatable surplus) is
 // real-funds-only; /admin/insurance (balance) + the fee-allocation moves work in play-money too.
 export const adminGetTreasury = (adminKey) => adminGet('/admin/treasury', adminKey);

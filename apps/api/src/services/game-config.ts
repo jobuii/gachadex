@@ -218,9 +218,52 @@ function validateGradeGamble(value: unknown): GradeGambleConfig {
   };
 }
 
+// --- The Break (docs/games-spec.md, game #4). A shared "case" = N spots + N oracle-priced cards drawn at
+// creation. Players buy spots; when the case fills, a provably-fair shuffle assigns the cards to the spots
+// and each entrant wins their spot's card (sold back at mark × (1 − spread), capped). The house edge is
+// structural — N × entry vs Σ(card values) × (1 − spread); `breakEv` reports the realised edge.
+export interface TheBreakConfig {
+  enabled: boolean;
+  spots: number; // entries / cards per case
+  entryUsd: number; // price of one spot (the wager)
+  buybackSpreadBps: number;
+  maxPrizeUsd: number;
+  bigWinUsd: number;
+  bands: PackBand[]; // the value bands the case's cards are drawn from
+}
+
+const DEFAULT_THE_BREAK: TheBreakConfig = {
+  enabled: false,
+  spots: 10,
+  entryUsd: 25,
+  buybackSpreadBps: 1200,
+  maxPrizeUsd: 5000,
+  bigWinUsd: 250,
+  bands: [
+    { minUsd: 0, maxUsd: 20, weight: 65 },
+    { minUsd: 20, maxUsd: 80, weight: 28 },
+    { minUsd: 80, maxUsd: 400, weight: 7 },
+  ],
+};
+
+function validateTheBreak(value: unknown): TheBreakConfig {
+  const v = (typeof value === 'string' ? JSON.parse(value) : value) as Partial<TheBreakConfig>;
+  if (!v || typeof v !== 'object') throw new Error('the-break config must be an object');
+  return {
+    enabled: Boolean(v.enabled),
+    spots: num(v.spots, 'spots', 2, 100),
+    entryUsd: num(v.entryUsd, 'entry (USD)', 1, MAX_USD),
+    buybackSpreadBps: num(v.buybackSpreadBps, 'buyback spread (bps)', 0, 9000),
+    maxPrizeUsd: num(v.maxPrizeUsd, 'max prize (USD)', 1, MAX_USD),
+    bigWinUsd: num(v.bigWinUsd, 'big-win threshold (USD)', 0, MAX_USD),
+    bands: validateBands(v.bands),
+  };
+}
+
 const packRip = liveKnob<PackRipConfig>('game_pack_rip', DEFAULT_PACK_RIP, validatePackRip, JSON.stringify);
 const setPoker = liveKnob<SetPokerConfig>('game_set_poker', DEFAULT_SET_POKER, validateSetPoker, JSON.stringify);
 const gradeGamble = liveKnob<GradeGambleConfig>('game_grade_gamble', DEFAULT_GRADE_GAMBLE, validateGradeGamble, JSON.stringify);
+const theBreak = liveKnob<TheBreakConfig>('game_the_break', DEFAULT_THE_BREAK, validateTheBreak, JSON.stringify);
 
 /** Current Pack Rip config (sync read on the play hot path). */
 export const packRipConfig = (): PackRipConfig => packRip.get();
@@ -228,10 +271,12 @@ export const packRipConfig = (): PackRipConfig => packRip.get();
 export const setPokerConfig = (): SetPokerConfig => setPoker.get();
 /** Current Grade Gamble config (sync read on the play hot path). */
 export const gradeGambleConfig = (): GradeGambleConfig => gradeGamble.get();
+/** Current The Break config (sync read on the play hot path). */
+export const theBreakConfig = (): TheBreakConfig => theBreak.get();
 
 /** Load every games knob from settings (boot + periodic refresh, for multi-instance convergence). */
 export async function loadGameConfig(db: Db): Promise<void> {
-  await Promise.all([packRip.load(db), setPoker.load(db), gradeGamble.load(db)]);
+  await Promise.all([packRip.load(db), setPoker.load(db), gradeGamble.load(db), theBreak.load(db)]);
 }
 
 /** The full config + defaults + the GAME_POOL bankroll balance — for the admin Games view. */
@@ -239,7 +284,8 @@ export async function gamesAdminView(db: Db): Promise<{
   packRip: PackRipConfig;
   setPoker: SetPokerConfig;
   gradeGamble: GradeGambleConfig;
-  defaults: { packRip: PackRipConfig; setPoker: SetPokerConfig; gradeGamble: GradeGambleConfig };
+  theBreak: TheBreakConfig;
+  defaults: { packRip: PackRipConfig; setPoker: SetPokerConfig; gradeGamble: GradeGambleConfig; theBreak: TheBreakConfig };
   poolE6: string;
 }> {
   const acct = await getOrCreateSystemAccount(db, 'GAME_POOL');
@@ -247,7 +293,8 @@ export async function gamesAdminView(db: Db): Promise<{
     packRip: packRip.get(),
     setPoker: setPoker.get(),
     gradeGamble: gradeGamble.get(),
-    defaults: { packRip: packRip.default, setPoker: setPoker.default, gradeGamble: gradeGamble.default },
+    theBreak: theBreak.get(),
+    defaults: { packRip: packRip.default, setPoker: setPoker.default, gradeGamble: gradeGamble.default, theBreak: theBreak.default },
     poolE6: (await getBalance(db, acct)).toString(),
   };
 }
@@ -271,4 +318,11 @@ export async function setGradeGambleConfig(db: Db, patch: Partial<GradeGambleCon
   const merged = { ...gradeGamble.get(), ...patch };
   await gradeGamble.set(db, merged);
   return gradeGamble.get();
+}
+
+/** Apply a partial The Break patch, then re-load. */
+export async function setTheBreakConfig(db: Db, patch: Partial<TheBreakConfig>): Promise<TheBreakConfig> {
+  const merged = { ...theBreak.get(), ...patch };
+  await theBreak.set(db, merged);
+  return theBreak.get();
 }

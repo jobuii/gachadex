@@ -34,6 +34,15 @@ export function GamesAdminView({ adminKey }) {
   const [ggBigWin, setGgBigWin] = useState('');
   const [ggTiersJson, setGgTiersJson] = useState('');
   const [ggGradesJson, setGgGradesJson] = useState('');
+  // The Break drafts
+  const [tbEnabled, setTbEnabled] = useState(false);
+  const [tbSpots, setTbSpots] = useState('');
+  const [tbEntry, setTbEntry] = useState('');
+  const [tbSpread, setTbSpread] = useState('');
+  const [tbMaxPrize, setTbMaxPrize] = useState('');
+  const [tbBigWin, setTbBigWin] = useState('');
+  const [tbBandsJson, setTbBandsJson] = useState('');
+  const [tbCancelId, setTbCancelId] = useState('');
 
   const load = useCallback(() => {
     return api.adminGetGamesConfig(adminKey).then((v) => {
@@ -60,6 +69,14 @@ export function GamesAdminView({ adminKey }) {
       setGgBigWin(String(gg.bigWinUsd));
       setGgTiersJson(JSON.stringify(gg.tiers, null, 2));
       setGgGradesJson(JSON.stringify(gg.grades, null, 2));
+      const tb = v.theBreak;
+      setTbEnabled(tb.enabled);
+      setTbSpots(String(tb.spots));
+      setTbEntry(String(tb.entryUsd));
+      setTbSpread((tb.buybackSpreadBps / 100).toString());
+      setTbMaxPrize(String(tb.maxPrizeUsd));
+      setTbBigWin(String(tb.bigWinUsd));
+      setTbBandsJson(JSON.stringify(tb.bands, null, 2));
     }).catch((e) => setErr(e.message));
   }, [adminKey]);
 
@@ -141,6 +158,30 @@ export function GamesAdminView({ adminKey }) {
     };
     act(() => api.adminSetGamesConfig({ gradeGamble: patch }, adminKey), 'Saved. (Restart the API if a value doesn’t apply within ~30s.)');
   };
+
+  const saveTheBreak = () => {
+    let bands;
+    try {
+      bands = JSON.parse(tbBandsJson);
+    } catch {
+      setErr('The Break bands must be valid JSON');
+      return;
+    }
+    const patch = {
+      enabled: tbEnabled,
+      spots: parseInt(tbSpots, 10),
+      entryUsd: parseInt(tbEntry, 10),
+      buybackSpreadBps: Math.round(parseFloat(tbSpread) * 100),
+      maxPrizeUsd: parseInt(tbMaxPrize, 10),
+      bigWinUsd: parseInt(tbBigWin, 10),
+      bands,
+    };
+    act(() => api.adminSetGamesConfig({ theBreak: patch }, adminKey), 'Saved. (Restart the API if a value doesn’t apply within ~30s.)');
+  };
+  const cancelBreak = () => act(
+    async () => { const r = await api.adminCancelBreak(tbCancelId.trim(), adminKey); setTbCancelId(''); return r; },
+    (r) => `Case cancelled — ${r.refunded} entrant(s) refunded.`,
+  );
 
   const seed = () => act(
     async () => { const r = await api.adminSeedGamePool(parseFloat(seedAmt), adminKey); setSeedAmt(''); return r; },
@@ -268,6 +309,45 @@ export function GamesAdminView({ adminKey }) {
       <label className="field-label"><span>Grade table (JSON)</span></label>
       <textarea className="games-admin-json" rows={8} value={ggGradesJson} onChange={(e) => setGgGradesJson(e.target.value)} />
       <button className="btn-primary" disabled={busy} onClick={saveGradeGamble}>Save Grade Gamble config</button>
+
+      <h3 style={{ marginTop: '1.5rem' }}>The Break</h3>
+      {view.breakEv && (
+        <div className="games-admin-ev">
+          <span className="sc-label">Per-spot house edge vs the live pool (check before enabling)</span>
+          <table className="games-ev-table">
+            <thead><tr><th>Spots</th><th>Entry</th><th>Exp. card payout</th><th>House edge</th><th>Bands</th></tr></thead>
+            <tbody>
+              <tr className={view.breakEv.houseEdgeBps < 0 ? 'ev-negative' : ''}>
+                <td>{view.breakEv.spots}</td>
+                <td>${view.breakEv.entryUsd}</td>
+                <td>{formatUsd(BigInt(view.breakEv.expCardPayoutE6))}</td>
+                <td>{(view.breakEv.houseEdgeBps / 100).toFixed(1)}%</td>
+                <td>{view.breakEv.eligibleBands === 0 ? '⚠ none in pool' : view.breakEv.eligibleBands}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p className="muted">Each spot wins one band-drawn card; edge = entry − E[card] × (1 − spread). Negative (red) loses money — retune the entry or bands.</p>
+        </div>
+      )}
+      <label className="games-admin-row">
+        <input type="checkbox" checked={tbEnabled} onChange={(e) => setTbEnabled(e.target.checked)} /> Enabled
+      </label>
+      <div className="games-admin-fields">
+        <label className="field-label"><span>Spots / cards per case</span><input type="number" value={tbSpots} onChange={(e) => setTbSpots(e.target.value)} /></label>
+        <label className="field-label"><span>Entry (USD)</span><input type="number" value={tbEntry} onChange={(e) => setTbEntry(e.target.value)} /></label>
+        <label className="field-label"><span>Buyback spread (%)</span><input type="number" step="0.1" value={tbSpread} onChange={(e) => setTbSpread(e.target.value)} /></label>
+        <label className="field-label"><span>Max prize (USD)</span><input type="number" value={tbMaxPrize} onChange={(e) => setTbMaxPrize(e.target.value)} /></label>
+        <label className="field-label"><span>Big-win threshold (USD)</span><input type="number" value={tbBigWin} onChange={(e) => setTbBigWin(e.target.value)} /></label>
+      </div>
+      <label className="field-label"><span>Case card bands (JSON)</span></label>
+      <textarea className="games-admin-json" rows={8} value={tbBandsJson} onChange={(e) => setTbBandsJson(e.target.value)} />
+      <button className="btn-primary" disabled={busy} onClick={saveTheBreak}>Save The Break config</button>
+      <div className="games-admin-fields" style={{ marginTop: '0.8rem' }}>
+        <label className="field-label" style={{ flex: 2 }}><span>Cancel + refund an open case (round id)</span>
+          <input value={tbCancelId} onChange={(e) => setTbCancelId(e.target.value)} placeholder="round id" />
+        </label>
+        <button className="btn-ghost" disabled={busy || !tbCancelId.trim()} onClick={cancelBreak} style={{ alignSelf: 'flex-end' }}>Cancel case</button>
+      </div>
 
       {msg && <div className="ref-msg up">{msg}</div>}
       {err && <div className="order-error">{err}</div>}

@@ -79,6 +79,26 @@
 .gg-odd { font-size: 0.8rem; padding: 0.25rem 0.55rem; border: 1px solid var(--border); border-radius: var(--pill); background: var(--bg-2); color: var(--text-muted); }
 .gg-grade { color: var(--accent-lit); font-weight: var(--weight-strong); font-size: 0.95rem; }
 
+/* --- the break --- */
+.brk-case { padding: 1rem; margin-top: 1rem; }
+.brk-progress { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 0.9rem; }
+.brk-bar { flex: 1; height: 10px; background: var(--bg-3); border-radius: var(--pill); overflow: hidden; }
+.brk-fill { height: 100%; background: var(--gold); transition: width 0.4s ease; }
+.brk-cards { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.brk-card { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; width: 86px; }
+.brk-card-img { width: 86px; height: 120px; object-fit: contain; border-radius: var(--radius); background: var(--bg-3); display: flex; align-items: center; justify-content: center; font-size: 1.8rem; }
+.brk-card.sealed .brk-card-img { filter: grayscale(0.4) brightness(0.85); }
+.brk-card-val { color: var(--gold); font-size: 0.82rem; font-weight: var(--weight-strong); }
+.brk-card-name { font-size: 0.78rem; text-align: center; }
+.brk-card.brk-won { width: auto; min-width: 120px; padding: 0.5rem; border: var(--border-w) solid var(--success); border-radius: var(--radius); background: var(--bg-2); }
+.brk-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
+.brk-result { margin-top: 1rem; padding-top: 0.9rem; border-top: 1px solid var(--border); }
+.brk-fair { font-size: 0.72rem; margin-top: 0.6rem; }
+@media (max-width: 768px) {
+  .brk-card, .brk-card-img { width: 66px; }
+  .brk-card-img { height: 92px; }
+}
+
 /* --- provably-fair modal --- */
 .games-modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center;

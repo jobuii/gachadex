@@ -60,6 +60,21 @@ export function weightedPick(serverSeed: string, clientSeed: string, nonce: numb
   return weights.length - 1;
 }
 
+/**
+ * A provably-fair Fisher-Yates permutation of [0, n) — the spot assignment for The Break (which card goes
+ * to which spot). Deterministic in (serverSeed, clientSeed, nonce): swap k (i = n-1 … 1) draws its partner
+ * with rollInt at cursor `cursorBase + k`, so anyone can recompute the whole shuffle from the revealed seed.
+ * `cursorBase` offsets past any cursors the same seed already spent (e.g. the case's card draws).
+ */
+export function fairShuffle(serverSeed: string, clientSeed: string, nonce: number, n: number, cursorBase = 0): number[] {
+  const a = Array.from({ length: n }, (_, i) => i);
+  for (let i = n - 1; i > 0; i--) {
+    const j = rollInt(serverSeed, clientSeed, nonce, cursorBase + (n - 1 - i), i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 /** Constant-time check that sha256(serverSeed) == serverSeedHash (the public verify primitive). */
 export function verify(serverSeed: string, serverSeedHash: string): boolean {
   const a = Buffer.from(sha256(serverSeed), 'hex');

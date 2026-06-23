@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { ClientSeedRequest, PackRipOpenRequest, PrizeSellRequest, SetPokerDealRequest, SetPokerSwapRequest, SetPokerSettleRequest, GradeOpenRequest } from '@pokex/shared-types';
+import { ClientSeedRequest, PackRipOpenRequest, PrizeSellRequest, SetPokerDealRequest, SetPokerSwapRequest, SetPokerSettleRequest, GradeOpenRequest, BreakJoinRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { authenticate } from '../plugins/auth.ts';
@@ -7,6 +7,7 @@ import { rl } from './_ratelimit.ts';
 import { gamesView, getFairness, rotateClientSeed, openPack, sellBackPrize, listHeldPrizes } from '../services/games.ts';
 import { dealHand, swapCard, settleHand, getOpenHand } from '../services/games-setpoker.ts';
 import { gradeOpen } from '../services/games-grade.ts';
+import { currentBreak, getBreakRound, joinBreak } from '../services/games-break.ts';
 
 const TRADE = { preHandler: authenticate, config: { scope: 'trade' as const } };
 
@@ -67,5 +68,13 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
   app.post('/games/grade/open', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
     const { tier, idempotencyKey } = GradeOpenRequest.parse(req.body);
     return gradeOpen(await getDb(), req.userId!, tier, idempotencyKey);
+  });
+
+  // The Break — the open case (+ your spots), a specific case to poll, and buy a spot.
+  app.get('/games/break', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => ({ round: await currentBreak(await getDb(), req.userId!) }));
+  app.get('/games/break/:roundId', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => ({ round: await getBreakRound(await getDb(), req.userId!, (req.params as { roundId: string }).roundId) }));
+  app.post('/games/break/join', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
+    const { idempotencyKey } = BreakJoinRequest.parse(req.body);
+    return joinBreak(await getDb(), req.userId!, idempotencyKey);
   });
 }

@@ -338,6 +338,15 @@ export const GradeOpenRequest = z.object({
   idempotencyKey: z.string().min(8),
 });
 
+// The Break: buy a spot in the open case.
+export const BreakJoinRequest = z.object({
+  idempotencyKey: z.string().min(8),
+});
+// Admin: cancel + refund an open case.
+export const BreakCancelRequest = z.object({
+  roundId: z.string().min(1),
+});
+
 // Live-tunable games config (admin Games view). Partial — only provided keys change. Bounds mirror
 // game-config.ts; `tiers` nests a per-tier weighted value-band table the rip draws from.
 const PackBandReq = z.object({
@@ -386,6 +395,18 @@ export const GameConfigRequest = z
           multBps: z.coerce.number().int().min(1).max(100_000_000),
           weight: z.coerce.number().min(0).max(1_000_000_000),
         })).min(2).max(12).optional(),
+      })
+      .strict()
+      .optional(),
+    theBreak: z
+      .object({
+        enabled: z.boolean().optional(),
+        spots: z.coerce.number().int().min(2).max(100).optional(),
+        entryUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        buybackSpreadBps: z.coerce.number().int().min(0).max(9000).optional(),
+        maxPrizeUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+        bands: z.array(PackBandReq).min(1).max(12).optional(),
       })
       .strict()
       .optional(),
