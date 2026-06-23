@@ -61,12 +61,12 @@ function RosterBuilder({ config, onEnter, busy }) {
 }
 
 function Countdown({ closeAt }) {
-  const [, tick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const t = setInterval(() => tick((n) => n + 1), 1000);
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
-  const ms = new Date(closeAt).getTime() - Date.now();
+  const ms = new Date(closeAt).getTime() - now;
   if (ms <= 0) return <span>scoring…</span>;
   const h = Math.floor(ms / 3_600_000);
   const m = Math.floor((ms % 3_600_000) / 60_000);

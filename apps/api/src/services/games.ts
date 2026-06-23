@@ -7,7 +7,7 @@ import { getOrCreateSystemAccount, getOrCreateUserAccount, getBalance, postTxn }
 import { handleFor } from './handles.ts';
 import { publish } from './bus.ts';
 import { emitGameWinEvent } from './chat.ts';
-import { packRipConfig, setPokerConfig, gradeGambleConfig, theBreakConfig, priceDuelConfig, cardFantasyConfig, type PackBand } from './game-config.ts';
+import { packRipConfig, setPokerConfig, gradeGambleConfig, theBreakConfig, priceDuelConfig, cardFantasyConfig, draftArenaConfig, type PackBand } from './game-config.ts';
 import { commitServerSeed, freshClientSeed, weightedPick, rollInt } from './game-fairness.ts';
 
 /**
@@ -509,6 +509,7 @@ export function gamesView(): GamesView {
   const tb = theBreakConfig();
   const pd = priceDuelConfig();
   const cf = cardFantasyConfig();
+  const da = draftArenaConfig();
   return {
     enabled: config.gamesEnabled,
     games: [
@@ -567,6 +568,17 @@ export function gamesView(): GamesView {
         rosterSize: cf.rosterSize,
         windowHours: cf.windowHours,
         rakeBps: cf.rakeBps,
+      },
+      {
+        id: 'draft-arena',
+        name: 'Draft Arena',
+        type: 'skill',
+        enabled: config.gamesEnabled && da.enabled,
+        entryUsd: da.entryUsd,
+        spots: da.spots,
+        rosterSize: da.rosterSize,
+        windowHours: da.windowHours,
+        rakeBps: da.rakeBps,
       },
     ],
   };

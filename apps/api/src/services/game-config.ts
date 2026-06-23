@@ -315,12 +315,48 @@ function validateCardFantasy(value: unknown): CardFantasyConfig {
   };
 }
 
+// --- Draft Arena (docs/games-spec.md, game #7). A PvP snake draft: players join a lobby, pay an entry, and
+// submit a ranked wishlist over a shared, EXCLUSIVE pool of the top featured cards. On fill the seats are
+// fair-shuffled (committed seed) and a snake auto-draft assigns each player's best still-available wishlist
+// card (a card drafted by one is gone for the rest). Then the rosters battle on oracle %-move over a window;
+// top score takes the pot minus a rake. An unfilled lobby refunds after `lobbyTimeoutHours`.
+export interface DraftArenaConfig {
+  enabled: boolean;
+  entryUsd: number;
+  spots: number; // players per lobby
+  rosterSize: number; // cards drafted per player
+  poolSize: number; // size of the shared draftable pool (must be >= spots * rosterSize)
+  rakeBps: number; // the house cut of the pot (the edge)
+  windowHours: number; // how long the battle runs before it scores
+  lobbyTimeoutHours: number; // an unfilled lobby refunds after this
+  bigWinUsd: number; // a prize >= this fires a chat BIG WIN
+}
+const DEFAULT_DRAFT_ARENA: DraftArenaConfig = { enabled: false, entryUsd: 25, spots: 4, rosterSize: 5, poolSize: 40, rakeBps: 1000, windowHours: 168, lobbyTimeoutHours: 24, bigWinUsd: 250 };
+function validateDraftArena(value: unknown): DraftArenaConfig {
+  const v = (typeof value === 'string' ? JSON.parse(value) : value) as Partial<DraftArenaConfig>;
+  if (!v || typeof v !== 'object') throw new Error('draft-arena config must be an object');
+  const out: DraftArenaConfig = {
+    enabled: Boolean(v.enabled),
+    entryUsd: num(v.entryUsd, 'entry (USD)', 1, MAX_USD),
+    spots: num(v.spots, 'spots', 2, 12),
+    rosterSize: num(v.rosterSize, 'roster size', 2, 10),
+    poolSize: num(v.poolSize, 'pool size', 4, 200),
+    rakeBps: num(v.rakeBps, 'rake (bps)', 0, 5000),
+    windowHours: num(v.windowHours, 'window (hours)', 1, 24 * 30),
+    lobbyTimeoutHours: num(v.lobbyTimeoutHours, 'lobby timeout (hours)', 1, 24 * 30),
+    bigWinUsd: num(v.bigWinUsd, 'big-win threshold (USD)', 0, MAX_USD),
+  };
+  if (out.poolSize < out.spots * out.rosterSize) throw new Error('pool size must cover spots × roster size');
+  return out;
+}
+
 const packRip = liveKnob<PackRipConfig>('game_pack_rip', DEFAULT_PACK_RIP, validatePackRip, JSON.stringify);
 const setPoker = liveKnob<SetPokerConfig>('game_set_poker', DEFAULT_SET_POKER, validateSetPoker, JSON.stringify);
 const gradeGamble = liveKnob<GradeGambleConfig>('game_grade_gamble', DEFAULT_GRADE_GAMBLE, validateGradeGamble, JSON.stringify);
 const theBreak = liveKnob<TheBreakConfig>('game_the_break', DEFAULT_THE_BREAK, validateTheBreak, JSON.stringify);
 const priceDuel = liveKnob<PriceDuelConfig>('game_price_duel', DEFAULT_PRICE_DUEL, validatePriceDuel, JSON.stringify);
 const cardFantasy = liveKnob<CardFantasyConfig>('game_card_fantasy', DEFAULT_CARD_FANTASY, validateCardFantasy, JSON.stringify);
+const draftArena = liveKnob<DraftArenaConfig>('game_draft_arena', DEFAULT_DRAFT_ARENA, validateDraftArena, JSON.stringify);
 
 /** Current Pack Rip config (sync read on the play hot path). */
 export const packRipConfig = (): PackRipConfig => packRip.get();
@@ -334,10 +370,12 @@ export const theBreakConfig = (): TheBreakConfig => theBreak.get();
 export const priceDuelConfig = (): PriceDuelConfig => priceDuel.get();
 /** Current Card Fantasy config (sync read on the play hot path). */
 export const cardFantasyConfig = (): CardFantasyConfig => cardFantasy.get();
+/** Current Draft Arena config (sync read on the play hot path). */
+export const draftArenaConfig = (): DraftArenaConfig => draftArena.get();
 
 /** Load every games knob from settings (boot + periodic refresh, for multi-instance convergence). */
 export async function loadGameConfig(db: Db): Promise<void> {
-  await Promise.all([packRip.load(db), setPoker.load(db), gradeGamble.load(db), theBreak.load(db), priceDuel.load(db), cardFantasy.load(db)]);
+  await Promise.all([packRip.load(db), setPoker.load(db), gradeGamble.load(db), theBreak.load(db), priceDuel.load(db), cardFantasy.load(db), draftArena.load(db)]);
 }
 
 /** The full config + defaults + the GAME_POOL bankroll balance — for the admin Games view. */
@@ -348,7 +386,8 @@ export async function gamesAdminView(db: Db): Promise<{
   theBreak: TheBreakConfig;
   priceDuel: PriceDuelConfig;
   cardFantasy: CardFantasyConfig;
-  defaults: { packRip: PackRipConfig; setPoker: SetPokerConfig; gradeGamble: GradeGambleConfig; theBreak: TheBreakConfig; priceDuel: PriceDuelConfig; cardFantasy: CardFantasyConfig };
+  draftArena: DraftArenaConfig;
+  defaults: { packRip: PackRipConfig; setPoker: SetPokerConfig; gradeGamble: GradeGambleConfig; theBreak: TheBreakConfig; priceDuel: PriceDuelConfig; cardFantasy: CardFantasyConfig; draftArena: DraftArenaConfig };
   poolE6: string;
 }> {
   const acct = await getOrCreateSystemAccount(db, 'GAME_POOL');
@@ -359,7 +398,8 @@ export async function gamesAdminView(db: Db): Promise<{
     theBreak: theBreak.get(),
     priceDuel: priceDuel.get(),
     cardFantasy: cardFantasy.get(),
-    defaults: { packRip: packRip.default, setPoker: setPoker.default, gradeGamble: gradeGamble.default, theBreak: theBreak.default, priceDuel: priceDuel.default, cardFantasy: cardFantasy.default },
+    draftArena: draftArena.get(),
+    defaults: { packRip: packRip.default, setPoker: setPoker.default, gradeGamble: gradeGamble.default, theBreak: theBreak.default, priceDuel: priceDuel.default, cardFantasy: cardFantasy.default, draftArena: draftArena.default },
     poolE6: (await getBalance(db, acct)).toString(),
   };
 }
@@ -404,4 +444,11 @@ export async function setCardFantasyConfig(db: Db, patch: Partial<CardFantasyCon
   const merged = { ...cardFantasy.get(), ...patch };
   await cardFantasy.set(db, merged);
   return cardFantasy.get();
+}
+
+/** Apply a partial Draft Arena patch, then re-load. */
+export async function setDraftArenaConfig(db: Db, patch: Partial<DraftArenaConfig>): Promise<DraftArenaConfig> {
+  const merged = { ...draftArena.get(), ...patch };
+  await draftArena.set(db, merged);
+  return draftArena.get();
 }

@@ -14,6 +14,7 @@ import { loadDropConfig } from './services/drop-config.ts';
 import { loadGameConfig } from './services/game-config.ts';
 import { settleExpiredDuels } from './services/games-duel.ts';
 import { settleExpiredLeagues } from './services/games-fantasy.ts';
+import { settleExpiredArenas } from './services/games-arena.ts';
 import { loadWithdrawalAutoProcess, getWithdrawalAutoProcess } from './services/withdrawal-config.ts';
 import { tryAcquireLease, releaseLease } from './services/lease.ts';
 import { getDefaultClient } from './services/providers/tcgpricelookup.ts';
@@ -122,6 +123,7 @@ function startGamesSettleLoop(db: Db, log: FastifyBaseLogger) {
     try {
       await settleExpiredDuels(db);
       await settleExpiredLeagues(db);
+      await settleExpiredArenas(db);
     } catch (e) {
       log.error(e, 'games settle pass failed');
     } finally {

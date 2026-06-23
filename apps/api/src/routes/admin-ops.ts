@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, WithdrawalAutoProcessRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest, GameConfigRequest, GamePoolSeedRequest, BreakCancelRequest } from '@pokex/shared-types';
+import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, WithdrawalAutoProcessRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest, GameConfigRequest, GamePoolSeedRequest, BreakCancelRequest, ArenaCancelRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { rl } from './_ratelimit.ts';
@@ -18,11 +18,12 @@ import { listChatUsers } from '../services/chat.ts';
 import { chatConfigView, setChatThresholds } from '../services/chat-config.ts';
 import { dropConfigView, setDropConfig, getDropView } from '../services/drop-config.ts';
 import { totalTippedE6, recentTips } from '../services/drop.ts';
-import { gamesAdminView, setPackRipConfig, setSetPokerConfig, setGradeGambleConfig, setTheBreakConfig, setPriceDuelConfig, setCardFantasyConfig } from '../services/game-config.ts';
+import { gamesAdminView, setPackRipConfig, setSetPokerConfig, setGradeGambleConfig, setTheBreakConfig, setPriceDuelConfig, setCardFantasyConfig, setDraftArenaConfig } from '../services/game-config.ts';
 import { seedGamePool, packRipEv } from '../services/games.ts';
 import { setPokerEv } from '../services/games-setpoker.ts';
 import { gradeGambleEv } from '../services/games-grade.ts';
 import { breakEv, cancelBreak } from '../services/games-break.ts';
+import { cancelArena } from '../services/games-arena.ts';
 import { getUserPositions, liquidateAllEligible } from '../services/engine.ts';
 import { withdrawalAutoProcessView, setWithdrawalAutoProcess } from '../services/withdrawal-config.ts';
 import { getCustomerHistory } from '../services/history.ts';
@@ -244,10 +245,13 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     if (b.theBreak) await setTheBreakConfig(db, b.theBreak);
     if (b.priceDuel) await setPriceDuelConfig(db, b.priceDuel);
     if (b.cardFantasy) await setCardFantasyConfig(db, b.cardFantasy);
+    if (b.draftArena) await setDraftArenaConfig(db, b.draftArena);
     return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db), setPokerEv: await setPokerEv(db), gradeGambleEv: await gradeGambleEv(db), breakEv: await breakEv(db) };
   });
   // Cancel + refund an open case (the safety valve for a break that won't fill).
   app.post('/admin/games/break/cancel', rl(config.routeRateLimits.admin), async (req) => cancelBreak(await getDb(), BreakCancelRequest.parse(req.body).roundId));
+  // Cancel + refund an unfilled draft lobby (the worker also auto-cancels past the fill timeout).
+  app.post('/admin/games/arena/cancel', rl(config.routeRateLimits.admin), async (req) => cancelArena(await getDb(), ArenaCancelRequest.parse(req.body).roundId));
   // Seed the GAME_POOL bankroll (play-money: from FAUCET_SOURCE) so prizes can be paid out.
   app.post('/admin/games/seed-pool', rl(config.routeRateLimits.admin), async (req) => {
     const { amountUsd } = GamePoolSeedRequest.parse(req.body);

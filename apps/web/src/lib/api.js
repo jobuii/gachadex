@@ -199,6 +199,10 @@ export const duelCancel = (duelId) => req('/games/duel/cancel', { method: 'POST'
 export const getFantasyLeague = () => req('/games/fantasy', { auth: true }); // { league: LeagueView | null }
 export const getFantasyLeagueById = (leagueId) => req(`/games/fantasy/${leagueId}`, { auth: true });
 export const fantasyEnter = (marketIds, idempotencyKey) => req('/games/fantasy/enter', { method: 'POST', auth: true, body: { marketIds, idempotencyKey } });
+// Draft Arena
+export const getArena = () => req('/games/arena', { auth: true }); // { arena: ArenaView | null }
+export const getArenaById = (roundId) => req(`/games/arena/${roundId}`, { auth: true });
+export const arenaJoin = (wishlist, idempotencyKey) => req('/games/arena/join', { method: 'POST', auth: true, body: { wishlist, idempotencyKey } });
 
 // --- LP ---
 export const getPool = () => req('/lp/pool');
@@ -249,6 +253,7 @@ export const adminGetGamesConfig = (adminKey) => adminGet('/admin/games/config',
 export const adminSetGamesConfig = (body, adminKey) => adminReq('/admin/games/config', adminKey, body);
 export const adminSeedGamePool = (amountUsd, adminKey) => adminReq('/admin/games/seed-pool', adminKey, { amountUsd });
 export const adminCancelBreak = (roundId, adminKey) => adminReq('/admin/games/break/cancel', adminKey, { roundId });
+export const adminCancelArena = (roundId, adminKey) => adminReq('/admin/games/arena/cancel', adminKey, { roundId });
 // Treasury + insurance. /admin/treasury (full PoR view incl. insurance + allocatable surplus) is
 // real-funds-only; /admin/insurance (balance) + the fee-allocation moves work in play-money too.
 export const adminGetTreasury = (adminKey) => adminGet('/admin/treasury', adminKey);

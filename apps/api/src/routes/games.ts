@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { ClientSeedRequest, PackRipOpenRequest, PrizeSellRequest, SetPokerDealRequest, SetPokerSwapRequest, SetPokerSettleRequest, GradeOpenRequest, BreakJoinRequest, DuelJoinRequest, DuelCancelRequest, FantasyEnterRequest } from '@pokex/shared-types';
+import { ClientSeedRequest, PackRipOpenRequest, PrizeSellRequest, SetPokerDealRequest, SetPokerSwapRequest, SetPokerSettleRequest, GradeOpenRequest, BreakJoinRequest, DuelJoinRequest, DuelCancelRequest, FantasyEnterRequest, ArenaJoinRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { authenticate } from '../plugins/auth.ts';
@@ -10,6 +10,7 @@ import { gradeOpen } from '../services/games-grade.ts';
 import { currentBreak, getBreakRound, joinBreak } from '../services/games-break.ts';
 import { joinOrCreateDuel, myDuel, getDuel, cancelDuel } from '../services/games-duel.ts';
 import { currentLeague, getLeague, enterFantasy } from '../services/games-fantasy.ts';
+import { currentArena, getArena, joinArena } from '../services/games-arena.ts';
 
 const TRADE = { preHandler: authenticate, config: { scope: 'trade' as const } };
 
@@ -98,5 +99,13 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
   app.post('/games/fantasy/enter', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
     const { marketIds, idempotencyKey } = FantasyEnterRequest.parse(req.body);
     return enterFantasy(await getDb(), req.userId!, marketIds, idempotencyKey);
+  });
+
+  // Draft Arena — the open lobby (+ pool + your entry), a specific arena to poll, and join with a wishlist.
+  app.get('/games/arena', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => ({ arena: await currentArena(await getDb(), req.userId!) }));
+  app.get('/games/arena/:roundId', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => ({ arena: await getArena(await getDb(), req.userId!, (req.params as { roundId: string }).roundId) }));
+  app.post('/games/arena/join', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
+    const { wishlist, idempotencyKey } = ArenaJoinRequest.parse(req.body);
+    return joinArena(await getDb(), req.userId!, wishlist, idempotencyKey);
   });
 }

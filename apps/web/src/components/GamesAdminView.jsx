@@ -58,6 +58,17 @@ export function GamesAdminView({ adminKey }) {
   const [cfRake, setCfRake] = useState('');
   const [cfMin, setCfMin] = useState('');
   const [cfBigWin, setCfBigWin] = useState('');
+  // Draft Arena drafts
+  const [daEnabled, setDaEnabled] = useState(false);
+  const [daEntry, setDaEntry] = useState('');
+  const [daSpots, setDaSpots] = useState('');
+  const [daRoster, setDaRoster] = useState('');
+  const [daPool, setDaPool] = useState('');
+  const [daRake, setDaRake] = useState('');
+  const [daWindow, setDaWindow] = useState('');
+  const [daTimeout, setDaTimeout] = useState('');
+  const [daBigWin, setDaBigWin] = useState('');
+  const [daCancelId, setDaCancelId] = useState('');
 
   const load = useCallback(() => {
     return api.adminGetGamesConfig(adminKey).then((v) => {
@@ -107,6 +118,16 @@ export function GamesAdminView({ adminKey }) {
       setCfRake((cf.rakeBps / 100).toString());
       setCfMin(String(cf.minEntries));
       setCfBigWin(String(cf.bigWinUsd));
+      const da = v.draftArena;
+      setDaEnabled(da.enabled);
+      setDaEntry(String(da.entryUsd));
+      setDaSpots(String(da.spots));
+      setDaRoster(String(da.rosterSize));
+      setDaPool(String(da.poolSize));
+      setDaRake((da.rakeBps / 100).toString());
+      setDaWindow(String(da.windowHours));
+      setDaTimeout(String(da.lobbyTimeoutHours));
+      setDaBigWin(String(da.bigWinUsd));
     }).catch((e) => setErr(e.message));
   }, [adminKey]);
 
@@ -237,6 +258,26 @@ export function GamesAdminView({ adminKey }) {
     };
     act(() => api.adminSetGamesConfig({ cardFantasy: patch }, adminKey), 'Saved. (Restart the API if a value doesn’t apply within ~30s.)');
   };
+
+  const saveDraftArena = () => {
+    const patch = {
+      enabled: daEnabled,
+      entryUsd: parseInt(daEntry, 10),
+      spots: parseInt(daSpots, 10),
+      rosterSize: parseInt(daRoster, 10),
+      poolSize: parseInt(daPool, 10),
+      rakeBps: Math.round(parseFloat(daRake) * 100),
+      windowHours: parseInt(daWindow, 10),
+      lobbyTimeoutHours: parseInt(daTimeout, 10),
+      bigWinUsd: parseInt(daBigWin, 10),
+    };
+    act(() => api.adminSetGamesConfig({ draftArena: patch }, adminKey), 'Saved. (Restart the API if a value doesn’t apply within ~30s.)');
+  };
+
+  const cancelArena = () => act(
+    async () => { const r = await api.adminCancelArena(daCancelId.trim(), adminKey); setDaCancelId(''); return r; },
+    (r) => `Lobby cancelled — ${r.refunded} player(s) refunded.`,
+  );
 
   const seed = () => act(
     async () => { const r = await api.adminSeedGamePool(parseFloat(seedAmt), adminKey); setSeedAmt(''); return r; },
@@ -432,6 +473,29 @@ export function GamesAdminView({ adminKey }) {
         <label className="field-label"><span>Big-win threshold (USD)</span><input type="number" value={cfBigWin} onChange={(e) => setCfBigWin(e.target.value)} /></label>
       </div>
       <button className="btn-primary" disabled={busy} onClick={saveCardFantasy}>Save Card Fantasy config</button>
+
+      <h3 style={{ marginTop: '1.5rem' }}>Draft Arena</h3>
+      <p className="muted">PvP snake draft — the house edge is the rake on the pot. Pool size must cover spots × roster. An unfilled lobby auto-refunds after the timeout.</p>
+      <label className="games-admin-row">
+        <input type="checkbox" checked={daEnabled} onChange={(e) => setDaEnabled(e.target.checked)} /> Enabled
+      </label>
+      <div className="games-admin-fields">
+        <label className="field-label"><span>Entry (USD)</span><input type="number" value={daEntry} onChange={(e) => setDaEntry(e.target.value)} /></label>
+        <label className="field-label"><span>Players (spots)</span><input type="number" value={daSpots} onChange={(e) => setDaSpots(e.target.value)} /></label>
+        <label className="field-label"><span>Roster size</span><input type="number" value={daRoster} onChange={(e) => setDaRoster(e.target.value)} /></label>
+        <label className="field-label"><span>Pool size</span><input type="number" value={daPool} onChange={(e) => setDaPool(e.target.value)} /></label>
+        <label className="field-label"><span>Rake (%) — the edge</span><input type="number" step="0.1" value={daRake} onChange={(e) => setDaRake(e.target.value)} /></label>
+        <label className="field-label"><span>Window (hours)</span><input type="number" value={daWindow} onChange={(e) => setDaWindow(e.target.value)} /></label>
+        <label className="field-label"><span>Lobby timeout (hours)</span><input type="number" value={daTimeout} onChange={(e) => setDaTimeout(e.target.value)} /></label>
+        <label className="field-label"><span>Big-win threshold (USD)</span><input type="number" value={daBigWin} onChange={(e) => setDaBigWin(e.target.value)} /></label>
+      </div>
+      <button className="btn-primary" disabled={busy} onClick={saveDraftArena}>Save Draft Arena config</button>
+      <div className="games-admin-fields" style={{ marginTop: '0.8rem' }}>
+        <label className="field-label" style={{ flex: 2 }}><span>Cancel + refund an unfilled lobby (round id)</span>
+          <input value={daCancelId} onChange={(e) => setDaCancelId(e.target.value)} placeholder="round id" />
+        </label>
+        <button className="btn-ghost" disabled={busy || !daCancelId.trim()} onClick={cancelArena} style={{ alignSelf: 'flex-end' }}>Cancel lobby</button>
+      </div>
 
       {msg && <div className="ref-msg up">{msg}</div>}
       {err && <div className="order-error">{err}</div>}

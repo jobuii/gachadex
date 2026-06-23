@@ -721,6 +721,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_setpoker_open_hand ON game_plays(user_id) W
 CREATE INDEX IF NOT EXISTS idx_game_plays_round ON game_plays(round_id) WHERE round_id IS NOT NULL;
 -- Card Fantasy: at most one roster per user per league (multi-entry is a v2 feature).
 CREATE UNIQUE INDEX IF NOT EXISTS uq_fantasy_one_entry ON game_plays(round_id, user_id) WHERE game_type = 'card-fantasy';
+-- Draft Arena: at most one seat per user per lobby.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_arena_one_entry ON game_plays(round_id, user_id) WHERE game_type = 'draft-arena';
 -- At most one OPEN round per game type — backstops the race between two concurrent The Break joins that
 -- both find no open case and create one; the second create then fails this constraint and rolls back.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_open_round_per_game ON game_rounds(game_type) WHERE status = 'open';

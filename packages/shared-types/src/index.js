@@ -362,6 +362,15 @@ export const FantasyEnterRequest = z.object({
   idempotencyKey: z.string().min(8).max(128),
 });
 
+// Draft Arena: join the open lobby with a ranked wishlist over the pool / admin cancel an unfilled lobby.
+export const ArenaJoinRequest = z.object({
+  wishlist: z.array(z.string().min(1).max(128)).min(2).max(200),
+  idempotencyKey: z.string().min(8).max(128),
+});
+export const ArenaCancelRequest = z.object({
+  roundId: z.string().min(1).max(128),
+});
+
 // Live-tunable games config (admin Games view). Partial — only provided keys change. Bounds mirror
 // game-config.ts; `tiers` nests a per-tier weighted value-band table the rip draws from.
 const PackBandReq = z.object({
@@ -444,6 +453,20 @@ export const GameConfigRequest = z
         windowHours: z.coerce.number().int().min(1).max(720).optional(),
         rakeBps: z.coerce.number().int().min(0).max(5000).optional(),
         minEntries: z.coerce.number().int().min(2).max(1000).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+      })
+      .strict()
+      .optional(),
+    draftArena: z
+      .object({
+        enabled: z.boolean().optional(),
+        entryUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        spots: z.coerce.number().int().min(2).max(12).optional(),
+        rosterSize: z.coerce.number().int().min(2).max(10).optional(),
+        poolSize: z.coerce.number().int().min(4).max(200).optional(),
+        rakeBps: z.coerce.number().int().min(0).max(5000).optional(),
+        windowHours: z.coerce.number().int().min(1).max(720).optional(),
+        lobbyTimeoutHours: z.coerce.number().int().min(1).max(720).optional(),
         bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
       })
       .strict()
