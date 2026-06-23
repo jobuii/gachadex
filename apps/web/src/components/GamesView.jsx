@@ -82,6 +82,7 @@ export function GamesView({ onTradeMarket }) {
                     <span className="game-art" aria-hidden="true">
                       <span className="game-art-deck"><i /><i /><i /></span>
                       <span className="game-art-icon">{g.icon}</span>
+                      <img className="game-art-img" src={`/games/${g.id}.webp`} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                     </span>
                     <span className="game-foot">
                       <span className="game-foot-main">
