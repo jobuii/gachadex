@@ -27,6 +27,13 @@ Three independent reviews grounded against the real rare.win + GDEX code. Surviv
 - **Smaller:** `payWith` missing from §9's open body; inventory INSERT not idempotent; "saved withdraw address"
   doesn't exist in GDEX (it's per-request + step-up); the signer must be a port of rare.win's `signBase64Tx`;
   machine-price drift; buyback-unavailable path; held-forever custody. All fixed below.
+- **Cross-checked vs the other session's `tradex-clone/docs/pack-opening-flow-handoff.md`** (2026-06-24) — it
+  confirms our spine (custodial · pay≠deliver · memo-as-receipt · idempotent deliver + reconciler) and added:
+  **invariant #6** (the live `generatePack` build call *is* the stock gate — no cached stock pre-check; generate
+  the tx fresh right before submit, never reuse; map "sold out" → a no-funds-taken 409); **paying mutations get 0
+  retries** (only the idempotent `openPack` retries); the **gas-relay fee-payer** pattern (custodial wallets hold
+  no SOL — the hot/treasury wallet pays gas); and a note on why GDEX gates on the **off-chain ledger** (pooled
+  funds) where the handoff's per-user-on-chain model gates on chain. Folded into §5/§8/§9/§16.
 
 ## 1. Goal
 
@@ -91,7 +98,10 @@ Shared: the Games shell, live-feed/chat, the trade→perp hook. Keep both.
 ## 5. Architecture (custodial — consistent with GDEX)
 
 - **Off-chain ledger is the spend gate.** Spendable USDC = `USER_COLLATERAL` (backed by deposited funds swept to
-  the hot wallet). A USDC pack debits `USER_COLLATERAL` (insufficient balance → blocked).
+  the hot wallet). A USDC pack debits `USER_COLLATERAL` (insufficient balance → blocked). *(NB: this deliberately
+  differs from the handoff's "chain is the gate, ledger is a mirror" — that holds when each user has their own
+  on-chain wallet; GDEX pools deposits into the hot wallet and has no per-user on-chain USDC to check, so the
+  ledger is the authority. Don't "fix" this to match the handoff.)*
 - **Per-user NFT-custody wallet — a DEDICATED, un-swept derivation path** (e.g. `m/44'/501'/{index}'/1'`, distinct
   from the `…/0'` deposit path), **NOT enumerated by `scanDeposits`**. *This is mandatory, not optional:* the live
   deposit scanner credits any USDC delta on any deposit address as a fresh `USER_COLLATERAL` deposit and sweeps its
@@ -100,9 +110,11 @@ Shared: the Games shell, live-feed/chat, the trade→perp hook. Keep both.
   user sells or withdraws.
 - **Paying CC — primary model: per-user keypair signs + JIT funding.** CC binds delivery to the signer (rare.win
   signs `generatePack` with the user's own wallet, which is payer + recipient + balance). GDEX's per-user wallet is
-  empty (or dedicated/un-swept), so on open: the **hot wallet transfers the pack price (+ a little SOL for fees)**
-  into the user's NFT-custody wallet, then GDEX signs `generatePack` with **that** keypair → CC delivers the NFT
-  there. *Optimization (verify on the live test, §2.6):* if CC supports `altPlayerAddress` (payer ≠ recipient), pay
+  empty (or dedicated/un-swept), so on open: the **hot wallet transfers the pack price** into the user's NFT-custody
+  wallet, then GDEX signs `generatePack` with **that** keypair → CC delivers the NFT there. Use the
+  **hot/treasury wallet as the fee-payer** (the gas-relay pattern from the handoff — custodial wallets hold no SOL)
+  on every tx we control (the buyback + the pNFT withdraw); for the CC-built payment tx, confirm on the live test
+  whether CC forces the signer to cover gas (if so, relay a little SOL into the wallet too). *Optimization (verify on the live test, §2.6):* if CC supports `altPlayerAddress` (payer ≠ recipient), pay
   straight from the hot wallet and skip the JIT funding tx.
 - **Signer:** port rare.win's `signBase64Tx` (`collectorcrypt.ts:256`) — it deserializes and signs **both**
   `VersionedTransaction` and legacy `Transaction`. GDEX's `custody/solana.ts` only signs txs it builds itself, so
@@ -242,8 +254,9 @@ New USDC ledger account: **`GACHA_REWARDS_BUDGET`** (funds token-bought packs). 
 ## 8. Backend modules
 
 - `services/providers/collectorcrypt.ts` — CC client (`getMachines`/`getNfts`/`getAllWinners`/`generatePack`/
-  `submitTransaction`/`openPack`/`getPackStatus`/`buyback`/`buybackAvailable`); 15s timeout, 2 retries on GETs;
-  `$ → micro-USDC` on the way in.
+  `submitTransaction`/`openPack`/`getPackStatus`/`buyback`/`buybackAvailable`); 15s timeout; **2 retries on
+  idempotent GETs, 0 retries on paying mutations (`generatePack`/`submitTransaction`) — never double-pay**;
+  `openPack` is idempotent so it retries on `WAITING_FOR_WEBHOOK`; `$ → micro-USDC` on the way in.
 - `services/custody/gacha-chain.ts` — **port of rare.win `signBase64Tx`** (versioned + legacy) + `broadcast` +
   `sigStatus`; the per-user dedicated-path keypair derivation + JIT funding; and **`transferNft(fromKeypair, mint,
   dest)`** — pNFT-aware (Token Metadata transfer), the heaviest net-new piece (P2; greenfield — rare.win has no
@@ -260,13 +273,19 @@ New USDC ledger account: **`GACHA_REWARDS_BUDGET`** (funds token-bought packs). 
 1. Gate flag + auth (`trade` scope) + rate limit. `INSERT gacha_pack_opens(... status=pending)`
    `ON CONFLICT (user_id, idempotency_key) DO NOTHING` → dup returns the stored result.
 2. Read the live machine price (authoritative). If it drifted beyond a small tolerance from `expectedPriceE6`,
-   reject with the new price (no surprise charge).
+   reject with the new price (no surprise charge). **No cached-stock pre-check** — `generatePack` (step 4) is the
+   authoritative real-time stock gate; a snapshot stock field is staler and would only false-block a valid open
+   after a restock.
 3. **Charge by `payWith`:** `usdc` → check `USER_COLLATERAL ≥ price`, post `GACHA_PACK_BUY`. `tokens` → check
    `TOKENS_ENABLED`, debit `token_balances ≥ tokenPrice` (`FOR UPDATE`), post `PACK_BUY_TOKENS_FUND`
    (`GACHA_REWARDS_BUDGET -price / TREASURY_USDC +price`). Set `status=paid`.
 4. JIT-fund the user NFT-custody wallet from the hot wallet (skip if `altPlayerAddress` is confirmed). Build the
-   CC payment via `generatePack`, store `cc_memo`, sign with the user keypair → `submitTransaction` → store
-   `payment_sig`.
+   CC payment via `generatePack` **fresh, immediately before submit (never cache/reuse a built tx — a stale tx
+   submitted after the machine emptied pays for nothing)**; map CC's "sold out / machine empty" error → a
+   **`409 "sold out — no funds taken"`** (reachable only here, pre-payment, since `generatePack` runs before the
+   never-throwing pay step). Store `cc_memo`, sign with the user keypair → `submitTransaction` → store
+   `payment_sig`. *(Residual: stock depleting between this fresh generate and submit → pay-and-fail → handled by
+   the reconciler + CC refund in step 7, not a pre-check.)*
 5. `openPack(memo)` + retry loop. Branch on the **buyback signal**, not the requested turbo flag:
    - returns an `nft_address` (kept — incl. a turbo Rare/Epic): DAS-enrich, `INSERT gacha_nft_inventory(...)`
      **`ON CONFLICT (mint) DO NOTHING`** (idempotent vs concurrent reveal), `status=opened`.
@@ -401,6 +420,9 @@ Visual: GDEX retro/arcade skin + cyan/violet/pink brand; not a pixel clone of CC
 - Open idempotent on `(user_id, idempotency_key)` + `cc_memo`; inventory INSERT `ON CONFLICT (mint) DO NOTHING`.
 - Every `failed`/`refunded` buy posts exactly one `GACHA_REFUND` (idempotent on `open_id`); no silent loss of P.
 - A row with `payment_sig` is never auto-failed.
+- Stock is gated by the live `generatePack` call (no cached pre-check); the payment tx is generated **fresh
+  immediately before submit** and never reused; "sold out" → a no-funds-taken 409. Paying mutations
+  (`generatePack`/`submitTransaction`) use **0 retries**; only the idempotent `openPack` retries.
 - Sell-back/withdraw/convert lock the inventory row `FOR UPDATE`, check `status='held'`; sell-back settles on the
   **received** B; the 5%/10% split floors the user share.
 - pNFT transfer-out persists the sig before broadcast; recovers in-flight on boot.
