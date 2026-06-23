@@ -25,7 +25,8 @@ export { isListable, MIN_LIST_PRICE_USD } from './tcgpricelookup.ts';
 // --- search cache: (game, q) -> provider results. Bounded; misses evict the oldest entry. ---
 const SEARCH_TTL_MS = 60 * 60 * 1000;
 const SEARCH_CACHE_MAX = 500;
-const SEARCH_PAGE = 20;
+const SEARCH_PAGE = 20; // results shown to the user (highest-priced first)
+const SEARCH_FETCH = 100; // deep provider page so the price sort can surface a high-value match that tcgpl's relevance order buries past the display page
 const searchCache = new Map<string, { at: number; cards: TplCard[] }>();
 
 /** Test hook — the cache is process-wide module state. */
@@ -58,16 +59,22 @@ export async function searchCatalog(
   if (hit && Date.now() - hit.at < SEARCH_TTL_MS) {
     cards = hit.cards;
   } else {
-    cards = (await client.searchCards({ q: q.trim(), game, limit: SEARCH_PAGE }, 'search')).data;
+    // Fetch a deep page and sort by raw USD price DESC: tcgpl returns by relevance (cheap commons first)
+    // with no sort option, so a high-value card (e.g. a $170 promo) is buried under junk and cut off the
+    // 20-card display page. Sorting once here makes the most valuable matches show first.
+    cards = (await client.searchCards({ q: q.trim(), game, limit: SEARCH_FETCH }, 'search')).data;
+    cards.sort((a, b) => rawPriceUsd(b) - rawPriceUsd(a));
     searchCache.delete(key);
     searchCache.set(key, { at: Date.now(), cards });
     if (searchCache.size > SEARCH_CACHE_MAX) searchCache.delete(searchCache.keys().next().value!);
   }
 
+  // Show the highest-priced page; join existing markets only for what's shown.
+  const top = cards.slice(0, SEARCH_PAGE);
   // Existing markets (never cached): by provider card id, or by tcgplayer product id — a printing
   // variant of an already-listed physical card must offer "trade the existing market", not a twin.
-  const ids = cards.map((c) => c.id);
-  const tids = [...new Set(cards.map(tplTcgplayerId).filter((t): t is number => t != null))].map(String);
+  const ids = top.map((c) => c.id);
+  const tids = [...new Set(top.map(tplTcgplayerId).filter((t): t is number => t != null))].map(String);
   const existing = ids.length
     ? await db.query<{ id: string; provider_card_id: string | null; tid: string | null }>(
         `SELECT id, provider_card_id, tcgplayer_id::text AS tid FROM markets
@@ -78,7 +85,7 @@ export async function searchCatalog(
   const byProv = new Map(existing.rows.filter((r) => r.provider_card_id).map((r) => [r.provider_card_id!, r.id]));
   const byTid = new Map(existing.rows.filter((r) => r.tid).map((r) => [r.tid!, r.id]));
 
-  return cards.map((c) => {
+  return top.map((c) => {
     const tid = tplTcgplayerId(c);
     return {
       providerCardId: c.id,
