@@ -7,6 +7,9 @@ import * as api from '../lib/api.js';
 // Renders inside the AdminPanel (admin-key prop). Percentages in the UI; bps over the wire.
 const short = (a) => shortenPubkey(a) || '—';
 const usd = (e6) => formatUsd(BigInt(e6 ?? 0));
+// The shareable referral link the affiliate hands out — `?ref=CODE` is captured on app load and redeemed
+// at sign-in. Built off the current origin so it's right on prod, preview, or localhost without a hardcode.
+const refLink = (code) => `${window.location.origin}/?ref=${code}`;
 const EMPTY = { pubkey: '', code: '', cashbackPct: '', discountPct: '', label: '' };
 
 export function AffiliatesView({ adminKey }) {
@@ -140,7 +143,22 @@ export function AffiliatesView({ adminKey }) {
           <tbody>
             {rows.map((a) => (
               <tr key={a.userId} style={{ opacity: a.active ? 1 : 0.5 }}>
-                <td>{a.code ?? '—'}</td>
+                <td>
+                  {a.code ? (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', whiteSpace: 'nowrap' }}>
+                      {a.code}
+                      <button
+                        className="btn-ghost sm"
+                        title={`Copy referral link — ${refLink(a.code)}`}
+                        onClick={() => copy(refLink(a.code))}
+                      >
+                        {copied === refLink(a.code) ? 'copied!' : 'copy link'}
+                      </button>
+                    </span>
+                  ) : (
+                    '—'
+                  )}
+                </td>
                 <td className="addr" title={a.pubkey} onClick={() => copy(a.pubkey)}>{copied === a.pubkey ? 'copied!' : short(a.pubkey)}</td>
                 <td className="muted">{a.label || '—'}</td>
                 <td className="num">{a.cashbackBps / 100}%</td>
