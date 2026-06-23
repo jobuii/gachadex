@@ -1,10 +1,17 @@
-# Price discovery — current approach (as of 2026-06-15)
+# Price discovery — ① original tcgpricelookup approach (historical, 2026-06-15)
 
-How a card's tradeable price is produced today, end to end: from raw provider signals → a fair-value
-USD number → an accepted oracle print → the synthetic **mark** that positions trade and liquidate
-against. This documents the **current** mechanism only (no proposed changes).
+> **Reading this doc (updated 2026-06-23).** It is a chronological record of three pricing approaches,
+> oldest to newest. **The live production system today is the third — ③ Scrydex-primary**
+> (`ORACLE_PRIMARY=scrydex`, live since 2026-06-20). This first section (①) and ② median-of-three are
+> kept as **history**. A **proposed enhancement** to the live approach — two new sanity checks
+> (broken-rung + cross-feed outlier guards) — is the **final section** (④).
 
-Provider feed selected by `ORACLE_PRIMARY` (live = `tcgpricelookup`); base
+How a card's tradeable price **was** produced under the original tcgpricelookup feed, end to end: from raw
+provider signals → a fair-value USD number → an accepted oracle print → the synthetic **mark** that
+positions trade and liquidate against. **This section is historical** — it was the live mechanism through
+mid-June 2026, since replaced (see ② and ③ below).
+
+Provider feed was selected by `ORACLE_PRIMARY` (`tcgpricelookup` at the time; **now `scrydex`**); base
 `https://api.tcgpricelookup.com/v1`. Oracle re-pulls every `ORACLE_REFRESH_MS` (default **6h**;
 source updates ~daily).
 
@@ -173,9 +180,12 @@ TCGplayer $10.50, eBay 1d $10.00 / 7d $10.20 / 30d $9.80:
 
 ---
 
-# New approach — median of three (implemented + live 2026-06-15)
+# ② Median-of-three (historical — live 2026-06-15, superseded by Scrydex-primary 2026-06-20)
 
-**Status:** LIVE on master (merge 6ebf925). Replaces the ±25%-clamp approach above. Risk gates (per-card
+**Status:** **Superseded** (was live on master, merge 6ebf925, from 2026-06-15 → replaced by ③
+Scrydex-primary on 2026-06-20; the median's 2-parts-eBay blend let one eBay value outvote the correct
+TCGplayer price — see ③ "Why the median-of-three is being replaced"). Kept here as historical record.
+Replaced the ±25%-clamp approach above. Risk gates (per-card
 max-leverage, ADL, insurance fund, OI caps) are assumed **ON in production**, so gap risk is handled by
 the **engine** — the price feed's only job is to report the true price. NOTE: dedup is **hybrid** — a
 print lands on a new provider timestamp OR a changed value (see the Dedup section below; superseded the
@@ -333,10 +343,14 @@ schema change.** Reversible by reverting the two functions.
 
 ---
 
-# Next approach — Scrydex-primary pricing (Option B, decided 2026-06-17)
+# ③ Scrydex-primary pricing (Option B) — LIVE in production
 
-**Status:** DECIDED, not yet built. Supersedes the median-of-three above. Full implementation spec:
-`docs/scrydex-pricing-build-spec.md`. Evaluation that led here: `docs/scrydex-evaluation.md`.
+**Status:** **LIVE.** `ORACLE_PRIMARY=scrydex` since 2026-06-20 — this is the mechanism that prices cards
+today (re-verified against the live prod DB 2026-06-23). Decided 2026-06-17, built/merged/deployed through
+mid-June, cutover 2026-06-20; Pokémon graded moved to the Scrydex ladder 2026-06-22. The §6 confidence
+tree and §6a mark guard described below are the **live** behaviour. Supersedes the median-of-three above.
+Full implementation spec: `docs/scrydex-pricing-build-spec.md`. Evaluation that led here:
+`docs/scrydex-evaluation.md`. **A known gap in this approach + the fix in flight: see ④ at the end.**
 
 ## Why the median-of-three is being replaced
 
@@ -402,3 +416,199 @@ TCGplayer, e.g. Charizard δ tcgpl $599 vs Scrydex $4,000) and adds trends, seal
 Option B prices every card correctly and keeps the self-consistent ones tradeable, while still flagging
 the genuine spike. (Options A and C — simpler binary gate / move-hold — are recorded in
 `docs/scrydex-evaluation.md` §10–12 and the build spec; B was chosen for fewest false `reduce_only`.)
+
+---
+
+# ④ Proposed enhancement — broken-rung detection + condition-aligned cross-feed (proposed 2026-06-23, revised after QA)
+
+**Status:** **PROPOSED, not built.** A targeted fix to the LIVE Scrydex-primary approach (③), not a new
+approach. **No schema change**; three functions touched (`extractRaw`, `combinePrice`, `tplCrossCheck`),
+behind the existing `ORACLE_PRIMARY=scrydex` path. Reversible by reverting them.
+
+> **Revised after an adversarial QA pass (2026-06-23).** The first draft paired the broken-rung check with a
+> *cross-feed eBay-median override*. Two independent reviews + a code trace rejected that override: it
+> (a) re-created the staleness bug in the **down** direction (it could pull a genuine fresh crash back up to a
+> stale pair), (b) promoted eBay to a price-setter behind a "pair agrees" check that is really one tcgpl feed
+> agreeing with itself (`tcgpricelookup.ts:250-251` — tcgpl market + eBay come from the same feed row), and
+> (c) leaned on an arbitrary `0.7×` threshold. The QA also surfaced a **standing** defect: the cross-feed is
+> **condition-blind** (fix #3 below). This revision drops the override and instead routes a broken rung to
+> the **existing** tcgpl-market fallback — no new price source, no eBay-into-price.
+
+## The gap it fixes
+
+Under ③, the price anchor is **Scrydex's TCGplayer market for our card's variant, best condition first**
+(`extractRaw`: walk `NM → LP → MP`, take the first rung with `market > 0`), and `combinePrice` uses that
+Scrydex value **whenever it is > 0** — tcgpl is only a fallback for when Scrydex is *missing*, never a
+sanity-check on a present-but-wrong Scrydex value. So a single broken Scrydex rung becomes the mark.
+
+**Live evidence — Umbreon ex #112/115** (probed against both APIs 2026-06-23):
+
+| Condition | Scrydex market | tcgpl market | tcgpl eBay 1d |
+|---|---|---|---|
+| **Near Mint** | **$1** 🚩 | **$899.99** | **$800** |
+| Lightly Played | $500.00 | $500.00 | $592 |
+| Moderately Played | $500.66 | $500.99 | — |
+| Heavily Played | $334.98 | $301.64 | $200 |
+| Damaged | $275.12 | $249.68 | $300 |
+
+The two feeds agree within a few percent on **every condition except NM**, where Scrydex returns a broken
+placeholder **$1**. That is internally impossible — NM (best grade) can never be worth less than LP — yet
+`extractRaw` takes it (first rung > 0) and never sees the sane $500 LP below it. `combinePrice` then sets
+the candidate to $1. The §6a mark guard correctly **refuses** the uncorroborated crash (it never let the
+mark hit $1) — the last *trusted* mark, **$600 from 2026-06-19**, still stands because the unchanged broken
+print is deduped each pass (same timestamp + same value ⇒ no new mark computation), so the mark sits at a
+stale $600 while the card is really worth **~$900** (tcgpl NM $899.99 / eBay $800). (Mechanism note: the
+guard *clamps* an uncorroborated move to ≤25%/update rather than hard-freezing; the observed freeze here is
+the dedup skip, not the clamp creeping — see §6a.)
+
+**Scale (live DB, visible EN board, 2026-06-23):** of 101 `reduce_only` cards carrying *both* feeds,
+**60 have Scrydex disagreeing with tcgpl by >50%**, 37 by >2×, 10 by >5× (the $1-class). `reduce_only` +
+"price stabilizing" together cover ~38% of the visible Pokémon/MTG boards and ~56% of One Piece — most of
+it traceable to this anchor-trusts-a-broken-Scrydex-rung defect.
+
+## In plain English — the fix
+
+Three changes, all using mechanisms that **already exist** — no new price source, no eBay in the price:
+
+1. **Spot the broken rung.** A real price can't sit below its own quoted `low`, and a better grade can't be
+   worth a fraction of a worse one. Flag a Scrydex rung as broken when its `market` is **below its own
+   `low`**, or — when Scrydex gives no `low`/`high` band — when it sits **far below the card's best rung**.
+   (Umbreon NM $1 has no band and is 0.2% of the $500 rungs → broken.)
+2. **A broken best rung ⇒ ignore Scrydex and use the fallback we already have.** `combinePrice` *already*
+   uses the tcgpl market when Scrydex is missing. Treat a broken rung as "missing" and let that same fallback
+   supply the price — the tcgpl **near-mint** market, the right grade. (Umbreon → tcgpl NM $899.99.) Only if
+   there's no tcgpl price do we drop to Scrydex's next sane condition.
+3. **Compare like-for-like.** The confidence check today reads tcgpl's *near-mint* price no matter which
+   grade priced the card, so an LP-priced card gets wrongly compared to an NM cross-price and flagged. Read
+   the cross-check at the **same condition** as the anchor, so corroboration is real.
+
+eBay stays a confidence cross-check only, exactly as in ③. The mark guard is untouched — it just receives a
+sane, corroborated candidate, so the mark un-sticks.
+
+## Current flow (③, today)
+
+```
+① extractRaw     walk NM→LP→MP, take first market>0        ⚠ grabs broken NM=$1, never sees LP=$500
+② combinePrice   price = Scrydex mkt (FX'd) if >0  else tcgpl mkt  else 0   ⚠ Scrydex wins even when wrong → $1
+③ tplCrossCheck  reads tcgpl's NM grade regardless of the anchor grade      ⚠ condition-blind
+④ scoreConfidence (§6 tree) → corroborator present but disagrees → reduce_only   ✓ correct call, bad price
+⑤ mark guard (§6a) → refuses the un-corroborated $1; the unchanged print is deduped → mark stays $600
+RESULT: candidate $1 (wrong) · reduce_only · mark stuck $600 (stale)
+```
+
+## Proposed flow (③ + the three ✚ fixes)
+
+```
+① extractRaw ✚ broken-rung check   reject market < its own low, OR (no band) market far below the best rung
+                                   → Umbreon NM $1 rejected ⇒ Scrydex has no usable NM
+② combinePrice ✚ broken ⇒ "missing"   a dropped best-grade rung falls through the EXISTING tail:
+     Scrydex best sane rung → tcgpl market → next Scrydex condition → pin → keep-last/halt
+     → Umbreon ⇒ tcgpl NM $899.99   (no median, no eBay-in-price)
+③ tplCrossCheck ✚ condition-aligned   read tcgpl at the anchor's grade (NM) → tcgpMarket $899.99, eBay $800
+④ scoreConfidence (unchanged) → eBay $800 in-band of $899.99 → tradeable
+⑤ mark guard (unchanged) → the move IS eBay-corroborated → adopts it → mark un-sticks to ~$900
+RESULT: candidate ~$900 (correct NM) · tradeable · mark updates to ~$900
+```
+
+## The three fixes, precisely
+
+**1. Broken-rung detection (`extractRaw`, `scrydex.ts:210`).** Reject a raw rung as broken when its market
+is implausibly low — `market < BROKEN_RATIO × ref`, `BROKEN_RATIO ≈ 0.5` — where `ref` is:
+- the rung's **own `low`** (a market less than half its own quoted floor is impossible), or
+- when the rung is band-less (`low`/`high` absent), the **max market among the rungs that DO carry a band**
+  (placeholders are band-less, so a *cluster* of $1 placeholders can't drag the reference down to their own
+  level — the median would be poisoned by ≥2 glitches, the banded max isn't); no banded rung ⇒ the max
+  across all rungs.
+
+0.5× is tight — it clears the $1-vs-$500 placeholder with a wide margin while tolerating ordinary spread
+(LP $500.00 vs MP $500.66).
+
+Return the best **non-broken** rung, and signal when the top (best-grade) rung was dropped so `combinePrice`
+can prefer the same-grade cross-feed over a downgraded Scrydex condition.
+
+**2. Broken-best-rung ⇒ no Scrydex anchor (`combinePrice`, `scrydex.ts:344`).** When the best grade was
+dropped as broken, treat Scrydex as having no price and fall through to the **existing** order: tcgpl market
+→ next sane Scrydex condition (for Scrydex-only cards) → manual pin → keep-last/halt. **No new median, no
+eBay in the price** — the corrected price comes from a path that already exists.
+
+**3. Condition-aligned cross-feed (`tplCrossCheck`, `tcgpricelookup.ts:246`).** Today it walks
+`[near_mint, lightly_played]` and returns the first populated grade — tcgpl's NM — *regardless* of which
+grade priced the card, so the §6 `crossAgrees` test compares mismatched grades (a Scrydex-LP price vs a
+tcgpl-NM cross). Pass the anchor's condition in and read the matching tcgpl grade. This alone clears the
+slice of the `reduce_only` flood caused by grade mismatch — with no override path at all.
+
+**Safety property — only an *internally-broken* rung is ever dropped.** The trigger is Scrydex contradicting
+*itself* (`market < low`, or a bandless rung far below its own siblings) — never "Scrydex disagrees with
+tcgpl/eBay." So a legitimately-fresh Scrydex price (consistent ladder, whether higher *or lower* than a
+stale tcgpl) is **never** overridden — preserving the freshness advantage ③ exists for, in both directions.
+This is the key change from the first draft, whose cross-feed override could revert a genuine fresh *crash*
+back up to a stale pair. And when a broken rung is dropped, the replacement is tcgpl (a TCGplayer price,
+same venue as the Scrydex anchor), never eBay — so "eBay never sets the price" still holds.
+
+## Kept / changed vs ③ (live)
+
+| ③ stage (live) | Decision | Note |
+|---|---|---|
+| `extractRaw` first rung NM→LP→MP | ✚ ADD broken-rung check | reject `market < low`, or a bandless rung far below the best sibling |
+| `combinePrice` Scrydex mkt → tcgpl → 0 | ✚ ADD broken ⇒ treat as missing | a broken best-rung falls through to the **existing** tcgpl fallback — no new source |
+| `tplCrossCheck` NM-first, condition-blind | 🔄 ALIGN to the anchor condition | makes §6 corroboration like-for-like; clears grade-mismatch `reduce_only` |
+| §6 confidence tree (`scoreConfidence`) | ✅ KEEP | unchanged — now fed a sane, same-grade comparison |
+| §6a mark guard | ✅ KEEP | unchanged — adopts the eBay-corroborated candidate, mark un-sticks |
+| eBay as confidence-only (never sets price) | ✅ KEEP | **no exception** — the price is Scrydex or tcgpl, never eBay |
+| webhooks / dedup / 36h breaker / pins / engine risk / indices / graded ladder | ✅ KEEP | untouched (the broken-rung drop also cleans the graded ladder if applied at parse) |
+
+## Worked examples
+
+| Card (true value) | feeds | ③ today | **④ proposed** |
+|---|---|---|---|
+| **Umbreon ex #112** (~$900 NM) | Scrydex NM **$1** (LP $500), tcgpl NM $899.99, eBay $800 | candidate $1 · `reduce_only` · mark stuck $600 | NM rejected (bandless, ≪ siblings) ⇒ no Scrydex anchor ⇒ tcgpl NM **$899.99**; cross aligned to NM ⇒ eBay backs it ⇒ **tradeable**, mark un-sticks to ~$900 |
+| **Charizard δ** (fresh ~$4,000) | Scrydex $4,000 (consistent ladder), tcgpl $599 stale | $4,000 · `reduce_only` until eBay confirms | **unchanged** — nothing internally broken ⇒ Scrydex kept ⇒ fresh $4,000 preserved |
+| **Real crash** (Scrydex fresh-low) | Scrydex NM $400 (consistent ladder), tcgpl/eBay stale $850 | $400 · `reduce_only` until eBay confirms | **unchanged** — ladder consistent ⇒ NOT overridden ⇒ the real down-move is kept (the first draft's override would have wrongly reverted it to $850) |
+| **Raikou (13)** (no eBay) | Scrydex $348, tcgpl $201, eBay — | $348 · `reduce_only` (cross-feed disagrees) | **unchanged** — Scrydex ladder consistent ⇒ kept; genuine two-feed disagreement ⇒ stays `reduce_only` |
+
+## New constants
+
+| Constant | Value (tunable) | Where | Role |
+|---|---|---|---|
+| `BROKEN_RATIO` | ≈ 0.5 | `extractRaw` | a bandless rung below `RATIO ×` the best sibling is a placeholder |
+
+(The `market < low` rule needs no constant — it's a self-consistency check.)
+
+## What this deliberately does NOT fix
+
+- **Scrydex genuinely higher than tcgpl** (freshness, or a real spike) → stays `reduce_only` until eBay
+  confirms — by design (③).
+- **Two-feed disagreement with no eBay** (Raikou-class) → no independent venue to break the tie → stays
+  `reduce_only`.
+- **Graded-ladder placeholders** → the broken-rung filter is RAW-only; a $1-style placeholder on a *graded*
+  rung (which feeds the graded index/panel via `scrydexGradedLadder`/`scrydexPsa10E6`) is not yet filtered.
+  Separate follow-up — graded rungs are per-(company,grade) peers, not a condition ladder.
+
+So this clears the **broken-low-rung** subset + the **grade-mismatch** subset, not the whole flood. Exact
+reach needs a Scrydex re-probe of the featured set (the lake's `scrydex_prices` is sparse) — part of the
+build's validation.
+
+## Implementation sketch
+
+1. **`extractRaw` (`providers/scrydex.ts:210`)** — when scanning `NM→LP→MP`, skip a broken rung
+   (`market < low`, or bandless and `< BROKEN_RATIO ×` the best sibling market). Return the best surviving
+   rung plus a flag for whether the top grade was dropped.
+2. **`combinePrice` (`providers/scrydex.ts:344`)** — if the top grade was dropped, skip the Scrydex anchor
+   and use the existing `tcgpl market → …` fallback; otherwise unchanged.
+3. **`tplCrossCheck` (`providers/tcgpricelookup.ts:246`)** — take the anchor's condition as a parameter and
+   read tcgpl at that grade (fall back to NM-first only when that grade is absent on tcgpl).
+4. **Untouched:** `scoreConfidence`, the §6a mark guard, `recomputeMark`, dedup/webhooks, pins, indices,
+   engine risk. (Optionally apply the same broken-rung drop at parse so `scrydexGradedLadder` benefits too.)
+
+**Tests** (`providers/scrydex.test.ts`, `tcgpricelookup.test.ts`): a broken NM (`market < low`, and bandless
+≪ siblings) is skipped; broken-best-rung + tcgpl present ⇒ price = tcgpl, tradeable; **freshness not
+regressed** — a consistent higher *or lower* Scrydex is kept (the real-crash row above); a condition-aligned
+cross-check flips a grade-mismatch card to tradeable; Scrydex-only broken-NM ⇒ next condition / halt; the
+Umbreon fixture end-to-end. Plus a live oracle pass to confirm the `reduce_only` count drops on the
+broken-low set.
+
+**Tests** (`providers/scrydex.test.ts`): ladder check skips a broken-low NM and uses LP; broken-low NM +
+corroborated pair ⇒ price = median(pair) + `tradeable`; **freshness not regressed** — Scrydex above a stale
+pair is kept (LOW-side guard does not fire); no-eBay divergence ⇒ no override, stays `reduce_only`; the
+Umbreon numbers as a fixture. Plus a live re-derivation/oracle pass to confirm the `reduce_only` count
+drops and the `>2×` divergence set clears.
