@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthContext';
 import { FaucetButton } from './FaucetButton';
 import { OpenPositions } from './OpenPositions';
 import { thumbSrc } from '../lib/thumb.js';
+import { useRestingOrders, usdToE6 } from '../lib/useRestingOrders.js';
 import * as api from '../lib/api.js';
 
 const OPEN_FEE_BPS = 10; // mirrors the server default (preview only; server is authoritative)
@@ -22,6 +23,9 @@ export function OrderEntry({ market, onTraded }) {
   const [details, setDetails] = useState(null);
   const [showGrades, setShowGrades] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [orderType, setOrderType] = useState('market'); // 'market' | 'limit' (limit gated on restingEnabled)
+  const [limitPriceUsd, setLimitPriceUsd] = useState('');
+  const { orders: restingOrders, enabled: restingEnabled, refresh: refreshResting } = useRestingOrders(user);
 
   useEffect(() => {
     if (!market?.id) return;
@@ -84,15 +88,26 @@ export function OrderEntry({ market, onTraded }) {
   const largeImg = details?.imageLarge || previewSrc; // big card art for the click-to-enlarge modal
   const belowMin = marginNum > 0 && orderNotionalE6 < MIN_NOTIONAL_UUSDC; // order too small (sub-$1 notional)
 
-  const canTrade = user && market.tradeable && market.status === 'active' && qtyE6 >= minQty && marginNum > 0 && !belowMin;
+  const isLimit = restingEnabled && orderType === 'limit';
+  const canTrade =
+    user && market.tradeable && market.status === 'active' && qtyE6 >= minQty && marginNum > 0 && !belowMin && (!isLimit || usdToE6(limitPriceUsd) != null);
 
   const submit = async () => {
     setErr(null);
     setBusy(true);
     try {
-      await api.openOrder({ marketId: market.id, side, qtyE6: qtyE6.toString(), leverage, idempotencyKey: crypto.randomUUID() });
+      if (isLimit) {
+        await api.placeRestingOrder({
+          marketId: market.id, kind: 'limit', side, qtyE6: qtyE6.toString(), leverage,
+          triggerPriceE6: usdToE6(limitPriceUsd), reduceOnly: false, idempotencyKey: crypto.randomUUID(),
+        });
+      } else {
+        await api.openOrder({ marketId: market.id, side, qtyE6: qtyE6.toString(), leverage, idempotencyKey: crypto.randomUUID() });
+      }
       setMarginUsd('');
+      setLimitPriceUsd('');
       refresh();
+      refreshResting();
       onTraded?.();
     } catch (e) {
       setErr(e.message);
@@ -183,6 +198,13 @@ export function OrderEntry({ market, onTraded }) {
           </div>
         )}
 
+        {restingEnabled && (
+          <div className="order-type-toggle">
+            <button type="button" className={`otype-btn ${orderType === 'market' ? 'active' : ''}`} onClick={() => setOrderType('market')}>MARKET</button>
+            <button type="button" className={`otype-btn ${orderType === 'limit' ? 'active' : ''}`} onClick={() => setOrderType('limit')}>LIMIT</button>
+          </div>
+        )}
+
         <div className="order-side-toggle">
           <button className={`side-btn buy ${side === 'long' ? 'active' : ''}`} onClick={() => setSide('long')}>LONG</button>
           <button className={`side-btn sell ${side === 'short' ? 'active' : ''}`} onClick={() => setSide('short')}>SHORT</button>
@@ -207,6 +229,19 @@ export function OrderEntry({ market, onTraded }) {
           <input className="leverage-slider" type="range" min="1" max={maxLev} value={leverage} onChange={(e) => setLeverage(Number(e.target.value))} />
         </div>
 
+        {isLimit && (
+          <div className="form-field">
+            <label className="field-label">
+              <span>LIMIT PRICE (USD)</span>
+              <span className="field-hint">fills at the mark when it reaches this</span>
+            </label>
+            <div className="field-input-wrap">
+              <input type="number" min="0" placeholder={priceUsd ? priceUsd.toFixed(2) : '0'} value={limitPriceUsd} onChange={(e) => setLimitPriceUsd(e.target.value)} />
+              <span className="field-unit">USD</span>
+            </div>
+          </div>
+        )}
+
         <div className="order-info-box">
           <div className="order-info-row"><span>Mark</span><span>{priceUsd ? formatUsd(priceUsd) : '—'}</span></div>
           <div className="order-info-row"><span>Position size</span><span>{(Number(qtyE6) / 1e6).toFixed(2)} @ {formatUsd(notionalUsd)}</span></div>
@@ -223,16 +258,67 @@ export function OrderEntry({ market, onTraded }) {
           <div className="order-actions">
             <FaucetButton onFunded={refresh} />
             <button className={`place-order-btn ${side === 'long' ? 'buy' : 'sell'}`} disabled={!canTrade || busy} onClick={submit}>
-              {busy ? '…' : `${side === 'long' ? 'LONG' : 'SHORT'} ${market.displayName.slice(0, 16)}`}
+              {busy ? '…' : isLimit ? `PLACE ${side === 'long' ? 'LONG' : 'SHORT'} LIMIT` : `${side === 'long' ? 'LONG' : 'SHORT'} ${market.displayName.slice(0, 16)}`}
             </button>
           </div>
         )}
 
         <div className="order-positions">
           <div className="order-positions-title">Open Positions</div>
-          <OpenPositions compact positions={positions} onChanged={() => { refresh(); onTraded?.(); }} />
+          <OpenPositions
+            compact
+            positions={positions}
+            onChanged={() => { refresh(); onTraded?.(); }}
+            restingOrders={restingOrders}
+            restingEnabled={restingEnabled}
+            onBracketChanged={refreshResting}
+          />
         </div>
+
+        {restingEnabled && restingOrders.length > 0 && (
+          <div className="order-positions">
+            <div className="order-positions-title">Open Orders</div>
+            <RestingOrdersList orders={restingOrders} onCancelled={refreshResting} />
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+// The active resting orders (limit / SL / TP) for the selected market's owner — type · side · trigger · qty,
+// with a cancel. Polled by useRestingOrders; only shown when the feature flag is on.
+function RestingOrdersList({ orders, onCancelled }) {
+  const [busy, setBusy] = useState(null);
+  const cancel = async (id) => {
+    setBusy(id);
+    try {
+      await api.cancelRestingOrder(id);
+      onCancelled?.();
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const label = (k) => (k === 'limit' ? 'Limit' : k === 'stop_loss' ? 'Stop-loss' : 'Take-profit');
+  return (
+    <table className="positions-table resting-table">
+      <tbody>
+        {orders.map((o) => (
+          <tr key={o.id}>
+            <td className={o.kind === 'limit' ? '' : 'muted'}>{label(o.kind)}</td>
+            <td className={o.side === 'long' ? 'up' : 'down'}>{(o.side ?? '').toUpperCase()}</td>
+            <td>@ {formatUsd(BigInt(o.triggerPriceE6))}</td>
+            <td>{o.qtyE6 ? (Number(o.qtyE6) / 1e6).toFixed(2) : 'full'}</td>
+            <td>
+              <button className="btn-ghost sm" disabled={busy === o.id} onClick={() => cancel(o.id)}>
+                {busy === o.id ? '…' : 'Cancel'}
+              </button>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

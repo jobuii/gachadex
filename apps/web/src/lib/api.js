@@ -138,6 +138,12 @@ export const openOrder = (body) => req('/orders', { method: 'POST', auth: true, 
 export const closePosition = (positionId, body) =>
   req(`/positions/${positionId}/close`, { method: 'POST', auth: true, body });
 
+// Resting orders (limit / stop-loss / take-profit). These 404 until RESTING_ORDERS_ENABLED is on, so the
+// UI feature-detects off the GET (see useRestingOrders).
+export const getRestingOrders = () => req('/orders/resting', { auth: true });
+export const placeRestingOrder = (body) => req('/orders/resting', { method: 'POST', auth: true, body });
+export const cancelRestingOrder = (id) => req(`/orders/resting/${encodeURIComponent(id)}/cancel`, { method: 'POST', auth: true });
+
 // --- social (leaderboard + referrals) ---
 // Leaderboard is public; the optional Bearer (added when signed in) pins the caller's own row.
 export const getLeaderboard = (limit = 100) => req(`/leaderboard?limit=${limit}`, { auth: true });
