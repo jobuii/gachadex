@@ -144,6 +144,24 @@ export const ClosePositionRequest = z.object({
   idempotencyKey: z.string().min(8),
 });
 
+// Resting orders (limit / stop-loss / take-profit — docs/limit-stop-orders-spec.md). All are TRIGGERS
+// that market-fill at the mark when it crosses trigger_price; for a 'limit' the trigger price doubles as
+// the slippage cap (fill mark-or-better). P1 ships 'limit' (open: needs side + qtyE6 + leverage);
+// reduce_only SL/TP (needs positionId) land in P2.
+export const RESTING_ORDER_KINDS = ['limit', 'stop_loss', 'take_profit'];
+export const RestingOrderRequest = z.object({
+  marketId: z.string(),
+  kind: z.enum(RESTING_ORDER_KINDS),
+  triggerPriceE6: z.string().regex(/^\d+$/, 'expected a non-negative micro-unit string'),
+  side: z.enum(SIDES).optional(), // limit-open
+  qtyE6: MicroStr.optional(), // limit
+  leverage: z.number().int().positive().max(MAX_LEVERAGE).optional(), // limit-open
+  slippageE6: z.string().regex(/^\d+$/, 'expected a non-negative micro-unit string').optional(),
+  positionId: z.string().optional(), // SL/TP
+  reduceOnly: z.boolean().default(false),
+  idempotencyKey: z.string().min(8),
+});
+
 export const FaucetRequest = z.object({
   amountUsd: z.number().positive().max(100_000).default(10_000),
 });

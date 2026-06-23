@@ -2,7 +2,7 @@ import { buildServer } from './server.ts';
 import { initDb } from './db/init.ts';
 import { ingest } from './services/oracle.ts';
 import { accrueFunding } from './services/funding.ts';
-import { liquidateAllEligible, haltStaleMarkets, autoDeleverage } from './services/engine.ts';
+import { liquidateAllEligible, haltStaleMarkets, autoDeleverage, checkRestingOrderTriggers } from './services/engine.ts';
 import { scanDeposits } from './services/custody/deposits.ts';
 import { recoverInFlight, processAllRequested } from './services/custody/withdrawals.ts';
 import { treasuryPass } from './services/custody/treasury.ts';
@@ -197,6 +197,27 @@ function startLiquidationLoop(db: Db, log: FastifyBaseLogger) {
   );
 }
 
+// Resting-order trigger sweep — its OWN chained loop (separate from the liquidation self-chain so a
+// trigger backlog can never starve liquidations/ADL). Dark until RESTING_ORDERS_ENABLED=true.
+// docs/limit-stop-orders-spec.md.
+function startRestingOrderLoop(db: Db, log: FastifyBaseLogger) {
+  if (!config.restingOrdersEnabled) return;
+  chainLoop(
+    async () => {
+      try {
+        const r = await db.query<{ id: string }>(`SELECT id FROM markets WHERE tradeable AND status='active'`);
+        let filled = 0;
+        for (const m of r.rows) filled += await checkRestingOrderTriggers(db, m.id);
+        if (filled > 0) log.info({ filled }, 'resting orders filled');
+      } catch (e) {
+        log.error(e, 'resting-order sweep failed');
+      }
+    },
+    config.restingSweepMs,
+    config.restingSweepMs,
+  );
+}
+
 async function main() {
   const db = await initDb();
   const app = await buildServer();
@@ -214,6 +235,7 @@ async function main() {
       .catch((e) => app.log.warn(e, 'set-year seed failed (release years unavailable)'));
     startFundingLoop(db, app.log);
     startLiquidationLoop(db, app.log);
+    startRestingOrderLoop(db, app.log); // dark unless RESTING_ORDERS_ENABLED=true
     // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
     // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.
     const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d), loadDropConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);

@@ -433,9 +433,9 @@ async function openPositionInTx(
       // 3) pool-health gate (GMX-style MAX_PNL_FACTOR): once the pool already owes traders more than
       // maxPnlFactor of NAV, pause new opens so a thin/underfunded pool can't be drained by net winners.
       if (config.maxPnlFactorBps > 0) {
-        if (nav <= 0n) throw new HttpError(409, 'liquidity pool is not capitalized; new positions are paused');
+        if (nav <= 0n) throw new HttpError(409, 'liquidity pool is not capitalized; new positions are paused', 'pool_paused');
         if ((await poolPnlLiability(q)) > (nav * BigInt(config.maxPnlFactorBps)) / 10_000n) {
-          throw new HttpError(409, 'pool risk limit reached; new positions are paused');
+          throw new HttpError(409, 'pool risk limit reached; new positions are paused', 'pool_paused');
         }
       }
 
@@ -622,6 +622,200 @@ async function closePositionInTx(
         bigWin = { userId, marketId: market.id, variant: 'big_win', side: pos.side as 'long' | 'short', notionalE6: notional(closeQty, markE6), pnlE6: pnl, roeBps };
       }
       return { result: { orderId, realizedPnlUusdc: pnl.toString(), closedQtyE6: closeQty.toString(), remainingQtyE6: remQty.toString() }, chat: bigWin };
+}
+
+// ---- resting orders (limit / SL / TP) -------------------------------------
+// docs/limit-stop-orders-spec.md. P1 = limit (open): a resting trigger that, when the mark crosses
+// trigger_price_e6, market-fills at the mark via openPositionInTx (one tx) bounded by the limit as a
+// slippage cap. Margin is reserved at placement (a floor, at max(trigger, current mark)) and released to
+// collateral at fill so the open's own margin-lock is the single charge. Reduce-only SL/TP land in P2.
+
+export interface RestingOrderInput {
+  marketId: string;
+  kind: 'limit' | 'stop_loss' | 'take_profit';
+  triggerPriceE6: bigint;
+  side?: 'long' | 'short';
+  qtyE6?: bigint;
+  leverage?: number;
+  slippageE6?: bigint;
+  positionId?: string;
+  reduceOnly: boolean;
+  idempotencyKey: string;
+  actorPubkey?: string;
+}
+
+export interface RestingOrderView {
+  id: string;
+  marketId: string;
+  kind: string;
+  side: string | null;
+  qtyE6: string | null;
+  leverage: number | null;
+  triggerPriceE6: string;
+  slippageE6: string | null;
+  reservedMarginUusdc: string;
+  createdAt: string;
+}
+
+// transient open-rejects: the market is momentarily un-openable — leave the order resting + retry next
+// sweep. Anything else is terminal → cancel with the reason. (Codes from openPositionInTx's gates.)
+const RESTING_TRANSIENT_CODES = new Set(['market_repricing', 'market_halted', 'market_restricted', 'oi_cap_exceeded', 'pool_paused']);
+
+export async function placeRestingOrder(db: Db, userId: string, input: RestingOrderInput): Promise<{ id: string; duplicate?: boolean }> {
+  // P1: only limit-OPEN. reduce-only limit + SL/TP are P2.
+  if (input.kind !== 'limit' || input.reduceOnly) throw new HttpError(400, 'only limit (open) resting orders are supported yet', 'unsupported_order');
+  if (!input.side || input.qtyE6 == null || input.leverage == null) throw new HttpError(400, 'a limit order needs side, qtyE6 and leverage');
+  if (input.triggerPriceE6 <= 0n) throw new HttpError(400, 'invalid trigger price');
+  const side = input.side;
+  const qtyE6 = input.qtyE6;
+  const leverageE2 = input.leverage * 100;
+  return withMarketLock(input.marketId, () =>
+    db.tx(async (q) => {
+      await advisoryXactLock(q, input.marketId);
+      const prior = await q.query<{ id: string }>(`SELECT id FROM resting_orders WHERE user_id=$1 AND idempotency_key=$2`, [userId, input.idempotencyKey]);
+      if (prior.rows[0]) return { id: prior.rows[0].id, duplicate: true };
+      const market = await getMarketById(q, input.marketId);
+      if (!market) throw new HttpError(404, 'market not found');
+      if (leverageE2 < 100 || leverageE2 > market.max_leverage_e2) throw new HttpError(400, `leverage must be 1–${market.max_leverage_e2 / 100}×`);
+      if (qtyE6 < BigInt(market.min_qty_e6)) throw new HttpError(400, 'order below the minimum size');
+      const cap = config.restingMaxPerUserMarket;
+      const cnt = await q.query<{ n: string }>(`SELECT count(*)::text AS n FROM resting_orders WHERE user_id=$1 AND market_id=$2 AND status='active'`, [userId, input.marketId]);
+      if (Number(cnt.rows[0].n) >= cap) throw new HttpError(400, `too many open orders on this market (max ${cap})`, 'resting_cap');
+      // reserve at a conservative basis = max(trigger, current mark): a long fills at the mark ≤ basis, so
+      // the reserve covers it; the open re-derives + locks the real margin at fill (reserve is a floor).
+      const mi = await getLatestMarkIndex(q, input.marketId);
+      const basis = mi && mi.markE6 > input.triggerPriceE6 ? mi.markE6 : input.triggerPriceE6;
+      const reserve = initialMargin(notional(qtyE6, basis), leverageE2);
+      if (reserve <= 0n) throw new HttpError(400, 'order too small');
+      const collAcct = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
+      const restAcct = await getOrCreateUserAccount(q, userId, 'RESTING_ORDER_MARGIN');
+      await q.query('SELECT amount_uusdc FROM balances WHERE account_id=$1 FOR UPDATE', [collAcct]); // single-writer on the user's collateral
+      if ((await getBalance(q, collAcct)) < reserve) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
+      const id = randomUUID();
+      await q.query(
+        `INSERT INTO resting_orders(id,user_id,market_id,kind,reduce_only,side,qty_e6,leverage_e2,trigger_price_e6,slippage_e6,reserved_margin_uusdc,status,idempotency_key)
+         VALUES($1,$2,$3,'limit',false,$4,$5,$6,$7,$7,$8,'active',$9)`,
+        [id, userId, input.marketId, side, qtyE6.toString(), leverageE2, input.triggerPriceE6.toString(), reserve.toString(), input.idempotencyKey],
+      );
+      await postTxn(q, { reason: 'RESTING_RESERVE', refType: 'resting_order', refId: id, entries: [{ accountId: collAcct, amount: -reserve }, { accountId: restAcct, amount: reserve }] });
+      publish(`orders:${userId}`, 'update', {});
+      return { id };
+    }),
+  );
+}
+
+export async function cancelRestingOrder(db: Db, userId: string, id: string): Promise<{ cancelled: boolean }> {
+  return db.tx(async (q) => {
+    // guarded: a racing trigger that already claimed the row flips it off 'active', so this returns 0 rows
+    // and no-ops — the reserve is released exactly once, by whichever of cancel/fill won.
+    const r = await q.query<{ reserved_margin_uusdc: string }>(
+      `UPDATE resting_orders SET status='cancelled', resolved_at=now() WHERE id=$1 AND user_id=$2 AND status='active' RETURNING reserved_margin_uusdc`,
+      [id, userId],
+    );
+    if (!r.rows[0]) return { cancelled: false };
+    const reserve = BigInt(r.rows[0].reserved_margin_uusdc);
+    if (reserve > 0n) {
+      const collAcct = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
+      const restAcct = await getOrCreateUserAccount(q, userId, 'RESTING_ORDER_MARGIN');
+      await postTxn(q, { reason: 'RESTING_REFUND', refType: 'resting_order', refId: id, entries: [{ accountId: restAcct, amount: -reserve }, { accountId: collAcct, amount: reserve }] });
+    }
+    publish(`orders:${userId}`, 'update', {});
+    return { cancelled: true };
+  });
+}
+
+export async function getUserRestingOrders(db: Db, userId: string): Promise<RestingOrderView[]> {
+  const r = await db.query<{ id: string; market_id: string; kind: string; side: string | null; qty_e6: string | null; leverage_e2: number | null; trigger_price_e6: string; slippage_e6: string | null; reserved_margin_uusdc: string; created_at: string }>(
+    `SELECT id, market_id, kind, side, qty_e6, leverage_e2, trigger_price_e6, slippage_e6, reserved_margin_uusdc, created_at
+       FROM resting_orders WHERE user_id=$1 AND status='active' ORDER BY created_at DESC`,
+    [userId],
+  );
+  return r.rows.map((o) => ({
+    id: o.id, marketId: o.market_id, kind: o.kind, side: o.side, qtyE6: o.qty_e6,
+    leverage: o.leverage_e2 != null ? o.leverage_e2 / 100 : null,
+    triggerPriceE6: o.trigger_price_e6, slippageE6: o.slippage_e6,
+    reservedMarginUusdc: o.reserved_margin_uusdc, createdAt: o.created_at,
+  }));
+}
+
+/**
+ * One market's resting-order trigger pass (P1: limit fills). Snapshots the latest mark ONCE at the start
+ * (so a fill that moves the mark within this pass can't self-trigger another order — spec §1a). For each
+ * active limit whose trigger the snapshot crossed, the fill runs in ONE tx (claim → release reserve →
+ * open): if the open throws, the whole tx rolls back, leaving the order untouched (still active + reserved).
+ * A transient reject is then retried next sweep; a terminal reject cancels + refunds in a fresh tx.
+ */
+export async function checkRestingOrderTriggers(db: Db, marketId: string): Promise<number> {
+  const snap = await db.query<{ mark_price_e6: string }>(`SELECT mark_price_e6 FROM marks WHERE market_id=$1 ORDER BY computed_at DESC LIMIT 1`, [marketId]);
+  if (!snap.rows[0]) return 0;
+  const oracleMarkE6 = BigInt(snap.rows[0].mark_price_e6);
+  // long buys the dip → fills when mark ≤ trigger (trigger ≥ mark); short sells the rip → mark ≥ trigger.
+  const due = await db.query<{ id: string }>(
+    `SELECT id FROM resting_orders
+      WHERE market_id=$1 AND status='active' AND kind='limit'
+        AND ((side='long' AND trigger_price_e6 >= $2) OR (side='short' AND trigger_price_e6 <= $2))
+      ORDER BY created_at LIMIT $3`,
+    [marketId, oracleMarkE6.toString(), config.restingMaxPerSweep],
+  );
+  let filled = 0;
+  for (const { id } of due.rows) {
+    let terminal: string | null = null;
+    try {
+      await withMarketLock(marketId, () =>
+        db.tx(async (q) => {
+          await advisoryXactLock(q, marketId);
+          const claim = await q.query<{ user_id: string; side: string; qty_e6: string; leverage_e2: number; trigger_price_e6: string; reserved_margin_uusdc: string }>(
+            `UPDATE resting_orders SET status='filled', resolved_at=now() WHERE id=$1 AND status='active'
+             RETURNING user_id, side, qty_e6, leverage_e2, trigger_price_e6, reserved_margin_uusdc`,
+            [id],
+          );
+          if (!claim.rows[0]) throw new HttpError(409, 'order already resolved', 'resting_gone');
+          const ro = claim.rows[0];
+          const reserve = BigInt(ro.reserved_margin_uusdc);
+          if (reserve > 0n) {
+            const collAcct = await getOrCreateUserAccount(q, ro.user_id, 'USER_COLLATERAL');
+            const restAcct = await getOrCreateUserAccount(q, ro.user_id, 'RESTING_ORDER_MARGIN');
+            await postTxn(q, { reason: 'RESTING_RELEASE', refType: 'resting_order', refId: id, entries: [{ accountId: restAcct, amount: -reserve }, { accountId: collAcct, amount: reserve }] });
+          }
+          // fill at the live mark, bounded by the limit as the slippage cap. If this throws, the whole tx
+          // (claim + release) rolls back — the order stays active + reserved, no partial state.
+          await openPositionInTx(q, ro.user_id, {
+            marketId,
+            side: ro.side as 'long' | 'short',
+            qtyE6: BigInt(ro.qty_e6),
+            leverage: ro.leverage_e2 / 100,
+            limitPriceE6: BigInt(ro.trigger_price_e6),
+            idempotencyKey: `resting:${id}`,
+          });
+        }),
+      );
+      filled++;
+    } catch (e) {
+      const code = e instanceof HttpError ? e.code : undefined;
+      if (code === 'resting_gone' || (code && RESTING_TRANSIENT_CODES.has(code))) continue; // gone / retry next sweep
+      terminal = code ?? 'fill_failed';
+    }
+    if (terminal) {
+      // fresh tx: cancel the (rolled-back, still-active) order + refund its reserve. Guarded for the race.
+      await db
+        .tx(async (q) => {
+          const r = await q.query<{ user_id: string; reserved_margin_uusdc: string }>(
+            `UPDATE resting_orders SET status='cancelled', reject_reason=$2, resolved_at=now() WHERE id=$1 AND status='active' RETURNING user_id, reserved_margin_uusdc`,
+            [id, terminal],
+          );
+          if (!r.rows[0]) return;
+          const reserve = BigInt(r.rows[0].reserved_margin_uusdc);
+          if (reserve > 0n) {
+            const collAcct = await getOrCreateUserAccount(q, r.rows[0].user_id, 'USER_COLLATERAL');
+            const restAcct = await getOrCreateUserAccount(q, r.rows[0].user_id, 'RESTING_ORDER_MARGIN');
+            await postTxn(q, { reason: 'RESTING_REFUND', refType: 'resting_order', refId: id, entries: [{ accountId: restAcct, amount: -reserve }, { accountId: collAcct, amount: reserve }] });
+          }
+          publish(`orders:${r.rows[0].user_id}`, 'update', {});
+        })
+        .catch(() => {});
+    }
+  }
+  return filled;
 }
 
 // ---- read models ----------------------------------------------------------
