@@ -36,7 +36,9 @@ chat & social layer** (reactions, rank badges, presence, moderation, and a **DRO
   tabs, a game filter, a rarity filter, and a **JPY** toggle for Japanese-market cards.
 - **Provide liquidity** to the LP pool (the counterparty to all trades) and earn fees + trader PnL.
 - **Leaderboard** — traders ranked by net realized PnL (with equity + volume).
-- **Referrals** — every account gets a shareable code; redeeming one pays both sides a play-USDC bonus.
+- **Referrals & affiliate codes** — every account gets a shareable code (auto-redeemed on sign-in);
+  redeeming pays both sides a play-USDC bonus. Operators can give KOL/affiliate codes a **cashback %**
+  (a cut of their referees' trading fees, paid as real USDC) + a **fee-discount %** on their own trades.
 - **Chat & socialize** — a live chat rail with emoji reactions, leaderboard **rank badges**, an
   online-presence count, and **BIG BET / BIG WIN** action bars that broadcast notable trades; moderated
   (mods + operator can delete / mute / ban).
@@ -302,7 +304,14 @@ Deep dives: **[docs/real-funds-custody-plan.md](docs/real-funds-custody-plan.md)
 - **Referrals.** Every account gets a unique `POKE-XXXXX` code at signup. Redeeming a code attributes
   the new account to the referrer (once) and, in play-money mode, pays **both** parties a bonus
   (default $1,000, clamped to the balance cap). The referrer is only paid for their first
-  `MAX_REFERRALS_PAID` referrals (anti-farming). A `?ref=CODE` link is captured and offered for redeem.
+  `MAX_REFERRALS_PAID` referrals (anti-farming). A `?ref=CODE` link is captured on first load and
+  **auto-redeemed when the visitor signs in**, so attribution is reliable (not a manual step).
+- **Affiliate / KOL economics.** Operators attach custom economics to a code in the admin **Affiliates**
+  tab (`affiliate_terms`, linked to a wallet): a **cashback %** of the referees' trading fees — paid from
+  the **house** revenue share (never the LP share) as real, withdrawable USDC — plus a **fee-discount %**
+  on the affiliate's own trades (open + close; liquidation fees excluded). Cashback is capped at the house
+  fee share (`100% − FEE_LP_SHARE_PCT`) and clamped at charge time so platform revenue can't go negative.
+  An affiliate's lifetime cashback shows as a **Cashback** card in their Portfolio and the referral panel.
 
 ---
 
@@ -363,6 +372,14 @@ A dedicated operator tab alongside Main + Customers, all under the admin key:
   mint, the live `DROP_POOL` pot balance, total tipped, and recent tips.
 - **Moderation** — grant/revoke MOD (by wallet **or** user id), the muted/banned lists with unmute/unban,
   and the mod-action audit log.
+
+### Admin **Affiliates** view (operator tab)
+
+Manage KOL / affiliate codes (a 4th operator tab). Lists every affiliate — code, wallet, **cashback %**,
+**fee-discount %**, referrals, lifetime cashback paid, active — with a create-or-edit form (wallet +
+optional branded code + the two %s + a label) and an activate/deactivate toggle. Percentages in the UI,
+basis points over the wire; cashback is capped at the house fee share (`100% − FEE_LP_SHARE_PCT`), enforced
+both client-side and in the service. Linking a code creates the wallet's account if it has never signed in.
 
 ---
 
@@ -443,7 +460,7 @@ applied on boot (`db/migrate.ts`).
 | `GET /lp/pool` · `GET /lp/position` · `POST /lp/deposit` · `POST /lp/withdraw` | mixed | LP pool state + provide/withdraw liquidity |
 | `GET /leaderboard` · `GET /referral/me` · `POST /referral/redeem` | mixed | Leaderboard (public, optional viewer); referral code + redeem |
 | `GET /wallet/deposit-address` · `POST /wallet/withdraw/nonce` · `POST /wallet/withdraw` · `GET /wallet/transactions` | yes | Real-funds custody: deposit address, withdraw (wallet step-up), wallet history |
-| `/admin/markets/:id/price` · `/admin/treasury` · `/admin/insurance/*` · `/admin/custody-limits` · `/admin/withdrawals/*` · `/admin/freeze` · `/admin/customers` · `/admin/customers/:id/{positions,history}` · `/admin/chat/*` · live knobs `/admin/{fee,liq-fee,funding-factor,mark-clamp,withdrawal-auto-process}` · `/admin/{restrictions,mark-guards}` | admin key | Operator ops (manual pricing always; custody ops under real funds) + Customers & CHAT view, the live-tunable engine knobs, and the price-confidence / mark-guard panels — see [docs/ops-runbook.md](docs/ops-runbook.md) |
+| `/admin/markets/:id/price` · `/admin/treasury` · `/admin/insurance/*` · `/admin/custody-limits` · `/admin/withdrawals/*` · `/admin/freeze` · `/admin/customers` · `/admin/customers/:id/{positions,history}` · `/admin/chat/*` · `GET/POST /admin/affiliates` · live knobs `/admin/{fee,liq-fee,funding-factor,mark-clamp,withdrawal-auto-process}` · `/admin/{restrictions,mark-guards}` | admin key | Operator ops (manual pricing always; custody ops under real funds) + Customers / CHAT / Affiliates views, the live-tunable engine knobs, and the price-confidence / mark-guard panels — see [docs/ops-runbook.md](docs/ops-runbook.md) |
 | `GET /chat` · `POST /chat` · `/chat/messages/:id/react` · `/chat/ranks` · `/chat/profile/:id` · `GET /chat/drop/pot` · `POST /chat/drop/tip` · mod routes | mixed | Live chat: read/post, reactions, rank map, profile card, DROP pot tips (real USDC), mod actions |
 | `POST /webhooks/scrydex` | HMAC | Scrydex push re-pricing (Stripe-style `t=,v1=` signature over the raw body); active only under `ORACLE_PRIMARY=scrydex` |
 | `GET /health` | public | Health check |
@@ -489,7 +506,7 @@ to the browser). Copy `apps/api/.env.example` → `apps/api/.env`; every key has
 | `OI_CAP_NAV_BPS` · `MAX_PNL_FACTOR_BPS` · `ADL_PNL_FACTOR_BPS` | `0` (off) | Pool-risk caps (NAV-relative OI · open-gate · ADL); turn on for real funds |
 | `FAUCET_DEFAULT_USD` | `10000` | Per-claim play USDC (balance capped at $1M) |
 | `REFERRAL_BONUS_USD` / `MAX_REFERRALS_PAID` | `1000` / `50` | Referral payout (both parties) + per-referrer cap |
-| `FEE_BPS` / `FEE_LP_SHARE_PCT` | `0` / `50` | Trading commission (bps; **default off**, charged on both open + close) + LP share; live-editable in admin |
+| `FEE_BPS` / `FEE_LP_SHARE_PCT` | `0` / `50` | Trading commission (bps; **default off**, charged on both open + close) + LP share; live-editable in admin. `FEE_LP_SHARE_PCT` also caps affiliate cashback at `100 − it`% (the house keeps the rest) |
 | `FUNDING_SKEW_FACTOR_BPS` / `FUNDING_INTERVAL_MS` | `30` / `1h` | Funding rate cap + cadence |
 | `LIQ_FEE_BPS` / `LIQUIDATION_SWEEP_MS` / `ORACLE_STALE_MS` | `100` / `5s` / `36h` | Liquidation penalty, sweep, staleness halt |
 | `CHAT_BIG_BET_USD` / `CHAT_BIG_WIN_USD` | `500` / `100` | Chat action-bar thresholds (USD; live-editable in the admin CHAT view) |

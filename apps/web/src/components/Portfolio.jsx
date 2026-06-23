@@ -64,6 +64,7 @@ export function Portfolio({ markets, onSelect }) {
         <div className="stat-card"><span className="sc-label">Available</span><span className="sc-val">{stat(v.availableUusdc)}</span></div>
         <div className="stat-card"><span className="sc-label">Margin Locked</span><span className="sc-val">{stat(v.lockedMarginUusdc)}</span></div>
         <div className="stat-card"><span className="sc-label">LP Pool</span><span className="sc-val">{stat(lp?.valueUusdc)}</span></div>
+        <div className="stat-card"><span className="sc-label">Cashback</span><span className={`sc-val ${BigInt(v.cashbackTotalUusdc || 0) > 0n ? 'up' : ''}`}>{stat(v.cashbackTotalUusdc)}</span></div>
         <div className="stat-card"><span className="sc-label">Unrealized PnL</span><span className={`sc-val ${pnlUp ? 'up' : 'down'}`}>{stat(v.unrealizedPnlUusdc)}</span></div>
       </div>
       <div style={{ margin: '1rem 0' }}>
@@ -96,7 +97,7 @@ export function Portfolio({ markets, onSelect }) {
         />
       )}
 
-      <ReferralPanel onRedeemed={refresh} />
+      <ReferralPanel onRedeemed={refresh} cashbackTotalUusdc={v.cashbackTotalUusdc} />
     </div>
   );
 }

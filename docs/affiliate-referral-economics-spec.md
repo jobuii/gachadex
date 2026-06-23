@@ -189,4 +189,27 @@ Hook points confirmed real (`engine.ts:18-36` chargeFee; open `:364`/`:408`, clo
    cashback only. (resolved by context)
 7. Hot-path lookup — **one joined query per fee** (revised from cached Map; see QA #4).
 8. Liquidation fees — **EXCLUDED** from discount + cashback (penalties, not commissions). ✅ confirmed.
-9. Attribution — **verify the `?ref=` held code auto-redeems on sign-in** before P1 (QA #3). ⏳ open (P1 step 0).
+9. Attribution — was MANUAL (the held `?ref=` only pre-filled the redeem box); **added auto-redeem-on-sign-in** in AuthContext. ✅
+
+## Status
+
+- **Step 0 + P1 (backend) BUILT** (2026-06-20; local commit on `development`, NOT merged to master): the
+  `affiliate_terms` schema + a `(account_id, reason)` ledger index; the `affiliate` service
+  (resolveFeeAffiliate / applyFeeDiscount / setAffiliateTerms / listAffiliates / getCashbackTotal /
+  maxCashbackBps); the `chargeFee` discount + cashback hooks (open/close only — liquidation excluded);
+  `cashbackTotalUusdc` on `/account/balance`; the `/admin/affiliates` API; and the sign-in auto-redeem.
+  348 API tests (7 new) + typecheck + web build green. Adversarial review done — fixed: deactivated-affiliate
+  silently re-enabled on a terms edit · missing ledger index · clear the held `?ref=` only on a permanent 4xx.
+- **`setAffiliateTerms` atomicity — DONE** (commit `b1079da`): the three writes (`upsertUser` →
+  branded code → `affiliate_terms` upsert) now run in one `db.tx`. Extracted `setReferralCodeTx(q)` (the
+  transactional core) so it joins the outer tx; `setReferralCode(db)` keeps its standalone wrapper, and
+  `upsertUser` now takes a `Queryer` (Db extends Queryer → existing callers unaffected).
+- **P2 + P3 DONE** (2026-06-20, local on `development`): admin **Affiliates** tab (`AffiliatesView` — list +
+  create/edit form + activate/deactivate; % in the UI ↔ bps over the wire); Portfolio **"Cashback"**
+  stat-card (left of Unrealized PnL, fed by `cashbackTotalUusdc`); ReferralPanel **"Cashback earned"** line.
+  Web build green; adversarial-reviewed + `/simplify`'d (fixed: editing an affiliate's rates no longer
+  silently re-activates a deactivated one — `save` omits `active`, the backend preserves it).
+- **Follow-up (low, money-safe):** if the operator later lowers the cashback ceiling (raises
+  `FEE_LP_SHARE_PCT`) below an existing affiliate's rate, the activate/deactivate toggle is rejected until
+  the rate is edited down. Rare (env redeploy), recoverable, and the runtime clamp still caps payout.
+- **Feature COMPLETE** on `development` — pending merge-to-master + deploy (your call).

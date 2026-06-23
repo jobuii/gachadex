@@ -36,6 +36,22 @@ export function AuthProvider({ children }) {
       const data = await api.authVerify({ pubkey, message, signature: bs58.encode(sig) });
       setUser(data.user);
       setConnectionError(null);
+      // Attribution: redeem a held ?ref= code now that we're signed in, so a referral/affiliate link
+      // actually links this account (sets referred_by) — without this it only fires if the user manually
+      // opens the referral panel and clicks redeem, so most KOL referees would never get attributed.
+      // Best-effort: clear on success; on a network error keep the code so a later sign-in retries
+      // (redeem is idempotent + self/already-redeemed guarded server-side).
+      const pendingRef = api.getPendingReferral();
+      if (pendingRef) {
+        try {
+          await api.redeemReferral(pendingRef);
+          api.clearPendingReferral();
+        } catch (err) {
+          // clear on a permanent rejection (4xx: already redeemed / invalid / self) so we don't retry it
+          // every sign-in; keep on a transient error (network / 5xx) so a later sign-in retries.
+          if (err?.status >= 400 && err.status < 500) api.clearPendingReferral();
+        }
+      }
       return data.user;
     } catch (e) {
       const msg = e.message || String(e);

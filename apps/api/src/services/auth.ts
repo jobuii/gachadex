@@ -220,14 +220,16 @@ async function createSession(
   return { sid, refreshToken: `${sid}.${secret}` };
 }
 
-async function upsertUser(db: Db, pubkey: string): Promise<string> {
+// Takes a Queryer (not just Db) so it can run inside a larger transaction (e.g. affiliate setup) or
+// standalone (login passes the Db, which is a Queryer).
+export async function upsertUser(q: Queryer, pubkey: string): Promise<string> {
   const id = randomUUID();
-  const ins = await db.query<{ id: string }>(
+  const ins = await q.query<{ id: string }>(
     `INSERT INTO users(id, solana_pubkey) VALUES($1, $2) ON CONFLICT(solana_pubkey) DO NOTHING RETURNING id`,
     [id, pubkey],
   );
-  if (ins.rows[0]) await assignReferralCode(db, ins.rows[0].id); // give each new account a referral code
-  const r = await db.query<{ id: string }>(`SELECT id FROM users WHERE solana_pubkey = $1`, [pubkey]);
+  if (ins.rows[0]) await assignReferralCode(q, ins.rows[0].id); // give each new account a referral code
+  const r = await q.query<{ id: string }>(`SELECT id FROM users WHERE solana_pubkey = $1`, [pubkey]);
   return r.rows[0].id;
 }
 
