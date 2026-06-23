@@ -116,3 +116,17 @@ test('applyUniverse re-run: a Scrydex-only market that gains a tcgpl match fills
   assert.equal(m.provider_card_id, 'tp-5002', 'newly-matched tcgpl id is filled in');
   assert.equal(m.requires_scrydex, false, 'now tcgpl-priceable → no longer hidden');
 });
+
+test('deriveUniverse: price-confidence gate drops EN cards with no scrydex anchor AND no eBay', async () => {
+  // High-priced EN cards priced ONLY by tcgpl: one with no scrydex + no eBay (uncorroborated → reduce-only),
+  // one with an eBay corroborator. The gate must drop the first and keep the second.
+  await db.query(
+    `INSERT INTO price_index (tcgplayer_id, game, name, scrydex_card_id, scrydex_raw_usd, scrydex_prices, tcgpl_card_id, tcgpl_raw_usd, tcgpl_ebay_7d)
+     VALUES (4001,'mtg','No-conf',NULL,NULL,NULL,'tp-4001',9999,NULL),
+            (4002,'mtg','Ebay-conf',NULL,NULL,NULL,'tp-4002',8000,7900) ON CONFLICT (tcgplayer_id) DO NOTHING`,
+  );
+  const u = await deriveUniverse(db, { topN: 50, jpyFloorUsd: 100, games: ['mtg'] });
+  const by = Object.fromEntries(u.markets.map((m) => [m.tcgplayerId, m]));
+  assert.equal(by[4001], undefined, 'no scrydex anchor AND no eBay → dropped, even at the top of the price rank');
+  assert.ok(by[4002], 'no scrydex but eBay-corroborated → kept');
+});
