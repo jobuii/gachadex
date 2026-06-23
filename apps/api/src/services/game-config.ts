@@ -260,10 +260,35 @@ function validateTheBreak(value: unknown): TheBreakConfig {
   };
 }
 
+// --- Price Duel (docs/games-spec.md, game #5). A 1v1 PvP: both players ante + secretly pick a card; over
+// a fixed window the card with the higher oracle %-move wins the pot (both antes minus a rake = the house
+// edge), a tie refunds both. Skill-framed (you pick), settled by the public oracle. The pot is USDC (no
+// card prize) and there is no pool-dependence — the rake IS the edge.
+export interface PriceDuelConfig {
+  enabled: boolean;
+  anteUsd: number;
+  windowHours: number; // how long a matched duel runs before it settles on %-move
+  rakeBps: number; // the house cut of a decisive pot (the edge); a tie takes no rake
+  bigWinUsd: number; // a pot payout >= this fires a chat BIG WIN
+}
+const DEFAULT_PRICE_DUEL: PriceDuelConfig = { enabled: false, anteUsd: 25, windowHours: 24, rakeBps: 500, bigWinUsd: 250 };
+function validatePriceDuel(value: unknown): PriceDuelConfig {
+  const v = (typeof value === 'string' ? JSON.parse(value) : value) as Partial<PriceDuelConfig>;
+  if (!v || typeof v !== 'object') throw new Error('price-duel config must be an object');
+  return {
+    enabled: Boolean(v.enabled),
+    anteUsd: num(v.anteUsd, 'ante (USD)', 1, MAX_USD),
+    windowHours: num(v.windowHours, 'window (hours)', 1, 24 * 30),
+    rakeBps: num(v.rakeBps, 'rake (bps)', 0, 5000),
+    bigWinUsd: num(v.bigWinUsd, 'big-win threshold (USD)', 0, MAX_USD),
+  };
+}
+
 const packRip = liveKnob<PackRipConfig>('game_pack_rip', DEFAULT_PACK_RIP, validatePackRip, JSON.stringify);
 const setPoker = liveKnob<SetPokerConfig>('game_set_poker', DEFAULT_SET_POKER, validateSetPoker, JSON.stringify);
 const gradeGamble = liveKnob<GradeGambleConfig>('game_grade_gamble', DEFAULT_GRADE_GAMBLE, validateGradeGamble, JSON.stringify);
 const theBreak = liveKnob<TheBreakConfig>('game_the_break', DEFAULT_THE_BREAK, validateTheBreak, JSON.stringify);
+const priceDuel = liveKnob<PriceDuelConfig>('game_price_duel', DEFAULT_PRICE_DUEL, validatePriceDuel, JSON.stringify);
 
 /** Current Pack Rip config (sync read on the play hot path). */
 export const packRipConfig = (): PackRipConfig => packRip.get();
@@ -273,10 +298,12 @@ export const setPokerConfig = (): SetPokerConfig => setPoker.get();
 export const gradeGambleConfig = (): GradeGambleConfig => gradeGamble.get();
 /** Current The Break config (sync read on the play hot path). */
 export const theBreakConfig = (): TheBreakConfig => theBreak.get();
+/** Current Price Duel config (sync read on the play hot path). */
+export const priceDuelConfig = (): PriceDuelConfig => priceDuel.get();
 
 /** Load every games knob from settings (boot + periodic refresh, for multi-instance convergence). */
 export async function loadGameConfig(db: Db): Promise<void> {
-  await Promise.all([packRip.load(db), setPoker.load(db), gradeGamble.load(db), theBreak.load(db)]);
+  await Promise.all([packRip.load(db), setPoker.load(db), gradeGamble.load(db), theBreak.load(db), priceDuel.load(db)]);
 }
 
 /** The full config + defaults + the GAME_POOL bankroll balance — for the admin Games view. */
@@ -285,7 +312,8 @@ export async function gamesAdminView(db: Db): Promise<{
   setPoker: SetPokerConfig;
   gradeGamble: GradeGambleConfig;
   theBreak: TheBreakConfig;
-  defaults: { packRip: PackRipConfig; setPoker: SetPokerConfig; gradeGamble: GradeGambleConfig; theBreak: TheBreakConfig };
+  priceDuel: PriceDuelConfig;
+  defaults: { packRip: PackRipConfig; setPoker: SetPokerConfig; gradeGamble: GradeGambleConfig; theBreak: TheBreakConfig; priceDuel: PriceDuelConfig };
   poolE6: string;
 }> {
   const acct = await getOrCreateSystemAccount(db, 'GAME_POOL');
@@ -294,7 +322,8 @@ export async function gamesAdminView(db: Db): Promise<{
     setPoker: setPoker.get(),
     gradeGamble: gradeGamble.get(),
     theBreak: theBreak.get(),
-    defaults: { packRip: packRip.default, setPoker: setPoker.default, gradeGamble: gradeGamble.default, theBreak: theBreak.default },
+    priceDuel: priceDuel.get(),
+    defaults: { packRip: packRip.default, setPoker: setPoker.default, gradeGamble: gradeGamble.default, theBreak: theBreak.default, priceDuel: priceDuel.default },
     poolE6: (await getBalance(db, acct)).toString(),
   };
 }
@@ -325,4 +354,11 @@ export async function setTheBreakConfig(db: Db, patch: Partial<TheBreakConfig>):
   const merged = { ...theBreak.get(), ...patch };
   await theBreak.set(db, merged);
   return theBreak.get();
+}
+
+/** Apply a partial Price Duel patch, then re-load. */
+export async function setPriceDuelConfig(db: Db, patch: Partial<PriceDuelConfig>): Promise<PriceDuelConfig> {
+  const merged = { ...priceDuel.get(), ...patch };
+  await priceDuel.set(db, merged);
+  return priceDuel.get();
 }

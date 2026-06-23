@@ -99,6 +99,30 @@
   .brk-card-img { height: 92px; }
 }
 
+/* --- price duel --- */
+.duel-picker { margin-top: 0.8rem; }
+.duel-search { width: 100%; max-width: 360px; margin-bottom: 0.7rem; }
+.duel-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 0.6rem; max-height: 380px; overflow-y: auto; }
+.duel-pick { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; padding: 0.5rem; border: var(--border-w) solid var(--border); border-radius: var(--radius); background: var(--bg-2); color: var(--text); cursor: pointer; }
+.duel-pick:hover { border-color: var(--gold); }
+.duel-pick-img { width: 64px; height: 90px; object-fit: contain; border-radius: var(--radius); background: var(--bg-3); display: flex; align-items: center; justify-content: center; font-size: 1.4rem; }
+.duel-pick-name { font-size: 0.68rem; text-align: center; line-height: 1.15; }
+.duel-pick-val { font-size: 0.72rem; color: var(--gold); font-weight: var(--weight-strong); }
+.duel-arena { padding: 1.2rem; margin-top: 1rem; }
+.duel-vs { display: flex; align-items: center; justify-content: center; gap: 1.4rem; }
+.duel-vs-x { font-size: 1.3rem; color: var(--accent-lit); font-weight: var(--weight-strong); }
+.duel-card { display: flex; flex-direction: column; align-items: center; gap: 0.35rem; width: 110px; }
+.duel-card-label { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.duel-card-img { width: 96px; height: 134px; object-fit: contain; border-radius: var(--radius); background: var(--bg-3); display: flex; align-items: center; justify-content: center; font-size: 2.2rem; }
+.duel-card-name { font-size: 0.78rem; text-align: center; line-height: 1.15; }
+.duel-wait { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1.1rem; flex-wrap: wrap; }
+.duel-live { margin-top: 1.1rem; text-align: center; }
+.duel-result { margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px solid var(--border); text-align: center; }
+@media (max-width: 768px) {
+  .duel-card, .duel-card-img { width: 80px; }
+  .duel-card-img { height: 112px; }
+}
+
 /* --- provably-fair modal --- */
 .games-modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center;

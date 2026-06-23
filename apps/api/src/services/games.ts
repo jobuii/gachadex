@@ -7,7 +7,7 @@ import { getOrCreateSystemAccount, getOrCreateUserAccount, getBalance, postTxn }
 import { handleFor } from './handles.ts';
 import { publish } from './bus.ts';
 import { emitGameWinEvent } from './chat.ts';
-import { packRipConfig, setPokerConfig, gradeGambleConfig, theBreakConfig, type PackBand } from './game-config.ts';
+import { packRipConfig, setPokerConfig, gradeGambleConfig, theBreakConfig, priceDuelConfig, type PackBand } from './game-config.ts';
 import { commitServerSeed, freshClientSeed, weightedPick, rollInt } from './game-fairness.ts';
 
 /**
@@ -431,7 +431,7 @@ export async function sellBackPrize(db: Db, userId: string, prizeId: string): Pr
 
 export interface GamesView {
   enabled: boolean; // master GAMES_ENABLED gate
-  games: { id: string; name: string; type: string; enabled: boolean; tiers?: number[]; buybackSpreadBps?: number; anteUsd?: number; swapFeeUsd?: number; maxSwaps?: number; grades?: { label: string; multBps: number }[]; spots?: number; entryUsd?: number }[];
+  games: { id: string; name: string; type: string; enabled: boolean; tiers?: number[]; buybackSpreadBps?: number; anteUsd?: number; swapFeeUsd?: number; maxSwaps?: number; grades?: { label: string; multBps: number }[]; spots?: number; entryUsd?: number; windowHours?: number; rakeBps?: number }[];
 }
 
 /**
@@ -507,6 +507,7 @@ export function gamesView(): GamesView {
   const sp = setPokerConfig();
   const gg = gradeGambleConfig();
   const tb = theBreakConfig();
+  const pd = priceDuelConfig();
   return {
     enabled: config.gamesEnabled,
     games: [
@@ -545,6 +546,15 @@ export function gamesView(): GamesView {
         spots: tb.spots,
         entryUsd: tb.entryUsd,
         buybackSpreadBps: tb.buybackSpreadBps,
+      },
+      {
+        id: 'price-duel',
+        name: 'Price Duel',
+        type: 'skill',
+        enabled: config.gamesEnabled && pd.enabled,
+        anteUsd: pd.anteUsd,
+        windowHours: pd.windowHours,
+        rakeBps: pd.rakeBps,
       },
     ],
   };

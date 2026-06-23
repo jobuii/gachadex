@@ -190,6 +190,11 @@ export const gradeOpen = (tier, idempotencyKey) => req('/games/grade/open', { me
 export const getBreak = () => req('/games/break', { auth: true }); // { round: BreakView | null }
 export const getBreakRound = (roundId) => req(`/games/break/${roundId}`, { auth: true });
 export const breakJoin = (idempotencyKey) => req('/games/break/join', { method: 'POST', auth: true, body: { idempotencyKey } });
+// Price Duel
+export const getMyDuel = () => req('/games/duel', { auth: true }); // { duel: DuelView | null }
+export const getDuelById = (duelId) => req(`/games/duel/${duelId}`, { auth: true });
+export const duelJoin = (marketId, idempotencyKey) => req('/games/duel/join', { method: 'POST', auth: true, body: { marketId, idempotencyKey } });
+export const duelCancel = (duelId) => req('/games/duel/cancel', { method: 'POST', auth: true, body: { duelId } });
 
 // --- LP ---
 export const getPool = () => req('/lp/pool');

@@ -18,7 +18,7 @@ import { listChatUsers } from '../services/chat.ts';
 import { chatConfigView, setChatThresholds } from '../services/chat-config.ts';
 import { dropConfigView, setDropConfig, getDropView } from '../services/drop-config.ts';
 import { totalTippedE6, recentTips } from '../services/drop.ts';
-import { gamesAdminView, setPackRipConfig, setSetPokerConfig, setGradeGambleConfig, setTheBreakConfig } from '../services/game-config.ts';
+import { gamesAdminView, setPackRipConfig, setSetPokerConfig, setGradeGambleConfig, setTheBreakConfig, setPriceDuelConfig } from '../services/game-config.ts';
 import { seedGamePool, packRipEv } from '../services/games.ts';
 import { setPokerEv } from '../services/games-setpoker.ts';
 import { gradeGambleEv } from '../services/games-grade.ts';
@@ -242,6 +242,7 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     if (b.setPoker) await setSetPokerConfig(db, b.setPoker);
     if (b.gradeGamble) await setGradeGambleConfig(db, b.gradeGamble);
     if (b.theBreak) await setTheBreakConfig(db, b.theBreak);
+    if (b.priceDuel) await setPriceDuelConfig(db, b.priceDuel);
     return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db), setPokerEv: await setPokerEv(db), gradeGambleEv: await gradeGambleEv(db), breakEv: await breakEv(db) };
   });
   // Cancel + refund an open case (the safety valve for a break that won't fill).

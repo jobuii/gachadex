@@ -43,6 +43,12 @@ export function GamesAdminView({ adminKey }) {
   const [tbBigWin, setTbBigWin] = useState('');
   const [tbBandsJson, setTbBandsJson] = useState('');
   const [tbCancelId, setTbCancelId] = useState('');
+  // Price Duel drafts
+  const [pdEnabled, setPdEnabled] = useState(false);
+  const [pdAnte, setPdAnte] = useState('');
+  const [pdWindow, setPdWindow] = useState('');
+  const [pdRake, setPdRake] = useState('');
+  const [pdBigWin, setPdBigWin] = useState('');
 
   const load = useCallback(() => {
     return api.adminGetGamesConfig(adminKey).then((v) => {
@@ -77,6 +83,12 @@ export function GamesAdminView({ adminKey }) {
       setTbMaxPrize(String(tb.maxPrizeUsd));
       setTbBigWin(String(tb.bigWinUsd));
       setTbBandsJson(JSON.stringify(tb.bands, null, 2));
+      const pd = v.priceDuel;
+      setPdEnabled(pd.enabled);
+      setPdAnte(String(pd.anteUsd));
+      setPdWindow(String(pd.windowHours));
+      setPdRake((pd.rakeBps / 100).toString());
+      setPdBigWin(String(pd.bigWinUsd));
     }).catch((e) => setErr(e.message));
   }, [adminKey]);
 
@@ -182,6 +194,17 @@ export function GamesAdminView({ adminKey }) {
     async () => { const r = await api.adminCancelBreak(tbCancelId.trim(), adminKey); setTbCancelId(''); return r; },
     (r) => `Case cancelled — ${r.refunded} entrant(s) refunded.`,
   );
+
+  const savePriceDuel = () => {
+    const patch = {
+      enabled: pdEnabled,
+      anteUsd: parseInt(pdAnte, 10),
+      windowHours: parseInt(pdWindow, 10),
+      rakeBps: Math.round(parseFloat(pdRake) * 100),
+      bigWinUsd: parseInt(pdBigWin, 10),
+    };
+    act(() => api.adminSetGamesConfig({ priceDuel: patch }, adminKey), 'Saved. (Restart the API if a value doesn’t apply within ~30s.)');
+  };
 
   const seed = () => act(
     async () => { const r = await api.adminSeedGamePool(parseFloat(seedAmt), adminKey); setSeedAmt(''); return r; },
@@ -348,6 +371,19 @@ export function GamesAdminView({ adminKey }) {
         </label>
         <button className="btn-ghost" disabled={busy || !tbCancelId.trim()} onClick={cancelBreak} style={{ alignSelf: 'flex-end' }}>Cancel case</button>
       </div>
+
+      <h3 style={{ marginTop: '1.5rem' }}>Price Duel</h3>
+      <p className="muted">Skill PvP — the house edge is the rake on each decisive pot (a tie refunds both, no rake).</p>
+      <label className="games-admin-row">
+        <input type="checkbox" checked={pdEnabled} onChange={(e) => setPdEnabled(e.target.checked)} /> Enabled
+      </label>
+      <div className="games-admin-fields">
+        <label className="field-label"><span>Ante (USD)</span><input type="number" value={pdAnte} onChange={(e) => setPdAnte(e.target.value)} /></label>
+        <label className="field-label"><span>Window (hours)</span><input type="number" value={pdWindow} onChange={(e) => setPdWindow(e.target.value)} /></label>
+        <label className="field-label"><span>Rake (%) — the edge</span><input type="number" step="0.1" value={pdRake} onChange={(e) => setPdRake(e.target.value)} /></label>
+        <label className="field-label"><span>Big-win threshold (USD)</span><input type="number" value={pdBigWin} onChange={(e) => setPdBigWin(e.target.value)} /></label>
+      </div>
+      <button className="btn-primary" disabled={busy} onClick={savePriceDuel}>Save Price Duel config</button>
 
       {msg && <div className="ref-msg up">{msg}</div>}
       {err && <div className="order-error">{err}</div>}

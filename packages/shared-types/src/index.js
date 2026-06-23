@@ -347,6 +347,15 @@ export const BreakCancelRequest = z.object({
   roundId: z.string().min(1),
 });
 
+// Price Duel: quick-match with a picked card / the creator backs out of an unmatched duel.
+export const DuelJoinRequest = z.object({
+  marketId: z.string().min(1).max(128),
+  idempotencyKey: z.string().min(8).max(128),
+});
+export const DuelCancelRequest = z.object({
+  duelId: z.string().min(1).max(128),
+});
+
 // Live-tunable games config (admin Games view). Partial — only provided keys change. Bounds mirror
 // game-config.ts; `tiers` nests a per-tier weighted value-band table the rip draws from.
 const PackBandReq = z.object({
@@ -407,6 +416,16 @@ export const GameConfigRequest = z
         maxPrizeUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
         bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
         bands: z.array(PackBandReq).min(1).max(12).optional(),
+      })
+      .strict()
+      .optional(),
+    priceDuel: z
+      .object({
+        enabled: z.boolean().optional(),
+        anteUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        windowHours: z.coerce.number().int().min(1).max(720).optional(),
+        rakeBps: z.coerce.number().int().min(0).max(5000).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
       })
       .strict()
       .optional(),

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { ClientSeedRequest, PackRipOpenRequest, PrizeSellRequest, SetPokerDealRequest, SetPokerSwapRequest, SetPokerSettleRequest, GradeOpenRequest, BreakJoinRequest } from '@pokex/shared-types';
+import { ClientSeedRequest, PackRipOpenRequest, PrizeSellRequest, SetPokerDealRequest, SetPokerSwapRequest, SetPokerSettleRequest, GradeOpenRequest, BreakJoinRequest, DuelJoinRequest, DuelCancelRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { authenticate } from '../plugins/auth.ts';
@@ -8,6 +8,7 @@ import { gamesView, getFairness, rotateClientSeed, openPack, sellBackPrize, list
 import { dealHand, swapCard, settleHand, getOpenHand } from '../services/games-setpoker.ts';
 import { gradeOpen } from '../services/games-grade.ts';
 import { currentBreak, getBreakRound, joinBreak } from '../services/games-break.ts';
+import { joinOrCreateDuel, myDuel, getDuel, cancelDuel } from '../services/games-duel.ts';
 
 const TRADE = { preHandler: authenticate, config: { scope: 'trade' as const } };
 
@@ -76,5 +77,17 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
   app.post('/games/break/join', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
     const { idempotencyKey } = BreakJoinRequest.parse(req.body);
     return joinBreak(await getDb(), req.userId!, idempotencyKey);
+  });
+
+  // Price Duel — your current duel, a specific duel to poll (settles on read), quick-match join, and cancel.
+  app.get('/games/duel', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => ({ duel: await myDuel(await getDb(), req.userId!) }));
+  app.get('/games/duel/:duelId', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => ({ duel: await getDuel(await getDb(), req.userId!, (req.params as { duelId: string }).duelId) }));
+  app.post('/games/duel/join', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
+    const { marketId, idempotencyKey } = DuelJoinRequest.parse(req.body);
+    return joinOrCreateDuel(await getDb(), req.userId!, marketId, idempotencyKey);
+  });
+  app.post('/games/duel/cancel', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
+    const { duelId } = DuelCancelRequest.parse(req.body);
+    return cancelDuel(await getDb(), req.userId!, duelId);
   });
 }
