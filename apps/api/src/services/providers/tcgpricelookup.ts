@@ -243,8 +243,16 @@ export function rawPriceUsd(card: Pick<TplCard, 'prices'>): number {
 /** The cross-check signals for the Scrydex combine (NOT a price source): the TCGplayer market (same
  *  venue as the Scrydex anchor — a freshness/agreement check) and the eBay 1-day average (the only
  *  genuinely independent venue). Read from the best available raw condition; either may be null. */
-export function tplCrossCheck(card: Pick<TplCard, 'prices'>): { tcgpMarket: number | null; ebay1d: number | null } {
-  for (const cond of CONDITION_ORDER) {
+export function tplCrossCheck(
+  card: Pick<TplCard, 'prices'>,
+  preferCondition?: string,
+): { tcgpMarket: number | null; ebay1d: number | null } {
+  // Read the cross-check at the SAME grade the Scrydex anchor priced (so §6 compares like-for-like), then
+  // fall back to the NM-first order. Without an aligned grade an LP-priced card gets cross-checked against
+  // tcgpl's NM and wrongly flagged (build spec §④ fix #3).
+  const order =
+    preferCondition == null ? CONDITION_ORDER : [preferCondition, ...CONDITION_ORDER.filter((c) => c !== preferCondition)];
+  for (const cond of order) {
     const c = card.prices?.raw?.[cond];
     if (!c) continue;
     const tcgpMarket = c.tcgplayer?.market != null && c.tcgplayer.market > 0 ? c.tcgplayer.market : null;

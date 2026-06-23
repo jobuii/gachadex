@@ -134,6 +134,20 @@ test('tplCrossCheck: TCGplayer market + eBay 1d for the Scrydex combine (not a p
   assert.deepEqual(tplCrossCheck({ prices: null }), { tcgpMarket: null, ebay1d: null }); // no raw envelope
 });
 
+test('tplCrossCheck: reads the preferred grade first, else falls back NM-first (build spec §④ #3)', () => {
+  const both: Pick<TplCardT, 'prices'> = {
+    prices: { raw: {
+      near_mint: { tcgplayer: { market: 900 }, ebay: { avg_1d: 800 } },
+      lightly_played: { tcgplayer: { market: 500 }, ebay: { avg_1d: 520 } },
+    } },
+  };
+  assert.deepEqual(tplCrossCheck(both), { tcgpMarket: 900, ebay1d: 800 }, 'default → NM-first');
+  assert.deepEqual(tplCrossCheck(both, 'lightly_played'), { tcgpMarket: 500, ebay1d: 520 }, 'aligned to LP');
+  assert.deepEqual(tplCrossCheck(both, 'near_mint'), { tcgpMarket: 900, ebay1d: 800 }, 'aligned to NM');
+  // a preferred grade absent on tcgpl → fall back to the NM-first order.
+  assert.deepEqual(tplCrossCheck(both, 'moderately_played'), { tcgpMarket: 900, ebay1d: 800 }, 'absent grade → NM-first fallback');
+});
+
 test('priceCard: median of (eBay 1d, TCGplayer market, eBay 7d); a lone outlier is outvoted, no clamp', () => {
   // three signals agree -> the median is the middle value, trusted
   assert.deepEqual(priceCard(env({ a1: 10.8, spot: 9.8, a7: 10.1 })), { usd: 10.1, confident: true });

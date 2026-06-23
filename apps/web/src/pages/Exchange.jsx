@@ -32,20 +32,18 @@ export function Exchange() {
   const [activeView, setActiveView] = useState('trade');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const isMobile = useMediaQuery(MOBILE_QUERY);
-  const [marketsOpen, setMarketsOpen] = useState(false);
-  // the list stays mounted through the slide-out animation, then unmounts (it subscribes to
-  // live marks, so it must not stay mounted while the drawer idles closed)
-  const [marketsMounted, setMarketsMounted] = useState(false);
-  const openMarkets = () => { setMarketsMounted(true); setMarketsOpen(true); };
+  // Mobile Trade screen: show the market PICKER (the default, and on re-tapping Trade) vs the selected
+  // card's chart. Remembers the last card — leaving Trade and coming back restores it; tapping Trade while
+  // already on Trade resets to the picker (see selectView).
+  const [mobilePicker, setMobilePicker] = useState(true);
   const [chatOpen, setChatOpen] = useState(initialChatOpen);
 
-  // leaving mobile unmounts the drawer; clear its state so it can't reappear open on re-entry
-  useEffect(() => {
-    if (!isMobile) {
-      setMarketsOpen(false);
-      setMarketsMounted(false);
-    }
-  }, [isMobile]);
+  // Tab navigation: re-tapping Trade while already on it returns to the market picker; switching to Trade
+  // from another view leaves mobilePicker as-is (restoring the last card). Drives the desktop nav + tab bar.
+  const selectView = (id) => {
+    if (id === 'trade' && activeView === 'trade') setMobilePicker(true);
+    setActiveView(id);
+  };
 
   const toggleChat = () =>
     setChatOpen((o) => {
@@ -95,6 +93,7 @@ export function Exchange() {
   }, [loadMarkets]);
   const handleTradeMarket = (m) => {
     setSelectedId(m.id);
+    setMobilePicker(false); // jump straight to the chosen card's chart, not the picker
     setActiveView('trade');
   };
 
@@ -103,7 +102,7 @@ export function Exchange() {
       <div className="skin-cardback" aria-hidden="true"><span className="skin-emblem" /></div>
       <div className={`app-container ${chatOpen ? 'chat-open' : ''}`}>
       <ChatSidebar open={chatOpen} onToggle={toggleChat} />
-      <Navbar activeView={activeView} setActiveView={setActiveView} chatOpen={chatOpen} onToggleChat={toggleChat} />
+      <Navbar activeView={activeView} setActiveView={selectView} chatOpen={chatOpen} onToggleChat={toggleChat} />
 
       {activeView === 'trade' && !isMobile && (
         <div className={`main-grid ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
@@ -123,45 +122,33 @@ export function Exchange() {
 
       {activeView === 'trade' && isMobile && (
         <div className="trade-mobile">
-          {/* current market — tap to open the full markets list */}
-          <button className="mkt-bar" onClick={openMarkets} aria-haspopup="dialog">
-            <MarketThumb market={selected} className="mkt-bar-thumb" />
-            <span className="mkt-bar-name">{selected?.displayName ?? 'Select a market'}</span>
-            {selected && <MktBarPrice market={selected} />}
-            <span className="mkt-bar-caret">▾</span>
-          </button>
-
-          <TradingView market={selected} mobile />
-          <OrderEntry market={selected} onTraded={loadMarkets} />
-          <BottomPanel market={selected} onGoToMarket={goToMarket} />
-
-          <div
-            className={`mobile-markets-drawer ${marketsOpen ? 'open' : ''}`}
-            role="dialog"
-            aria-label="Select market"
-            aria-hidden={!marketsOpen}
-            onTransitionEnd={(e) => {
-              // unmount the list once the slide-out finishes (reopen mid-close keeps it)
-              if (e.propertyName === 'transform' && !marketsOpen) setMarketsMounted(false);
-            }}
-          >
-            {/* reuses the chat overlay's header chrome */}
-            <div className="chat-header">
-              <span className="chat-title">Select market</span>
-              <button className="chat-collapse" onClick={() => setMarketsOpen(false)} aria-label="Close">✕</button>
-            </div>
-            {marketsMounted && (
+          {mobilePicker || !selected ? (
+            // default + re-tap: the inline market picker — flows above the bottom tab bar, never covers it
+            <div className="mobile-market-picker">
               <SidebarMarkets
                 markets={markets}
                 loading={loading}
                 selected={selected}
-                onSelect={(m) => { onSelectMarket(m); setMarketsOpen(false); }}
-                onListed={async (id) => { await onMarketListed(id); setMarketsOpen(false); }}
+                onSelect={(m) => { onSelectMarket(m); setMobilePicker(false); }}
+                onListed={async (id) => { await onMarketListed(id); setMobilePicker(false); }}
                 collapsed={false}
                 setCollapsed={() => {}}
               />
-            )}
-          </div>
+            </div>
+          ) : (
+            <>
+              {/* current market — tap to return to the picker */}
+              <button className="mkt-bar" onClick={() => setMobilePicker(true)}>
+                <MarketThumb market={selected} className="mkt-bar-thumb" />
+                <span className="mkt-bar-name">{selected?.displayName ?? 'Select a market'}</span>
+                {selected && <MktBarPrice market={selected} />}
+                <span className="mkt-bar-caret">▾</span>
+              </button>
+              <TradingView market={selected} mobile />
+              <OrderEntry market={selected} onTraded={loadMarkets} />
+              <BottomPanel market={selected} onGoToMarket={goToMarket} />
+            </>
+          )}
         </div>
       )}
 

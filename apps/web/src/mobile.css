@@ -58,7 +58,8 @@
     padding: 0;
     cursor: pointer;
   }
-  .mobile-tab .mt-ico { font-size: 0.85rem; line-height: 1; }
+  .mobile-tab .mt-ico { display: flex; line-height: 1; }
+  .mobile-tab .mt-ico svg { width: 20px; height: 20px; } /* line glyphs inherit the tab colour via currentColor */
   .mobile-tab.active { color: var(--gold); }
   /* modern fonts read smaller than the pixel face at the same rem — floor the labels
      (same convention as the readability floors in themes.css) */
@@ -71,7 +72,7 @@
   .app-container.chat-open { padding-left: 0; }
   .lp-chat-open { padding-left: 0; }
   .chat-sidebar { width: 100%; z-index: 160; border-right: none; }
-  .chat-header { height: var(--m-bar-h); } /* also the markets drawer head (same chrome) */
+  .chat-header { height: var(--m-bar-h); }
   .chat-collapse { font-size: 0.8rem; padding: 0.5rem; }
 
   /* ---- trade screen (single column, composed in Exchange.jsx) ---- */
@@ -113,20 +114,17 @@
   .bottom-tabs { overflow-x: auto; }
   .bottom-tab-btn { white-space: nowrap; flex-shrink: 0; }
 
-  /* ---- full-screen markets drawer (slides from the left) ---- */
-  .mobile-markets-drawer {
-    position: fixed; inset: 0; z-index: 150;
+  /* ---- inline market picker (the default Trade view + on re-tapping Trade) ----
+     Flows in the page ABOVE the fixed bottom tab bar (never covers it). Fills from below the in-flow top
+     bar to the tab bar; the card list scrolls inside so the game tabs + search stay pinned. */
+  .mobile-market-picker {
     display: flex; flex-direction: column;
-    background: var(--bg-2);
-    transform: translateX(-100%);
-    /* visibility flips only after the slide-out finishes, so the close animates too */
-    transition: transform 0.25s ease, visibility 0s linear 0.25s;
-    visibility: hidden;
+    /* dvh (not vh) so the list fits exactly above the fixed tab bar even while the iOS URL bar shows */
+    height: calc(100dvh - var(--m-bar-h) - var(--m-bar-h) - env(safe-area-inset-bottom));
   }
-  .mobile-markets-drawer.open { transform: translateX(0); visibility: visible; }
-  .mobile-markets-drawer .sidebar { flex: 1; min-height: 0; height: auto; border-right: none; }
-  .mobile-markets-drawer .sidebar-header { display: none; } /* the drawer's chat-header replaces it */
-  .mobile-markets-drawer .market-item { padding: 0.75rem; } /* comfortable touch targets */
+  .mobile-market-picker .sidebar { flex: 1; min-height: 0; height: auto; border-right: none; }
+  .mobile-market-picker .sidebar-header { display: none; } /* desktop collapse chrome — not needed inline */
+  .mobile-market-picker .market-item { padding: 0.75rem; } /* comfortable touch targets */
 
   /* ---- full-page views ---- */
   .page { padding: 1rem 0.8rem; }
@@ -178,15 +176,17 @@
   .screener { height: auto; overflow: visible; }
   .screener-table-wrap { overflow: visible; }
 
-  /* compact filter bar; the search drops to its own full-width row */
-  .screener-bar { padding: 0.45rem 0.5rem; gap: 0.32rem; }
+  /* compact filter bar, CENTERED (the search drops to its own full-width row) */
+  .screener-bar { padding: 0.5rem 0.5rem; gap: 0.4rem; justify-content: center; }
+  .screener-games, .screener-sorts, .screener-right { justify-content: center; flex-wrap: wrap; }
   .screener-bar .game-tab-btn,
   .screener-bar .sidebar-tab-btn { font-size: 0.4rem; padding: 0.32rem 0.4rem; }
   .screener-jpy { font-size: 0.4rem; padding: 0.32rem 0.45rem; }
   .screener-select { font-size: 0.4rem; }
   .screener-search { flex: 1 1 100%; width: auto; }
 
-  /* unbuild the table into a stack of grid cards */
+  /* unbuild the table into a stack of cards: thumb + name (rarity under it) on the left, and the numbers
+     (price → 24h% → volume) as a RIGHT-ALIGNED STACK so the price lines up with the figures beneath it */
   .screener-table thead { display: none; }
   .screener-table,
   .screener-table tbody,
@@ -194,22 +194,25 @@
   .screener-table td { display: block; }
   .screener-table tr.screener-row {
     display: grid;
-    grid-template-columns: 1fr auto auto;
+    grid-template-columns: 1fr auto;
     grid-template-areas:
-      "ident  ident  price"
-      "rarity change vol";
+      "ident  price"
+      "rarity change"
+      "rarity vol";
     align-items: center;
-    column-gap: 0.5rem;
-    row-gap: 0.25rem;
-    padding: 0.55rem 0.65rem;
+    column-gap: 0.6rem;
+    row-gap: 0.1rem;
+    padding: 0.6rem 0.7rem;
+    border-bottom: 1px solid var(--bg-3); /* one separator per card (on the row, not each cell) */
   }
-  .screener-row td { padding: 0; border: none; text-align: left; }
-  .screener-row td:nth-child(1) { display: none; }                  /* rank # — row order conveys it */
-  .screener-row td:nth-child(2) { grid-area: ident; min-width: 0; } /* thumb + name (stays a flex row) */
-  .screener-row td:nth-child(3) { grid-area: price; }  /* live price (right-aligned via .num) */
-  .screener-row td:nth-child(4) { grid-area: change; } /* 24h % — keeps its up/down colour */
-  .screener-row td:nth-child(5) { grid-area: vol; text-align: right; color: var(--text-muted); font-size: 0.42rem; }
-  .screener-row td:nth-child(6) { grid-area: rarity; }              /* rarity badge, under the name */
+  /* kill the per-cell table borders (index.css `.screener-table tbody td` out-specifies a flat `.screener-row td`) */
+  .screener-table tbody .screener-row td { padding: 0; border: none; }
+  .screener-row td:nth-child(1) { display: none; }                                      /* rank # — row order conveys it */
+  .screener-row td:nth-child(2) { grid-area: ident; min-width: 0; text-align: left; }   /* thumb + name */
+  .screener-row td:nth-child(3) { grid-area: price; text-align: right; }                /* price — heads the right stack */
+  .screener-row td:nth-child(4) { grid-area: change; text-align: right; }               /* 24h % — directly under the price */
+  .screener-row td:nth-child(5) { grid-area: vol; text-align: right; color: var(--text-muted); font-size: 0.42rem; } /* volume */
+  .screener-row td:nth-child(6) { grid-area: rarity; align-self: center; text-align: left; } /* rarity badge under the name */
   .screener-name { max-width: none; }
   .screener-thumb { width: 26px; height: 36px; }
   .screener-badge { font-size: 0.38rem; }

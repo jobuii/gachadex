@@ -4,6 +4,7 @@ import { getDb } from '../db/client.ts';
 import { listMarketsWithData, getCandles, getMarketDetails } from '../services/markets.ts';
 import { searchCatalog, ensureMarketFromCard } from '../services/providers/search.ts';
 import { getDefaultClient } from '../services/providers/tcgpricelookup.ts';
+import { getDefaultScrydexClient } from '../services/providers/scrydex.ts';
 import { authenticate } from '../plugins/auth.ts';
 import { config, catalogSearchEnabled, searchAndBetActive } from '../config.ts';
 import { rl } from './_ratelimit.ts';
@@ -28,9 +29,11 @@ export async function marketRoutes(app: FastifyInstance): Promise<void> {
     return details;
   });
 
-  // Catalogue search (read-only) is live once the feature flag is on + tcgpricelookup drives the
-  // oracle — it does NOT depend on the NAV gates (it browses, it doesn't create a market).
+  // Catalogue search (read-only) is live once the feature flag is on + a search-capable provider drives
+  // the oracle — it does NOT depend on the NAV gates (it browses, it doesn't create a market). Routing
+  // is per game: Scrydex for the games it covers (Pokémon, MTG), tcgpl for One Piece.
   if (!catalogSearchEnabled) return;
+  const clients = (db: Awaited<ReturnType<typeof getDb>>) => ({ scrydex: getDefaultScrydexClient(db), tcgpl: getDefaultClient(db) });
 
   // Whole-catalog search (cached 1h per (q, game); uncached calls cost a provider request — capped
   // per IP on top of the global limiter). Authenticated: the catalogue is a provider-billed lookup,
@@ -42,7 +45,7 @@ export async function marketRoutes(app: FastifyInstance): Promise<void> {
     if (query.length < 2 || query.length > 80) throw new HttpError(400, 'query must be 2-80 characters', 'bad_query');
     if (!game || !(GAMES as readonly string[]).includes(game)) throw new HttpError(400, 'unknown game', 'bad_game');
     const db = await getDb();
-    return { results: await searchCatalog(db, getDefaultClient(db), query, game) };
+    return { results: await searchCatalog(db, clients(db), query, game) };
   });
 
   // On-demand market creation CREATES a real-money-tradeable market; it follows catalogue search
@@ -56,12 +59,15 @@ export async function marketRoutes(app: FastifyInstance): Promise<void> {
     '/markets/ensure',
     rl(config.routeRateLimits.marketEnsure, { preHandler: authenticate, config: { scope: 'trade' as const } }),
     async (req) => {
-      const { providerCardId } = (req.body ?? {}) as { providerCardId?: string };
-      if (typeof providerCardId !== 'string' || !/^[0-9a-f-]{8,64}$/i.test(providerCardId)) {
+      const { providerCardId, game } = (req.body ?? {}) as { providerCardId?: string; game?: string };
+      // Provider card ids are alphanumeric+separators (tcgpl uuid-ish, Scrydex slug-ish) — basic sanitise;
+      // the lookup is URL-encoded + the DB queries are parameterised.
+      if (typeof providerCardId !== 'string' || !/^[A-Za-z0-9._-]{3,128}$/.test(providerCardId)) {
         throw new HttpError(400, 'providerCardId required', 'bad_card_id');
       }
+      if (!game || !(GAMES as readonly string[]).includes(game)) throw new HttpError(400, 'unknown game', 'bad_game');
       const db = await getDb();
-      return ensureMarketFromCard(db, getDefaultClient(db), providerCardId);
+      return ensureMarketFromCard(db, clients(db), providerCardId, game);
     },
   );
 }

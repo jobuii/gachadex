@@ -4,6 +4,7 @@ import { indexSeries, INDEX_SERIES_LABELS } from '@pokex/shared-types';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { useAuth } from '../auth/AuthContext';
 import { useStickyState } from '../lib/useStickyState';
+import { MarketThumb } from './MarketThumb';
 import * as api from '../lib/api.js';
 
 const TABS = ['indices', 'cards'];
@@ -44,7 +45,7 @@ function marketSubtitle(m) {
 }
 
 /** One whole-catalog search result: trade it if a market exists, list it on demand if it qualifies. */
-function CatalogRow({ r, existing, listingEnabled, onSelect, onListed }) {
+function CatalogRow({ r, existing, listingEnabled, game, onSelect, onListed, markListed }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -52,7 +53,8 @@ function CatalogRow({ r, existing, listingEnabled, onSelect, onListed }) {
     setErr(null);
     setBusy(true);
     try {
-      const { marketId } = await api.ensureMarket(r.providerCardId);
+      const { marketId } = await api.ensureMarket(r.providerCardId, game);
+      markListed(r.providerCardId, marketId); // stamp the marketId onto this result so the row flips to TRADE (was stuck on LIST forever)
       await onListed(marketId);
     } catch (e) {
       setErr(e.message);
@@ -76,7 +78,7 @@ function CatalogRow({ r, existing, listingEnabled, onSelect, onListed }) {
         {existing ? (
           <span className="catalog-state up">TRADE ▸</span>
         ) : !r.listable ? (
-          <span className="catalog-state" title="Needs a $10+ TCGplayer price corroborated by eBay sales">not listable</span>
+          <span className="catalog-state" title="Needs a $10+ market price">not listable</span>
         ) : !listingEnabled ? (
           // listable, but on-demand listing is turned off server-side — hide the (dead) LIST button
           <span className="catalog-state" title="On-demand listing is currently disabled">listing off</span>
@@ -182,6 +184,10 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
   const shownIds = useMemo(() => new Set(list.map((m) => m.id)), [list]);
   const catalogRows = catalog?.filter((r) => !r.marketId || !shownIds.has(r.marketId));
   const marketById = useMemo(() => new Map(markets.map((m) => [m.id, m])), [markets]);
+  // After listing a catalog card, stamp its new marketId onto the result so the row flips LIST → TRADE
+  // (existing is derived from r.marketId, which the cached search results otherwise never gets).
+  const markListed = (providerCardId, marketId) =>
+    setCatalog((cat) => cat?.map((c) => (c.providerCardId === providerCardId ? { ...c, marketId } : c)) ?? cat);
 
   return (
     <div className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
@@ -200,7 +206,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
             aria-selected={game === g.id}
             className={`game-tab-btn ${game === g.id ? 'on' : ''}`}
             style={{ '--dot': g.color }}
-            onClick={() => setGame(g.id)}
+            onClick={() => { setGame(g.id); setCatalog(null); }} // drop the previous game's rows so a stale row can't be listed against the new game
           >
             <span className="gdot" />
             {g.label}
@@ -290,7 +296,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
               >
                 <div className="market-item-left">
                   <span className="market-index">{i + 1}.</span>
-                  {m.imageSmall ? <img src={m.imageSmall} alt="" className="market-thumb" /> : <span className="market-thumb idx-thumb">IDX</span>}
+                  <MarketThumb market={m} className="market-thumb" />
                   <div className="market-item-info">
                     <span className="market-item-name">{m.displayName}</span>
                     <span className="market-item-set">{marketSubtitle(m)}</span>
@@ -323,8 +329,10 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
                     r={r}
                     existing={r.marketId ? marketById.get(r.marketId) ?? null : null}
                     listingEnabled={listingEnabled}
+                    game={game}
                     onSelect={onSelect}
                     onListed={onListed}
+                    markListed={markListed}
                   />
                 ))}
                 {catalogError && !catalogLoading && (

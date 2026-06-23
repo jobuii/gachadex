@@ -28,6 +28,7 @@ import { getUserPositions, liquidateAllEligible } from '../services/engine.ts';
 import { withdrawalAutoProcessView, setWithdrawalAutoProcess } from '../services/withdrawal-config.ts';
 import { getCustomerHistory } from '../services/history.ts';
 import { adminClosePosition, adminCloseUserPositions, adminCloseAllPositions } from '../services/admin-close.ts';
+import { listAffiliates, setAffiliateTerms, maxCashbackBps } from '../services/affiliate.ts';
 
 /**
  * Non-custody operator endpoints (ROADMAP §2). Unlike the custody admin routes, these register
@@ -40,6 +41,21 @@ import { adminClosePosition, adminCloseUserPositions, adminCloseAllPositions } f
  */
 export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('onRequest', requireAdminKey);
+
+  // Affiliate / KOL referral economics: list codes + their terms, and create/update a code's terms
+  // (cashback% paid from house revenue + the affiliate's own fee-discount%, linked to a wallet). The
+  // affiliate service validates bps bounds, the cashback ceiling, and the code; pre-provisions the wallet.
+  app.get('/admin/affiliates', rl(config.routeRateLimits.admin), async () => ({
+    affiliates: await listAffiliates(await getDb()),
+    maxCashbackBps: maxCashbackBps(),
+  }));
+  app.post('/admin/affiliates', rl(config.routeRateLimits.admin), async (req) => {
+    // setAffiliateTerms validates pubkey + the bps bounds itself, so pass the body straight through.
+    const b = (req.body ?? {}) as {
+      pubkey?: string; code?: string; cashbackBps: unknown; feeDiscountBps: unknown; label?: string; active?: boolean;
+    };
+    return setAffiliateTerms(await getDb(), { ...b, pubkey: b.pubkey ?? '' });
+  });
 
   // Set a manual price for a market (card or index). Pins by default.
   app.post('/admin/markets/:id/price', rl(config.routeRateLimits.admin), async (req) => {

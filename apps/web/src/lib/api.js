@@ -54,7 +54,9 @@ async function req(path, opts = {}) {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `request failed (${res.status})`);
+    const e = new Error(err.error || `request failed (${res.status})`);
+    e.status = res.status; // let callers distinguish permanent (4xx) from transient (5xx/network) failures
+    throw e;
   }
   return res.json();
 }
@@ -108,8 +110,8 @@ export const getMarkets = () => req('/markets');
 export const getCandles = (id, tf) => req(`/markets/${id}/candles?tf=${encodeURIComponent(tf)}`);
 export const getMarketDetails = (id) => req(`/markets/${id}/details`);
 // Search-and-bet: whole-catalog search (server-cached) + on-demand market listing (auth).
-export const searchCatalog = (q, game) => req(`/catalog/search?q=${encodeURIComponent(q)}&game=${encodeURIComponent(game)}`);
-export const ensureMarket = (providerCardId) => req('/markets/ensure', { method: 'POST', auth: true, body: { providerCardId } });
+export const searchCatalog = (q, game) => req(`/catalog/search?q=${encodeURIComponent(q)}&game=${encodeURIComponent(game)}`, { auth: true });
+export const ensureMarket = (providerCardId, game) => req('/markets/ensure', { method: 'POST', auth: true, body: { providerCardId, game } });
 
 // --- account / trading ---
 export const getBalance = () => req('/account/balance', { auth: true });
@@ -237,6 +239,10 @@ async function adminGet(path, adminKey) {
 }
 export const adminSetPrice = (id, body, adminKey) => adminReq(`/admin/markets/${id}/price`, adminKey, body);
 export const adminUnpin = (id, adminKey) => adminReq(`/admin/markets/${id}/unpin`, adminKey);
+// Affiliate / KOL referral economics: list codes + their terms; create/update a code's terms (cashback +
+// fee-discount, linked to a wallet). Body: { pubkey, code?, cashbackBps, feeDiscountBps, label?, active? }.
+export const adminGetAffiliates = (adminKey) => adminGet('/admin/affiliates', adminKey); // { affiliates, maxCashbackBps }
+export const adminSetAffiliate = (body, adminKey) => adminReq('/admin/affiliates', adminKey, body);
 // Chat moderation (operator): list mods/muted/banned + audit; act on a user (id OR wallet pubkey) —
 // action is grant | revoke | unmute | unban.
 export const adminGetMods = (adminKey) => adminGet('/admin/chat/mods', adminKey);

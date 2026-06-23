@@ -4,6 +4,7 @@ import { useRealtime } from '../store/realtime';
 import { useAuth } from '../auth/AuthContext';
 import { FaucetButton } from './FaucetButton';
 import { OpenPositions } from './OpenPositions';
+import { thumbSrc } from '../lib/thumb.js';
 import * as api from '../lib/api.js';
 
 const OPEN_FEE_BPS = 10; // mirrors the server default (preview only; server is authoritative)
@@ -79,7 +80,8 @@ export function OrderEntry({ market, onTraded }) {
   const orderNotionalE6 = markE6 ? notional(qtyE6, BigInt(markE6)) : 0n;
   const feeUusdc = fee(orderNotionalE6, OPEN_FEE_BPS);
   const availableUsd = balance ? Number(balance.availableUusdc) / 1e6 : 0;
-  const largeImg = details?.imageLarge || market.imageSmall; // big card art for the click-to-enlarge modal
+  const previewSrc = thumbSrc(market); // index → /index-cards/<slug>.png; a card → its own image
+  const largeImg = details?.imageLarge || previewSrc; // big card art for the click-to-enlarge modal
   const belowMin = marginNum > 0 && orderNotionalE6 < MIN_NOTIONAL_UUSDC; // order too small (sub-$1 notional)
 
   const canTrade = user && market.tradeable && market.status === 'active' && qtyE6 >= minQty && marginNum > 0 && !belowMin;
@@ -107,8 +109,8 @@ export function OrderEntry({ market, onTraded }) {
         style={{ cursor: largeImg ? 'zoom-in' : 'default' }}
         title={largeImg ? 'Click to enlarge' : undefined}
       >
-        {market.imageSmall ? (
-          <img src={market.imageSmall} alt={market.displayName} className="preview-img" />
+        {previewSrc ? (
+          <img src={previewSrc} alt={market.displayName} className="preview-img" />
         ) : (
           <div className="preview-index">📈<br />{market.displayName}</div>
         )}

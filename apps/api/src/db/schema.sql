@@ -91,6 +91,25 @@ CREATE TABLE IF NOT EXISTS referral_code_aliases (
 );
 CREATE INDEX IF NOT EXISTS idx_referral_alias_user ON referral_code_aliases(user_id);
 
+-- Affiliate / KOL referral economics (operator-set, per affiliate user). The affiliate's shared code is
+-- their users.referral_code; their referees link via the usual users.referred_by. Two knobs:
+--   fee_discount_bps  — % off the affiliate's OWN trading fees (open + close; liquidation excluded).
+--   cashback_bps      — % of each referee's trading fee paid back to the affiliate, taken from the house
+--                       FEE_REVENUE share only (never the LP share), credited as withdrawable USDC.
+-- Guard (set-time + runtime): feeLpSharePct% + cashback% must stay <= 100% so house revenue never underflows.
+CREATE TABLE IF NOT EXISTS affiliate_terms (
+  user_id          TEXT PRIMARY KEY REFERENCES users(id),
+  cashback_bps     INT NOT NULL DEFAULT 0,
+  fee_discount_bps INT NOT NULL DEFAULT 0,
+  label            TEXT,                                  -- operator note ("Streamer X")
+  active           BOOLEAN NOT NULL DEFAULT true,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Cashback lookups (an affiliate's lifetime total on the Portfolio card + the admin list) filter
+-- ledger_entries by account + reason; index it so /account/balance never scans a trader's full ledger.
+CREATE INDEX IF NOT EXISTS idx_ledger_account_reason ON ledger_entries(account_id, reason);
+
 -- Usernames a user previously held (freed by a rename). Reserved permanently so a renamed-away
 -- handle can't be claimed by someone else to impersonate them in chat (the handle is the @mention
 -- target and reply-quote header). Uniqueness of a display_name spans BOTH users.display_name and this

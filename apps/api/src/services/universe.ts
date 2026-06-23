@@ -69,7 +69,7 @@ export async function deriveUniverse(
 
   const { rows } = await db.query<Row>(
     `WITH cls AS (
-       SELECT tcgplayer_id, game, name, scrydex_card_id, scrydex_expansion_id, tcgpl_card_id,
+       SELECT tcgplayer_id, game, name, scrydex_card_id, scrydex_expansion_id, tcgpl_card_id, tcgpl_ebay_7d,
          -- per-game preferred feed for the ranking/display price
          CASE WHEN game = 'onepiece' THEN COALESCE(tcgpl_raw_usd, scrydex_raw_usd)
               ELSE COALESCE(scrydex_raw_usd, tcgpl_raw_usd) END AS chosen_usd,
@@ -84,8 +84,13 @@ export async function deriveUniverse(
        WHERE game = ANY($3)
      ),
      en AS (
+       -- Price-confidence gate (don't fill a featured slot with a card the oracle can't price confidently):
+       -- require a Scrydex anchor (scrydex_card_id) OR an eBay corroborator (tcgpl_ebay_7d). A card with
+       -- NEITHER is reduce-only forever, so it's skipped and the next-ranked corroborated card takes its
+       -- slot — keeping the featured board tradeable instead of full of reduce-only cards.
        SELECT *, row_number() OVER (PARTITION BY game ORDER BY chosen_usd DESC NULLS LAST) AS rk
        FROM cls WHERE lang = 'en' AND chosen_usd IS NOT NULL
+         AND (scrydex_card_id IS NOT NULL OR tcgpl_ebay_7d IS NOT NULL)
      )
      SELECT tcgplayer_id, game, name, lang, chosen_usd, 'en-top' AS reason,
             scrydex_card_id, scrydex_expansion_id, tcgpl_card_id, requires_scrydex
