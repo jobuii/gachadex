@@ -98,7 +98,7 @@ test('extractRaw: matches the variant by tcgplayer product_id and reads NM marke
     },
   ]);
   assert.deepEqual(extractRaw(c, 12345), {
-    market: 100, low: 90, high: 120, currency: 'USD', day1Pct: 2.5, condition: 'NM', variant: 'holofoil',
+    market: 100, low: 90, high: 120, currency: 'USD', day1Pct: 2.5, condition: 'NM', variant: 'holofoil', bestGradeBroken: false,
   });
   assert.equal(extractRaw(c, 99999), null, 'no matching product_id -> null');
   assert.equal(extractRaw(c, null), null, 'no tcgplayer id -> null');
@@ -117,6 +117,54 @@ test('extractRaw: NM absent -> LP fallback; graded-only -> null; JPY currency pa
 
   const noMarket = card([{ marketplaces: [{ name: 'tcgplayer', product_id: 7 }], prices: [{ type: 'raw', condition: 'NM', low: 5 }] }]);
   assert.equal(extractRaw(noMarket, 7), null, 'a raw entry with no market value is skipped');
+});
+
+test('extractRaw: a broken best-grade rung is dropped + flagged; a sane NM is kept (build spec §④ #1)', () => {
+  // Umbreon-class: NM is a bandless $1 placeholder; LP/MP are the real ~$500 price.
+  const brokenNm = card([{
+    marketplaces: [{ name: 'tcgplayer', product_id: 7 }],
+    prices: [raw('NM', 1, { currency: 'USD' }), raw('LP', 500, { low: 500, currency: 'USD' }), raw('MP', 500.66, { currency: 'USD' })],
+  }]);
+  assert.equal(extractRaw(brokenNm, 7)?.condition, 'LP', 'broken NM skipped → LP');
+  assert.equal(extractRaw(brokenNm, 7)?.market, 500);
+  assert.equal(extractRaw(brokenNm, 7)?.bestGradeBroken, true, 'the dropped best grade is flagged');
+
+  // a market below its OWN quoted low is impossible → broken even with a band present.
+  const belowLow = card([{
+    marketplaces: [{ name: 'tcgplayer', product_id: 7 }],
+    prices: [raw('NM', 100, { low: 400, high: 900, currency: 'USD' }), raw('LP', 450, { currency: 'USD' })],
+  }]);
+  assert.equal(extractRaw(belowLow, 7)?.condition, 'LP', 'NM market < own low → skipped');
+
+  // TWO placeholders + one real price: the reference is the banded real rung (NOT the median, which two
+  // glitch rungs would poison) — both $1 and $2 are dropped, the real $500 survives.
+  const twoGlitches = card([{
+    marketplaces: [{ name: 'tcgplayer', product_id: 7 }],
+    prices: [raw('NM', 1, { currency: 'USD' }), raw('LP', 2, { currency: 'USD' }), raw('MP', 500, { low: 480, currency: 'USD' })],
+  }]);
+  assert.equal(extractRaw(twoGlitches, 7)?.market, 500, 'two low placeholders both dropped → real price survives');
+  assert.equal(extractRaw(twoGlitches, 7)?.bestGradeBroken, true);
+  // …and even with no band on the real rung (reference falls back to the max across all rungs).
+  const twoGlitchesBandless = card([{
+    marketplaces: [{ name: 'tcgplayer', product_id: 7 }],
+    prices: [raw('NM', 1, { currency: 'USD' }), raw('LP', 2, { currency: 'USD' }), raw('MP', 500, { currency: 'USD' })],
+  }]);
+  assert.equal(extractRaw(twoGlitchesBandless, 7)?.market, 500, 'max reference survives even when all rungs are band-less');
+
+  // a sane NM (ordinary condition spread) is kept and NOT flagged — no false positive.
+  const sane = card([{
+    marketplaces: [{ name: 'tcgplayer', product_id: 7 }],
+    prices: [raw('NM', 500, { low: 480, high: 520, currency: 'USD' }), raw('LP', 400, { currency: 'USD' })],
+  }]);
+  assert.equal(extractRaw(sane, 7)?.condition, 'NM');
+  assert.equal(extractRaw(sane, 7)?.bestGradeBroken, false, 'no false positive on an ordinary NM>LP spread');
+
+  // every rung broken (each below its own low) → variant skipped → null.
+  const allBroken = card([{
+    marketplaces: [{ name: 'tcgplayer', product_id: 7 }],
+    prices: [raw('NM', 1, { low: 400, currency: 'USD' }), raw('LP', 1, { low: 400, currency: 'USD' })],
+  }]);
+  assert.equal(extractRaw(allBroken, 7), null, 'all rungs broken → no usable Scrydex price');
 });
 
 // --- scrydexGradedLadder / scrydexPsa10E6 ---
@@ -147,6 +195,26 @@ test('scrydexGradedLadder: builds + sorts the ladder, dedups company+grade (pref
   assert.equal(scrydexPsa10E6(ladder)?.toString(), (7000n * 1_000_000n).toString());
   assert.equal(scrydexGradedLadder(c, 99999, null).length, 0, 'no matching product_id -> empty');
   assert.equal(scrydexPsa10E6([]), null, 'no PSA-10 rung -> null');
+});
+
+test('scrydexGradedLadder: drops an inverted PSA-10 (below a lower-grade PSA) from ladder AND anchor', () => {
+  // PSA-10 priced below its own PSA-9 is impossible → the PSA-10 rung is dropped from the display ladder,
+  // so scrydexPsa10E6 finds none and the anchor falls back to tcgpl.
+  const invertedCard = card([{
+    marketplaces: [{ name: 'tcgplayer', product_id: 7 }],
+    prices: [graded('PSA', '10', 150, { low: 150, high: 150 }), graded('PSA', '9', 1094, { low: 1094, high: 1094 })],
+  }]);
+  const ladder = scrydexGradedLadder(invertedCard, 7, null);
+  assert.equal(ladder.find((r) => r.grader === 'PSA' && r.grade === '10'), undefined, 'inverted PSA-10 dropped from the ladder');
+  assert.ok(ladder.find((r) => r.grader === 'PSA' && r.grade === '9'), 'the lower PSA-9 is kept');
+  assert.equal(scrydexPsa10E6(ladder), null, 'no PSA-10 in the ladder → anchor falls back (null)');
+
+  // a normal PSA-10 (top of its ladder) is kept; a higher CROSS-company BGS does not trip the PSA guard.
+  const okCard = card([{
+    marketplaces: [{ name: 'tcgplayer', product_id: 7 }],
+    prices: [graded('PSA', '10', 1000, { low: 1000, high: 1000 }), graded('PSA', '9', 600, { low: 600, high: 600 }), graded('BGS', '9.5', 5000, { low: 5000, high: 5000 })],
+  }]);
+  assert.equal(scrydexPsa10E6(scrydexGradedLadder(okCard, 7, null))?.toString(), (1000n * 1_000_000n).toString(), 'PSA-10 ≥ lower PSA kept; cross-company BGS ignored');
 });
 
 test('scrydexGradedLadder: JPY rungs are FX-converted to USD, and dropped when no FX', () => {
@@ -202,6 +270,24 @@ test('combinePrice: JP printing is converted to USD via the FX rate; no rate →
   const noRate = combinePrice(sx({ market: 1500, currency: 'JPY' }), { tcgpMarket: null, ebay1d: null }, null);
   assert.equal(noRate.priceUsd, 0);
   assert.equal(noRate.tier, 'halted'); // can't price a yen number as USD without a rate
+});
+
+test('combinePrice: a broken best-grade Scrydex anchor defers to the tcgpl market, not the downgraded rung (§④ #2)', () => {
+  // Umbreon end-to-end: anchor is the LP $500 rung flagged bestGradeBroken; tcgpl NM $899.99 + eBay $800.
+  const c = combinePrice(sx({ market: 500, condition: 'LP', low: 500, high: null, bestGradeBroken: true }), { tcgpMarket: 899.99, ebay1d: 800 }, null);
+  assert.equal(c.priceUsd, 899.99, 'prefers the tcgpl market over the downgraded Scrydex LP');
+  assert.equal(c.tier, 'tradeable', 'eBay 800 corroborates 899.99');
+  assert.equal(c.ebayCorroborated, true);
+
+  // Scrydex-only (no tcgpl cross) → keep the Scrydex rung rather than halt.
+  assert.equal(
+    combinePrice(sx({ market: 500, condition: 'LP', bestGradeBroken: true }), { tcgpMarket: null, ebay1d: null }, null).priceUsd,
+    500,
+    'no tcgpl → falls back to the Scrydex rung, not halt',
+  );
+
+  // not flagged (normal) → Scrydex still anchors over tcgpl (behaviour unchanged).
+  assert.equal(combinePrice(sx({ market: 500 }), { tcgpMarket: 899.99, ebay1d: 800 }, null).priceUsd, 500);
 });
 
 // --- getCardsByIds (the batch query construction) ---

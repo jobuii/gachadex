@@ -182,6 +182,21 @@ export class ScrydexClient {
 // Raw condition preference: near-mint first; vintage cards may only carry a price in lower grades.
 const RAW_CONDITION_ORDER = ['NM', 'LP', 'MP'];
 
+// A raw rung is a placeholder/glitch (not a real price) when its market is implausibly low vs its own
+// quoted floor OR the variant's trusted market level — a self-consistency test against Scrydex itself,
+// never against tcgpl (build spec §④). 0.5× is tight: it clears the $1-vs-$500 case with a wide margin
+// while tolerating ordinary condition-to-condition spread.
+const BROKEN_RATIO = 0.5;
+function isBrokenRaw(p: ScrydexPrice, refMarket: number): boolean {
+  const m = p.market as number; // caller filters to a positive number
+  if (typeof p.low === 'number' && p.low > 0 && m < BROKEN_RATIO * p.low) return true; // below half its own low listing
+  return m < BROKEN_RATIO * refMarket; // far below the variant's trusted (banded) market level
+}
+
+// Scrydex raw condition → the tcgpl raw key, so the cross-check reads the SAME grade as the anchor (§④ #3).
+// extractRaw only ever returns NM/LP/MP (RAW_CONDITION_ORDER), so only those need a mapping.
+const SX_TO_TPL_CONDITION: Record<string, string> = { NM: 'near_mint', LP: 'lightly_played', MP: 'moderately_played' };
+
 /** The TCGplayer raw quote we read off a Scrydex card. `market` is the price anchor (USD or JPY — JP-only
  *  printings report JPY; the oracle's combinePrice converts via FX). `day1Pct` is the 1-day % move, used
  *  by the confidence spike-gate + the mark guard. */
@@ -193,6 +208,7 @@ export interface ScrydexRaw {
   day1Pct: number | null; // trends.days_1.percent_change
   condition: string; // which condition supplied the price (NM/LP/MP)
   variant: string | null;
+  bestGradeBroken?: boolean; // the best-grade rung was a placeholder (dropped) ⇒ combinePrice prefers the same-grade tcgpl market (§④)
 }
 
 /** Extract OUR card's raw TCGplayer quote from a Scrydex card: find the variant whose marketplace
@@ -208,28 +224,35 @@ function findVariantByProduct(card: ScrydexCard, tcgplayerId: number | null): Sc
 }
 
 export function extractRaw(card: ScrydexCard, tcgplayerId: number | null): ScrydexRaw | null {
-  if (tcgplayerId == null) return null;
-  const want = String(tcgplayerId);
-  for (const v of card.variants ?? []) {
-    if (!(v.marketplaces ?? []).some((m) => m.product_id != null && String(m.product_id) === want)) continue;
-    for (const cond of RAW_CONDITION_ORDER) {
-      const p = (v.prices ?? []).find(
-        (x) => x.type === 'raw' && x.condition === cond && typeof x.market === 'number' && x.market > 0,
-      );
-      if (p) {
-        return {
-          market: p.market as number,
-          low: typeof p.low === 'number' ? p.low : null,
-          high: typeof p.high === 'number' ? p.high : null,
-          currency: p.currency ?? 'USD',
-          day1Pct: p.trends?.days_1?.percent_change ?? null,
-          condition: cond,
-          variant: v.name ?? null,
-        };
-      }
-    }
-  }
-  return null;
+  const v = findVariantByProduct(card, tcgplayerId);
+  if (!v) return null;
+  // This variant's positive raw rungs, best grade first.
+  const rungs = RAW_CONDITION_ORDER.map((cond) => ({
+    cond,
+    p: (v.prices ?? []).find(
+      (x) => x.type === 'raw' && x.condition === cond && typeof x.market === 'number' && (x.market as number) > 0,
+    ),
+  })).filter((r): r is { cond: string; p: ScrydexPrice } => r.p != null);
+  if (!rungs.length) return null;
+  // Drop placeholder/glitch rungs ($1-style); keep the best surviving grade. The "implausibly low"
+  // reference is the max market among rungs carrying a real low/high band (placeholders are band-less),
+  // so a CLUSTER of placeholders can't drag the reference down to their own level; no banded rung ⇒ the
+  // max across all rungs (build spec §④ #1).
+  const banded = rungs.filter((r) => typeof r.p.low === 'number' && (r.p.low as number) > 0);
+  const refMarket = Math.max(...(banded.length ? banded : rungs).map((r) => r.p.market as number));
+  const sane = rungs.filter((r) => !isBrokenRaw(r.p, refMarket));
+  if (!sane.length) return null;
+  const { cond, p } = sane[0];
+  return {
+    market: p.market as number,
+    low: typeof p.low === 'number' ? p.low : null,
+    high: typeof p.high === 'number' ? p.high : null,
+    currency: p.currency ?? 'USD',
+    day1Pct: p.trends?.days_1?.percent_change ?? null,
+    condition: cond,
+    variant: v.name ?? null,
+    bestGradeBroken: isBrokenRaw(rungs[0].p, refMarket), // top grade was a placeholder (dropped) ⇒ combinePrice prefers tcgpl
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +262,11 @@ export function extractRaw(card: ScrydexCard, tcgplayerId: number | null): Scryd
 
 /** The full graded ladder off a Scrydex card, matched to OUR market by the TCGplayer product_id and
  *  FX'd to USD. Dedups duplicate company+grade (prefers a real low<high range over a single-sale
- *  outlier) and drops JPY rungs when no FX is available. Empty when the card has no graded data. */
+ *  outlier) and drops JPY rungs when no FX is available. Empty when the card has no graded data.
+ *  NOTE: graded rungs always carry a low/high band — the $1-style placeholder pattern is RAW-only (§④),
+ *  so isBrokenRaw isn't applied here. We DO drop an inverted PSA-10 (top grade priced below a lower-grade
+ *  PSA of the same card — impossible), so the displayed ladder AND the scrydexPsa10E6 anchor stay
+ *  consistent and the anchor falls back to the tcgpl PSA-10. */
 export function scrydexGradedLadder(card: ScrydexCard, tcgplayerId: number | null, fxJpyUsd: number | null): GradeRow[] {
   const variant = findVariantByProduct(card, tcgplayerId);
   if (!variant) return [];
@@ -262,10 +289,16 @@ export function scrydexGradedLadder(card: ScrydexCard, tcgplayerId: number | nul
     }
     rows.push({ grader: (p.company as string).toUpperCase(), grade: p.grade as string, priceE6: toE6(usd).toString() });
   }
-  return sortGradeRows(rows);
+  // Drop an inverted PSA-10 (top grade priced below a lower-grade PSA — impossible) so neither the display
+  // ladder nor the scrydexPsa10E6 anchor publishes it; the anchor then falls back to tcgpl. Same-company.
+  const psa10 = rows.find((r) => r.grader === 'PSA' && r.grade === '10');
+  const inverted = psa10 != null && rows.some((r) => r.grader === 'PSA' && Number(r.grade) < 10 && BigInt(r.priceE6) > BigInt(psa10.priceE6));
+  return sortGradeRows(inverted ? rows.filter((r) => r !== psa10) : rows);
 }
 
-/** PSA-10 (USD micro) off a Scrydex graded ladder — the graded-index anchor + stored graded price. */
+/** PSA-10 (USD micro) off a Scrydex graded ladder — the graded-index anchor + stored graded price.
+ *  scrydexGradedLadder already drops an inverted PSA-10, so a null here means no trustworthy PSA-10 and the
+ *  caller falls back to the tcgpl PSA-10 (build spec §④ graded; ~17% of a live sample invert). */
 export function scrydexPsa10E6(ladder: GradeRow[]): bigint | null {
   const row = ladder.find((r) => r.grader === 'PSA' && r.grade === '10');
   return row ? BigInt(row.priceE6) : null;
@@ -343,11 +376,18 @@ export function toUsd(sx: ScrydexRaw, fxJpyUsd: number | null): ScrydexRaw | nul
  *  keep-last live in ingestCard). **eBay never sets the price.** */
 export function combinePrice(sx: ScrydexRaw | null, x: CrossCheck, fxJpyUsd: number | null): Combined {
   const sxUsd = sx ? toUsd(sx, fxJpyUsd) : null;
-  let priceUsd = sxUsd && sxUsd.market > 0 ? sxUsd.market : 0;
-  if (!(priceUsd > 0) && x.tcgpMarket != null && x.tcgpMarket > 0) priceUsd = x.tcgpMarket; // fallback to tcgpl TCGplayer
+  const tcgp = x.tcgpMarket != null && x.tcgpMarket > 0 ? x.tcgpMarket : null;
+  // A broken best-grade rung (§④) means Scrydex has no trustworthy top-grade price: skip the (downgraded)
+  // Scrydex anchor and let the EXISTING tcgpl fallback supply the same-grade price — but only when a tcgpl
+  // market actually exists (else keep the Scrydex rung rather than halt).
+  const preferCross = (sx?.bestGradeBroken ?? false) && tcgp != null;
+  let priceUsd = !preferCross && sxUsd && sxUsd.market > 0 ? sxUsd.market : 0;
+  if (!(priceUsd > 0) && tcgp != null) priceUsd = tcgp; // fallback to tcgpl TCGplayer
   priceUsd = cents(priceUsd);
   const ebayCorroborated = x.ebay1d != null && x.ebay1d > 0 && priceUsd > 0 && ebayInBand(x.ebay1d, priceUsd);
-  return { priceUsd, tier: scoreConfidence(priceUsd, sxUsd, x), ebayCorroborated };
+  // When a broken Scrydex anchor is discarded for tcgpl, the price is a tcgpl number — don't score it
+  // against the broken raw; eBay (the independent venue) is the corroborator.
+  return { priceUsd, tier: scoreConfidence(priceUsd, preferCross ? null : sxUsd, x), ebayCorroborated };
 }
 
 let defaultClient: ScrydexClient | null = null;
@@ -452,7 +492,10 @@ export async function fetchScrydexTrackedCards(
     const sxCard = t.scrydex_card_id ? sxById.get(t.scrydex_card_id) : undefined;
     const tplCard = t.provider_card_id ? tplById.get(t.provider_card_id) : undefined;
     const sxRaw = sxCard ? extractRaw(sxCard, t.tcgplayer_id) : null;
-    const cross = tplCard ? tplCrossCheck(tplCard) : EMPTY_CROSS;
+    // Align the cross-check to the anchor's grade; a broken best grade ⇒ undefined ⇒ tcgpl NM-first (we
+    // price off tcgpl's best grade instead of a downgraded Scrydex rung) (build spec §④ #3).
+    const xCond = sxRaw && !sxRaw.bestGradeBroken ? SX_TO_TPL_CONDITION[sxRaw.condition] : undefined;
+    const cross = tplCard ? tplCrossCheck(tplCard, xCond) : EMPTY_CROSS;
     const combined = combinePrice(sxRaw, cross, fxJpyUsd);
     if (!(combined.priceUsd > 0)) return []; // neither feed priced it — no print, staleness halt covers it
 
