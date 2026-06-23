@@ -25,9 +25,11 @@ const NAV_ICONS = {
   portfolio: <><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>,
 };
 
-export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat }) {
+export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat, gamesVisible = false }) {
   const unread = useChat((s) => s.unread);
   const navigate = useNavigate();
+  // The Games tab stays hidden from customers until the operator flips GAMES_ENABLED (surfaced via /health).
+  const views = gamesVisible ? VIEWS : VIEWS.filter((v) => v.id !== 'games');
   return (
     <>
     <nav className="navbar">
@@ -46,7 +48,7 @@ export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat }) {
       </div>
 
       <div className="nav-links">
-        {VIEWS.map(({ id, label }) => (
+        {views.map(({ id, label }) => (
           <button
             key={id}
             className={`nav-link ${activeView === id ? 'active' : ''}`}
@@ -76,7 +78,7 @@ export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat }) {
 
     {/* mobile-only bottom tab bar (display:none on desktop, see mobile.css) */}
     <nav className="mobile-tabbar" aria-label="Primary">
-      {VIEWS.filter((v) => v.short).map(({ id, short }) => (
+      {views.filter((v) => v.short).map(({ id, short }) => (
         <button
           key={id}
           className={`mobile-tab ${activeView === id ? 'active' : ''}`}

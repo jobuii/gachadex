@@ -100,6 +100,7 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
     env: config.env,
     realFunds: config.realFunds,
     listingEnabled: searchAndBetActive, // on-demand /markets/ensure is registered — lets the web hide a dead LIST button
+    gamesEnabled: config.gamesEnabled, // the web hides the Games nav tab + page entirely until this flips on
     apiVersion: API_VERSION,
     time: new Date().toISOString(),
   }));
