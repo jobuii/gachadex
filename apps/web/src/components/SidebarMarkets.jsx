@@ -4,6 +4,7 @@ import { indexSeries, INDEX_SERIES_LABELS } from '@pokex/shared-types';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { useAuth } from '../auth/AuthContext';
 import { useStickyState } from '../lib/useStickyState';
+import { MarketThumb } from './MarketThumb';
 import * as api from '../lib/api.js';
 
 const TABS = ['indices', 'cards'];
@@ -295,7 +296,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
               >
                 <div className="market-item-left">
                   <span className="market-index">{i + 1}.</span>
-                  {m.imageSmall ? <img src={m.imageSmall} alt="" className="market-thumb" /> : <span className="market-thumb idx-thumb">IDX</span>}
+                  <MarketThumb market={m} className="market-thumb" />
                   <div className="market-item-info">
                     <span className="market-item-name">{m.displayName}</span>
                     <span className="market-item-set">{marketSubtitle(m)}</span>
