@@ -546,7 +546,7 @@ async function closePositionInTx(
       // an under-margined position must go through liquidation (loss-capped), not a voluntary
       // close that would drive the user's collateral negative.
       if (isLiquidatable(pos, market, markE6)) {
-        throw new HttpError(409, 'position is liquidatable and will be liquidated; cannot close manually');
+        throw new HttpError(409, 'position is liquidatable and will be liquidated; cannot close manually', 'position_liquidatable');
       }
 
       const qty = BigInt(pos.qty_e6);
@@ -603,6 +603,7 @@ async function closePositionInTx(
           `UPDATE positions SET qty_e6=0, margin_uusdc=0, realized_pnl_uusdc=$1, status='closed', closed_at=now(), version=version+1 WHERE id=$2`,
           [newRealized.toString(), pos.id],
         );
+        await cancelPositionBrackets(q, pos.id); // full close → drop the position's resting SL/TP (free OCO)
       } else {
         const liq = liquidationPrice({ side: pos.side, entryE6: entry, leverageE2: pos.leverage_e2, maintMarginBps: market.maint_margin_bps });
         await q.query(
@@ -647,6 +648,7 @@ export interface RestingOrderInput {
 export interface RestingOrderView {
   id: string;
   marketId: string;
+  positionId: string | null;
   kind: string;
   side: string | null;
   qtyE6: string | null;
@@ -672,14 +674,27 @@ async function refundReserve(q: Queryer, userId: string, refId: string, reason: 
   await postTxn(q, { reason, refType: 'resting_order', refId, entries: [{ accountId: restAcct, amount: -amount }, { accountId: collAcct, amount }] });
 }
 
+// On a full close / liquidation / ADL, auto-cancel the position's resting SL/TP brackets (reduce-only) —
+// they're moot once the position is gone. This is what makes a SL+TP pair a free OCO: when one fires and
+// closes the position, the other is cancelled here. Reduce-only orders reserve no margin, so nothing to refund.
+async function cancelPositionBrackets(q: Queryer, positionId: string): Promise<void> {
+  await q.query(
+    `UPDATE resting_orders SET status='cancelled', reject_reason='position_closed', resolved_at=now()
+       WHERE position_id=$1 AND status='active' AND reduce_only`,
+    [positionId],
+  );
+}
+
 export async function placeRestingOrder(db: Db, userId: string, input: RestingOrderInput): Promise<{ id: string; duplicate?: boolean }> {
-  // P1: only limit-OPEN. reduce-only limit + SL/TP are P2.
-  if (input.kind !== 'limit' || input.reduceOnly) throw new HttpError(400, 'only limit (open) resting orders are supported yet', 'unsupported_order');
-  if (!input.side || input.qtyE6 == null || input.leverage == null) throw new HttpError(400, 'a limit order needs side, qtyE6 and leverage');
   if (input.triggerPriceE6 <= 0n) throw new HttpError(400, 'invalid trigger price');
-  const side = input.side;
-  const qtyE6 = input.qtyE6;
-  const leverageE2 = input.leverage * 100;
+  const isReduce = input.kind === 'stop_loss' || input.kind === 'take_profit';
+  if (isReduce) {
+    if (!input.positionId) throw new HttpError(400, 'a stop-loss / take-profit needs a positionId');
+  } else if (input.kind !== 'limit' || input.reduceOnly) {
+    throw new HttpError(400, 'unsupported order kind', 'unsupported_order');
+  } else if (!input.side || input.qtyE6 == null || input.leverage == null) {
+    throw new HttpError(400, 'a limit order needs side, qtyE6 and leverage');
+  }
   return withMarketLock(input.marketId, () =>
     db.tx(async (q) => {
       await advisoryXactLock(q, input.marketId);
@@ -687,6 +702,33 @@ export async function placeRestingOrder(db: Db, userId: string, input: RestingOr
       if (prior.rows[0]) return { id: prior.rows[0].id, duplicate: true };
       const market = await getMarketById(q, input.marketId);
       if (!market) throw new HttpError(404, 'market not found');
+      const id = randomUUID();
+
+      // --- reduce-only stop-loss / take-profit: attached to the caller's open position, no margin reserve.
+      // `side` stores the POSITION's side (drives the trigger direction). One active SL + one active TP per
+      // position — placing a second of the same kind REPLACES it (so "edit my SL" is a single call).
+      if (isReduce) {
+        const pos = await getPositionById(q, input.positionId!);
+        if (!pos || pos.user_id !== userId || pos.status !== 'open') throw new HttpError(404, 'position not found');
+        if (pos.market_id !== input.marketId) throw new HttpError(400, 'position is on a different market');
+        await q.query(
+          `UPDATE resting_orders SET status='cancelled', reject_reason='replaced', resolved_at=now()
+             WHERE position_id=$1 AND kind=$2 AND status='active' AND reduce_only`,
+          [pos.id, input.kind],
+        );
+        await q.query(
+          `INSERT INTO resting_orders(id,user_id,market_id,position_id,kind,reduce_only,side,trigger_price_e6,slippage_e6,status,idempotency_key)
+           VALUES($1,$2,$3,$4,$5,true,$6,$7,$8,'active',$9)`,
+          [id, userId, input.marketId, pos.id, input.kind, pos.side, input.triggerPriceE6.toString(), input.slippageE6 != null ? input.slippageE6.toString() : null, input.idempotencyKey],
+        );
+        publish(`orders:${userId}`, 'update', {});
+        return { id };
+      }
+
+      // --- limit (open): reserve margin (P1).
+      const side = input.side!;
+      const qtyE6 = input.qtyE6!;
+      const leverageE2 = input.leverage! * 100;
       if (leverageE2 < 100 || leverageE2 > market.max_leverage_e2) throw new HttpError(400, `leverage must be 1–${market.max_leverage_e2 / 100}×`);
       if (qtyE6 < BigInt(market.min_qty_e6)) throw new HttpError(400, 'order below the minimum size');
       const cap = config.restingMaxPerUserMarket;
@@ -702,7 +744,6 @@ export async function placeRestingOrder(db: Db, userId: string, input: RestingOr
       const restAcct = await getOrCreateUserAccount(q, userId, 'RESTING_ORDER_MARGIN');
       await q.query('SELECT amount_uusdc FROM balances WHERE account_id=$1 FOR UPDATE', [collAcct]); // single-writer on the user's collateral
       if ((await getBalance(q, collAcct)) < reserve) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
-      const id = randomUUID();
       await q.query(
         `INSERT INTO resting_orders(id,user_id,market_id,kind,reduce_only,side,qty_e6,leverage_e2,trigger_price_e6,slippage_e6,reserved_margin_uusdc,status,idempotency_key)
          VALUES($1,$2,$3,'limit',false,$4,$5,$6,$7,$7,$8,'active',$9)`,
@@ -731,16 +772,20 @@ export async function cancelRestingOrder(db: Db, userId: string, id: string): Pr
 }
 
 export async function getUserRestingOrders(db: Db, userId: string): Promise<RestingOrderView[]> {
-  const r = await db.query<{ id: string; market_id: string; kind: string; side: string | null; qty_e6: string | null; leverage_e2: number | null; trigger_price_e6: string; slippage_e6: string | null; reserved_margin_uusdc: string; created_at: string }>(
-    `SELECT id, market_id, kind, side, qty_e6, leverage_e2, trigger_price_e6, slippage_e6, reserved_margin_uusdc, created_at
+  const r = await db.query<{ id: string; market_id: string; position_id: string | null; kind: string; side: string | null; qty_e6: string | null; leverage_e2: number | null; trigger_price_e6: string; slippage_e6: string | null; reserved_margin_uusdc: string; created_at: string }>(
+    `SELECT id, market_id, position_id, kind, side, qty_e6, leverage_e2, trigger_price_e6, slippage_e6, reserved_margin_uusdc, created_at
        FROM resting_orders WHERE user_id=$1 AND status='active' ORDER BY created_at DESC`,
     [userId],
   );
+  // coerce BIGINT columns to string: node-postgres already returns them as strings, but PGlite returns
+  // small bigints as JS numbers — the view's contract is string, so normalize for a consistent API.
   return r.rows.map((o) => ({
-    id: o.id, marketId: o.market_id, kind: o.kind, side: o.side, qtyE6: o.qty_e6,
+    id: o.id, marketId: o.market_id, positionId: o.position_id, kind: o.kind, side: o.side,
+    qtyE6: o.qty_e6 != null ? String(o.qty_e6) : null,
     leverage: o.leverage_e2 != null ? o.leverage_e2 / 100 : null,
-    triggerPriceE6: o.trigger_price_e6, slippageE6: o.slippage_e6,
-    reservedMarginUusdc: o.reserved_margin_uusdc, createdAt: o.created_at,
+    triggerPriceE6: String(o.trigger_price_e6),
+    slippageE6: o.slippage_e6 != null ? String(o.slippage_e6) : null,
+    reservedMarginUusdc: String(o.reserved_margin_uusdc), createdAt: String(o.created_at),
   }));
 }
 
@@ -759,41 +804,56 @@ export async function checkRestingOrderTriggers(db: Db, marketId: string): Promi
   const snap = await db.query<{ index_price_e6: string }>(`SELECT index_price_e6 FROM marks WHERE market_id=$1 ORDER BY computed_at DESC LIMIT 1`, [marketId]);
   if (!snap.rows[0]) return 0;
   const oracleIndexE6 = BigInt(snap.rows[0].index_price_e6);
-  // long buys the dip → fires when index ≤ trigger (trigger ≥ index); short sells the rip → index ≥ trigger.
-  const due = await db.query<{ id: string }>(
-    `SELECT id FROM resting_orders
-      WHERE market_id=$1 AND status='active' AND kind='limit'
-        AND ((side='long' AND trigger_price_e6 >= $2) OR (side='short' AND trigger_price_e6 <= $2))
+  // Fire condition by (kind, side). `side` = the trade direction for a limit, the POSITION's side for SL/TP.
+  //   limit/stop_loss long: index ≤ trigger (trigger ≥ index)   |  short: index ≥ trigger
+  //   take_profit       long: index ≥ trigger                    |  short: index ≤ trigger
+  const due = await db.query<{ id: string; reduce_only: boolean }>(
+    `SELECT id, reduce_only FROM resting_orders
+      WHERE market_id=$1 AND status='active'
+        AND (
+          (kind IN ('limit','stop_loss') AND ((side='long' AND trigger_price_e6 >= $2) OR (side='short' AND trigger_price_e6 <= $2)))
+          OR (kind='take_profit' AND ((side='long' AND trigger_price_e6 <= $2) OR (side='short' AND trigger_price_e6 >= $2)))
+        )
       ORDER BY created_at LIMIT $3`,
     [marketId, oracleIndexE6.toString(), config.restingMaxPerSweep],
   );
   let filled = 0;
-  for (const { id } of due.rows) {
+  for (const { id, reduce_only: reduceOnly } of due.rows) {
     let terminal: string | null = null;
     try {
       await withMarketLock(marketId, () =>
         db.tx(async (q) => {
           await advisoryXactLock(q, marketId);
-          const claim = await q.query<{ user_id: string; side: string; qty_e6: string; leverage_e2: number; trigger_price_e6: string; reserved_margin_uusdc: string }>(
+          const claim = await q.query<{ user_id: string; reduce_only: boolean; position_id: string | null; side: string; qty_e6: string | null; leverage_e2: number | null; trigger_price_e6: string; slippage_e6: string | null; reserved_margin_uusdc: string }>(
             `UPDATE resting_orders SET status='filled', resolved_at=now() WHERE id=$1 AND status='active'
-             RETURNING user_id, side, qty_e6, leverage_e2, trigger_price_e6, reserved_margin_uusdc`,
+             RETURNING user_id, reduce_only, position_id, side, qty_e6, leverage_e2, trigger_price_e6, slippage_e6, reserved_margin_uusdc`,
             [id],
           );
           if (!claim.rows[0]) throw new HttpError(409, 'order already resolved', 'resting_gone');
           const ro = claim.rows[0];
-          // release the reserve to collateral so the open locks the real margin from collateral (net = one
-          // charge). On any throw the whole tx rolls back and this release is undone with it.
-          await refundReserve(q, ro.user_id, id, 'RESTING_RELEASE', BigInt(ro.reserved_margin_uusdc));
-          // fill at the live mark, bounded by the limit as the slippage cap. If this throws, the whole tx
-          // (claim + release) rolls back — the order stays active + reserved, no partial state.
-          await openPositionInTx(q, ro.user_id, {
-            marketId,
-            side: ro.side as 'long' | 'short',
-            qtyE6: BigInt(ro.qty_e6),
-            leverage: ro.leverage_e2 / 100,
-            limitPriceE6: BigInt(ro.trigger_price_e6),
-            idempotencyKey: `resting:${id}`,
-          });
+          // The fill runs in THIS one tx: if it throws, the whole tx (claim + any release) rolls back, leaving
+          // the order active — no partial state.
+          if (ro.reduce_only) {
+            // SL/TP: full-close the position at the mark (optional slippage bound). No reserve to release.
+            await closePositionInTx(q, ro.user_id, {
+              positionId: ro.position_id!,
+              fractionBps: 10_000,
+              slippageE6: ro.slippage_e6 != null ? BigInt(ro.slippage_e6) : undefined,
+              idempotencyKey: `resting:${id}`,
+            });
+          } else {
+            // limit: release the reserve to collateral, then the open locks the real margin from collateral
+            // (net = one charge), filling at the live mark capped by the limit as the slippage bound.
+            await refundReserve(q, ro.user_id, id, 'RESTING_RELEASE', BigInt(ro.reserved_margin_uusdc));
+            await openPositionInTx(q, ro.user_id, {
+              marketId,
+              side: ro.side as 'long' | 'short',
+              qtyE6: BigInt(ro.qty_e6!),
+              leverage: ro.leverage_e2! / 100,
+              limitPriceE6: BigInt(ro.trigger_price_e6),
+              idempotencyKey: `resting:${id}`,
+            });
+          }
         }),
       );
       filled++;
@@ -803,6 +863,10 @@ export async function checkRestingOrderTriggers(db: Db, marketId: string): Promi
       if (!(e instanceof HttpError)) continue;
       const code = e.code;
       if (code === 'resting_gone' || (code && RESTING_TRANSIENT_CODES.has(code))) continue; // gone / retry next sweep
+      // a reduce-only SL/TP is protective — never cancel it on a TRANSIENT fill condition: a slippage breach
+      // (re-evaluate next sweep) or a momentarily-liquidatable position (liquidation takes it, and its
+      // auto-cancel hook drops the bracket). Anything else (e.g. the position is already gone) is terminal.
+      if (reduceOnly && (code === 'slippage_exceeded' || code === 'position_liquidatable')) continue;
       terminal = code ?? 'fill_failed';
     }
     if (terminal) {
@@ -961,6 +1025,7 @@ async function liquidatePositionInTx(q: Queryer, pos: PositionRow, market: Marke
     `UPDATE positions SET qty_e6=0, margin_uusdc=0, realized_pnl_uusdc=realized_pnl_uusdc+$1, status='liquidated', closed_at=now(), version=version+1 WHERE id=$2`,
     [pnl.toString(), pos.id],
   );
+  await cancelPositionBrackets(q, pos.id); // the position is gone → drop its resting SL/TP
   const orderId = await insertSystemOrder(q, pos, market.id, 'liq');
   await insertFill(q, { orderId, positionId: pos.id, marketId: market.id, execPriceE6: markE6, qtyE6: qty, feeUusdc: liqFeeTaken, realizedPnlUusdc: pnl });
   await q.query(
@@ -1003,6 +1068,7 @@ async function adlClosePositionInTx(q: Queryer, pos: PositionRow, market: Market
     `UPDATE positions SET qty_e6=0, margin_uusdc=0, realized_pnl_uusdc=realized_pnl_uusdc+$1, status='deleveraged', closed_at=now(), version=version+1 WHERE id=$2`,
     [pnl.toString(), pos.id],
   );
+  await cancelPositionBrackets(q, pos.id); // the position is gone → drop its resting SL/TP
   const orderId = await insertSystemOrder(q, pos, market.id, 'adl');
   await insertFill(q, { orderId, positionId: pos.id, marketId: market.id, execPriceE6: markE6, qtyE6: qty, feeUusdc: 0n, realizedPnlUusdc: pnl });
   await refreshMarketState(q, market, indexE6);

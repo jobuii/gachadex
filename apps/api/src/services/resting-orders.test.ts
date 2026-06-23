@@ -14,7 +14,7 @@ const { ingest } = await import('./oracle.ts');
 const { fromPokemontcg } = await import('./providers/pokemontcg.ts');
 const { listMarketsWithData } = await import('./markets.ts');
 const { creditFaucet, getUserBalances } = await import('./faucet.ts');
-const { openPosition, placeRestingOrder, cancelRestingOrder, getUserRestingOrders, checkRestingOrderTriggers, getUserPositions, closePosition } =
+const { openPosition, placeRestingOrder, cancelRestingOrder, getUserRestingOrders, checkRestingOrderTriggers, getUserPositions, closePosition, liquidateAllEligible } =
   await import('./engine.ts');
 const { reconcile } = await import('./reconcile.ts');
 const { usdc } = await import('../money.ts');
@@ -42,6 +42,17 @@ async function closeAll(userId: string): Promise<void> {
     await closePosition(db, userId, { positionId: p.id, fractionBps: 10_000, idempotencyKey: randomUUID() });
   }
 }
+// move the oracle index (which drives SL/TP triggers) by appending a marks row — index == mark == $usd
+async function setPrice(usd: number): Promise<void> {
+  await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6) VALUES($1, $2, $2)`, [market.id, E6(usd).toString()]);
+}
+// the trigger sweep is market-wide, so earlier tests' leftover active orders would also fire — clear them
+// so each price test sees only its own order (the parked reserves stay balanced; reconcile still holds).
+async function clearRestingOrders(): Promise<void> {
+  await db.query(`UPDATE resting_orders SET status='cancelled' WHERE market_id=$1 AND status='active'`, [market.id]);
+}
+const SL = { kind: 'stop_loss' as const, reduceOnly: true };
+const TP = { kind: 'take_profit' as const, reduceOnly: true };
 
 test('placing a limit reserves margin (equity stays whole); cancelling refunds it', async () => {
   const userId = await newUser();
@@ -112,11 +123,15 @@ test('rejects a reserve beyond the user balance', async () => {
   );
 });
 
-test('SL/TP / reduce-only are rejected in P1 (limit-open only)', async () => {
+test('a stop-loss needs a valid position', async () => {
   const userId = await newUser();
   await assert.rejects(
-    placeRestingOrder(db, userId, { marketId: market.id, kind: 'stop_loss', reduceOnly: true, positionId: 'x', triggerPriceE6: E6(900), idempotencyKey: randomUUID() }),
-    /only limit/,
+    placeRestingOrder(db, userId, { marketId: market.id, kind: 'stop_loss', reduceOnly: true, triggerPriceE6: E6(900), idempotencyKey: randomUUID() }),
+    /needs a positionId/,
+  );
+  await assert.rejects(
+    placeRestingOrder(db, userId, { marketId: market.id, kind: 'stop_loss', reduceOnly: true, positionId: 'nonexistent', triggerPriceE6: E6(900), idempotencyKey: randomUUID() }),
+    /position not found/,
   );
 });
 
@@ -145,6 +160,113 @@ test('a triggered limit that hits an opposing position is cancelled + refunded (
   assert.equal(after.availableUusdc.toString(), before.availableUusdc.toString()); // reserve refunded in full
   assert.equal((await getUserPositions(db, userId)).filter((p) => p.side === 'long').length, 0); // no long opened
   await closeAll(userId);
+});
+
+test('a stop-loss fires + full-closes a long when the index falls to it', async () => {
+  await setPrice(1000);
+  await clearRestingOrders();
+  const userId = await newUser();
+  await openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 2_000_000n, leverage: 2, idempotencyKey: randomUUID() });
+  const [pos] = await getUserPositions(db, userId);
+  await placeRestingOrder(db, userId, { ...SL, marketId: market.id, positionId: pos.id, triggerPriceE6: E6(950), idempotencyKey: randomUUID() });
+  assert.equal(await checkRestingOrderTriggers(db, market.id), 0); // index $1000 > $950 stop, not due
+  await setPrice(900); // index falls through the stop
+  assert.equal(await checkRestingOrderTriggers(db, market.id), 1);
+  assert.equal((await getUserPositions(db, userId)).length, 0); // position closed
+  assert.equal((await getUserRestingOrders(db, userId)).length, 0); // SL filled
+});
+
+test('a take-profit fires + full-closes a long when the index rises to it', async () => {
+  await setPrice(1000);
+  await clearRestingOrders();
+  const userId = await newUser();
+  await openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 2_000_000n, leverage: 2, idempotencyKey: randomUUID() });
+  const [pos] = await getUserPositions(db, userId);
+  await placeRestingOrder(db, userId, { ...TP, marketId: market.id, positionId: pos.id, triggerPriceE6: E6(1100), idempotencyKey: randomUUID() });
+  assert.equal(await checkRestingOrderTriggers(db, market.id), 0); // index $1000 < $1100 target, not due
+  await setPrice(1150);
+  assert.equal(await checkRestingOrderTriggers(db, market.id), 1);
+  assert.equal((await getUserPositions(db, userId)).length, 0);
+});
+
+test('a stop-loss on a SHORT fires when the index rises to it', async () => {
+  await setPrice(1000);
+  await clearRestingOrders();
+  const userId = await newUser();
+  await openPosition(db, userId, { marketId: market.id, side: 'short', qtyE6: 2_000_000n, leverage: 2, idempotencyKey: randomUUID() });
+  const [pos] = await getUserPositions(db, userId);
+  await placeRestingOrder(db, userId, { ...SL, marketId: market.id, positionId: pos.id, triggerPriceE6: E6(1050), idempotencyKey: randomUUID() });
+  assert.equal(await checkRestingOrderTriggers(db, market.id), 0); // index $1000 < $1050, a short SL fires on a RISE
+  await setPrice(1100);
+  assert.equal(await checkRestingOrderTriggers(db, market.id), 1);
+  assert.equal((await getUserPositions(db, userId)).length, 0);
+});
+
+test('a take-profit on a SHORT fires when the index falls to it', async () => {
+  await setPrice(1000);
+  await clearRestingOrders();
+  const userId = await newUser();
+  await openPosition(db, userId, { marketId: market.id, side: 'short', qtyE6: 2_000_000n, leverage: 2, idempotencyKey: randomUUID() });
+  const [pos] = await getUserPositions(db, userId);
+  await placeRestingOrder(db, userId, { ...TP, marketId: market.id, positionId: pos.id, triggerPriceE6: E6(900), idempotencyKey: randomUUID() });
+  assert.equal(await checkRestingOrderTriggers(db, market.id), 0); // index $1000 > $900, a short TP fires on a FALL
+  await setPrice(850);
+  assert.equal(await checkRestingOrderTriggers(db, market.id), 1);
+  assert.equal((await getUserPositions(db, userId)).length, 0);
+});
+
+test('placing a second stop-loss on a position replaces the first', async () => {
+  await setPrice(1000);
+  await clearRestingOrders();
+  const userId = await newUser();
+  await openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 2_000_000n, leverage: 2, idempotencyKey: randomUUID() });
+  const [pos] = await getUserPositions(db, userId);
+  await placeRestingOrder(db, userId, { ...SL, marketId: market.id, positionId: pos.id, triggerPriceE6: E6(950), idempotencyKey: randomUUID() });
+  await placeRestingOrder(db, userId, { ...SL, marketId: market.id, positionId: pos.id, triggerPriceE6: E6(940), idempotencyKey: randomUUID() });
+  const sls = (await getUserRestingOrders(db, userId)).filter((o) => o.kind === 'stop_loss');
+  assert.equal(sls.length, 1); // the unique index + replace-on-dup keeps exactly one active SL
+  assert.equal(sls[0].triggerPriceE6, E6(940).toString());
+  await closeAll(userId);
+});
+
+test('a manual full close auto-cancels the position SL + TP brackets', async () => {
+  await setPrice(1000);
+  await clearRestingOrders();
+  const userId = await newUser();
+  await openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 2_000_000n, leverage: 2, idempotencyKey: randomUUID() });
+  const [pos] = await getUserPositions(db, userId);
+  await placeRestingOrder(db, userId, { ...SL, marketId: market.id, positionId: pos.id, triggerPriceE6: E6(950), idempotencyKey: randomUUID() });
+  await placeRestingOrder(db, userId, { ...TP, marketId: market.id, positionId: pos.id, triggerPriceE6: E6(1100), idempotencyKey: randomUUID() });
+  assert.equal((await getUserRestingOrders(db, userId)).length, 2);
+  await closePosition(db, userId, { positionId: pos.id, fractionBps: 10_000, idempotencyKey: randomUUID() });
+  assert.equal((await getUserRestingOrders(db, userId)).length, 0); // both brackets dropped
+});
+
+test('a liquidation auto-cancels the position resting SL', async () => {
+  await setPrice(1000);
+  await clearRestingOrders();
+  const userId = await newUser();
+  await openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 2_000_000n, leverage: 20, idempotencyKey: randomUUID() });
+  const [pos] = await getUserPositions(db, userId);
+  await placeRestingOrder(db, userId, { ...SL, marketId: market.id, positionId: pos.id, triggerPriceE6: E6(950), idempotencyKey: randomUUID() });
+  await setPrice(960); // 20x long (liq ~$975) is now liquidatable; the $950 SL is not yet due (960 > 950)
+  await liquidateAllEligible(db);
+  assert.equal((await getUserPositions(db, userId)).length, 0); // liquidated
+  assert.equal((await getUserRestingOrders(db, userId)).length, 0); // SL auto-cancelled
+});
+
+test('OCO: a fired take-profit auto-cancels the paired stop-loss (free bracket)', async () => {
+  await setPrice(1000);
+  await clearRestingOrders();
+  const userId = await newUser();
+  await openPosition(db, userId, { marketId: market.id, side: 'long', qtyE6: 2_000_000n, leverage: 2, idempotencyKey: randomUUID() });
+  const [pos] = await getUserPositions(db, userId);
+  await placeRestingOrder(db, userId, { ...SL, marketId: market.id, positionId: pos.id, triggerPriceE6: E6(950), idempotencyKey: randomUUID() });
+  await placeRestingOrder(db, userId, { ...TP, marketId: market.id, positionId: pos.id, triggerPriceE6: E6(1100), idempotencyKey: randomUUID() });
+  await setPrice(1150); // the TP is due, the SL is not
+  assert.equal(await checkRestingOrderTriggers(db, market.id), 1); // only the TP fires
+  assert.equal((await getUserPositions(db, userId)).length, 0); // position closed
+  assert.equal((await getUserRestingOrders(db, userId)).length, 0); // TP filled + SL auto-cancelled
 });
 
 test('the ledger reconciles after place / cancel / fill activity', async () => {
