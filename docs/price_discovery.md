@@ -574,15 +574,31 @@ same venue as the Scrydex anchor), never eBay — so "eBay never sets the price"
 
 (The `market < low` rule needs no constant — it's a self-consistency check.)
 
+## Graded follow-up — PSA-10 anchor inversion guard (added 2026-06-23)
+
+The raw fix prompted a check of the **graded** path (`scrydexGradedLadder` → `scrydexPsa10E6` →
+`graded_psa10_e6`, which drives the tradeable **Graded index**). A live probe (24 cards / 670 graded rungs)
+found the `$1`-placeholder pattern **does not occur on graded** — every graded rung carries a `low`/`high`
+band and none sits below its own low — so applying `isBrokenRaw` there would be dead code. The real, common
+defect is different: in **4/24 cards (~17%)** the Scrydex **PSA-10** (the index anchor) was priced *below a
+lower PSA grade* of the same card (e.g. PSA-10 $150 vs a lower PSA at $1,094) — impossible, since a
+top-grade slab can't be worth less than a worse one.
+
+**Fix (`scrydexGradedLadder`):** drop an inverted PSA-10 (one priced below a lower-grade **PSA** of the same
+card) from the ladder *at the source* — so the **displayed** ladder and the `scrydexPsa10E6` **anchor** stay
+consistent (no impossible PSA-10 shown to the user, and the anchor falls back: `scrydexPsa10E6(...) ?? tcgpl
+PSA-10 → JustTCG → keep-last`). Same-company only (a PSA-10 vs a cross-company BGS/CGC isn't comparable).
+Guards the Graded index without inventing a price.
+
 ## What this deliberately does NOT fix
 
 - **Scrydex genuinely higher than tcgpl** (freshness, or a real spike) → stays `reduce_only` until eBay
   confirms — by design (③).
 - **Two-feed disagreement with no eBay** (Raikou-class) → no independent venue to break the tie → stays
   `reduce_only`.
-- **Graded-ladder placeholders** → the broken-rung filter is RAW-only; a $1-style placeholder on a *graded*
-  rung (which feeds the graded index/panel via `scrydexGradedLadder`/`scrydexPsa10E6`) is not yet filtered.
-  Separate follow-up — graded rungs are per-(company,grade) peers, not a condition ladder.
+- **Lower-grade graded inversions** → the PSA-10 (anchor + display) is dropped on inversion (above), but an
+  inversion among *lower* grades in the display ladder (e.g. a PSA-7 below a PSA-6) is left as-is: for a
+  non-top grade we can't tell which rung is the wrong one, so auto-correcting risks dropping a real price.
 
 So this clears the **broken-low-rung** subset + the **grade-mismatch** subset, not the whole flood. Exact
 reach needs a Scrydex re-probe of the featured set (the lake's `scrydex_prices` is sparse) — part of the

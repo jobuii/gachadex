@@ -263,8 +263,10 @@ export function extractRaw(card: ScrydexCard, tcgplayerId: number | null): Scryd
 /** The full graded ladder off a Scrydex card, matched to OUR market by the TCGplayer product_id and
  *  FX'd to USD. Dedups duplicate company+grade (prefers a real low<high range over a single-sale
  *  outlier) and drops JPY rungs when no FX is available. Empty when the card has no graded data.
- *  NOTE: the §④ broken-rung placeholder filter (isBrokenRaw) is RAW-only; a $1-style placeholder on a
- *  graded rung is not yet filtered here (separate follow-up — graded peers aren't a condition ladder). */
+ *  NOTE: graded rungs always carry a low/high band — the $1-style placeholder pattern is RAW-only (§④),
+ *  so isBrokenRaw isn't applied here. We DO drop an inverted PSA-10 (top grade priced below a lower-grade
+ *  PSA of the same card — impossible), so the displayed ladder AND the scrydexPsa10E6 anchor stay
+ *  consistent and the anchor falls back to the tcgpl PSA-10. */
 export function scrydexGradedLadder(card: ScrydexCard, tcgplayerId: number | null, fxJpyUsd: number | null): GradeRow[] {
   const variant = findVariantByProduct(card, tcgplayerId);
   if (!variant) return [];
@@ -287,10 +289,16 @@ export function scrydexGradedLadder(card: ScrydexCard, tcgplayerId: number | nul
     }
     rows.push({ grader: (p.company as string).toUpperCase(), grade: p.grade as string, priceE6: toE6(usd).toString() });
   }
-  return sortGradeRows(rows);
+  // Drop an inverted PSA-10 (top grade priced below a lower-grade PSA — impossible) so neither the display
+  // ladder nor the scrydexPsa10E6 anchor publishes it; the anchor then falls back to tcgpl. Same-company.
+  const psa10 = rows.find((r) => r.grader === 'PSA' && r.grade === '10');
+  const inverted = psa10 != null && rows.some((r) => r.grader === 'PSA' && Number(r.grade) < 10 && BigInt(r.priceE6) > BigInt(psa10.priceE6));
+  return sortGradeRows(inverted ? rows.filter((r) => r !== psa10) : rows);
 }
 
-/** PSA-10 (USD micro) off a Scrydex graded ladder — the graded-index anchor + stored graded price. */
+/** PSA-10 (USD micro) off a Scrydex graded ladder — the graded-index anchor + stored graded price.
+ *  scrydexGradedLadder already drops an inverted PSA-10, so a null here means no trustworthy PSA-10 and the
+ *  caller falls back to the tcgpl PSA-10 (build spec §④ graded; ~17% of a live sample invert). */
 export function scrydexPsa10E6(ladder: GradeRow[]): bigint | null {
   const row = ladder.find((r) => r.grader === 'PSA' && r.grade === '10');
   return row ? BigInt(row.priceE6) : null;

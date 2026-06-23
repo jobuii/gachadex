@@ -197,6 +197,26 @@ test('scrydexGradedLadder: builds + sorts the ladder, dedups company+grade (pref
   assert.equal(scrydexPsa10E6([]), null, 'no PSA-10 rung -> null');
 });
 
+test('scrydexGradedLadder: drops an inverted PSA-10 (below a lower-grade PSA) from ladder AND anchor', () => {
+  // PSA-10 priced below its own PSA-9 is impossible → the PSA-10 rung is dropped from the display ladder,
+  // so scrydexPsa10E6 finds none and the anchor falls back to tcgpl.
+  const invertedCard = card([{
+    marketplaces: [{ name: 'tcgplayer', product_id: 7 }],
+    prices: [graded('PSA', '10', 150, { low: 150, high: 150 }), graded('PSA', '9', 1094, { low: 1094, high: 1094 })],
+  }]);
+  const ladder = scrydexGradedLadder(invertedCard, 7, null);
+  assert.equal(ladder.find((r) => r.grader === 'PSA' && r.grade === '10'), undefined, 'inverted PSA-10 dropped from the ladder');
+  assert.ok(ladder.find((r) => r.grader === 'PSA' && r.grade === '9'), 'the lower PSA-9 is kept');
+  assert.equal(scrydexPsa10E6(ladder), null, 'no PSA-10 in the ladder → anchor falls back (null)');
+
+  // a normal PSA-10 (top of its ladder) is kept; a higher CROSS-company BGS does not trip the PSA guard.
+  const okCard = card([{
+    marketplaces: [{ name: 'tcgplayer', product_id: 7 }],
+    prices: [graded('PSA', '10', 1000, { low: 1000, high: 1000 }), graded('PSA', '9', 600, { low: 600, high: 600 }), graded('BGS', '9.5', 5000, { low: 5000, high: 5000 })],
+  }]);
+  assert.equal(scrydexPsa10E6(scrydexGradedLadder(okCard, 7, null))?.toString(), (1000n * 1_000_000n).toString(), 'PSA-10 ≥ lower PSA kept; cross-company BGS ignored');
+});
+
 test('scrydexGradedLadder: JPY rungs are FX-converted to USD, and dropped when no FX', () => {
   const c = card([{ marketplaces: [{ name: 'tcgplayer', product_id: 7 }], prices: [graded('PSA', '10', 1_000_000, { currency: 'JPY' })] }]);
   assert.equal(scrydexGradedLadder(c, 7, 0.0066)[0].priceE6, (6600n * 1_000_000n).toString()); // 1,000,000 JPY * 0.0066 = $6,600
