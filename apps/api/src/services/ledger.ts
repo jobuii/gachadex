@@ -20,7 +20,8 @@ export type AccountType =
   | 'PNL_CLEARING'
   | 'FAUCET_SOURCE'
   | 'TREASURY_USDC'
-  | 'DROP_POOL';
+  | 'DROP_POOL'
+  | 'GAME_POOL';
 
 /** System (house) accounts — one row each, user_id NULL. */
 export const SYSTEM_ACCOUNT_TYPES: AccountType[] = [
@@ -33,6 +34,10 @@ export const SYSTEM_ACCOUNT_TYPES: AccountType[] = [
   // DROP giveaway pot (docs/chat-social-spec.md F6). Funded by the house floor each round + real-USDC
   // player tips; debited to buy the TCG pack. Phase 1 only reads its balance for the admin CHAT view.
   'DROP_POOL',
+  // Games house bankroll / prize pot (docs/games-spec.md). Wagers credit it; prize sell-backs debit
+  // it; the net house edge (the buyback spread) accrues here. Operator seeds the float (play-money
+  // from FAUCET_SOURCE; real-funds from treasury/fees) — a single prize can exceed its play's wager.
+  'GAME_POOL',
   // Real-funds custody mirror (docs/real-funds-custody-plan.md): the only account real deposits/
   // withdrawals touch. Its negative balance == total internal claims; the chain reconciler asserts
   // on-chain treasury USDC >= |TREASURY_USDC| (proof of reserves). Unused until REAL_FUNDS paths land.

@@ -10,6 +10,7 @@ const VIEWS = [
   { id: 'trade', label: 'Exchange', short: 'Trade' },
   { id: 'markets', label: 'Markets', short: 'Markets' },
   { id: 'pool', label: 'Pool', short: 'Pool' },
+  { id: 'games', label: 'Games', short: 'Games' },
   { id: 'leaderboard', label: 'Leaderboard', short: 'Ranks' },
   { id: 'portfolio', label: 'Portfolio', short: 'Folio' },
 ];
@@ -19,13 +20,16 @@ const NAV_ICONS = {
   trade: <><polyline points="23 6 13.5 15.5 8.5 10.5 1 18" /><polyline points="17 6 23 6 23 12" /></>,
   markets: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /></>,
   pool: <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z" />,
+  games: <><line x1="6" y1="11" x2="10" y2="11" /><line x1="8" y1="9" x2="8" y2="13" /><line x1="15" y1="12" x2="15.01" y2="12" /><line x1="18" y1="10" x2="18.01" y2="10" /><rect x="2" y="6" width="20" height="12" rx="3" /></>,
   leaderboard: <><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6" /><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18" /><path d="M4 22h16" /><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22" /><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22" /><path d="M18 2H6v7a6 6 0 0 0 12 0V2z" /></>,
   portfolio: <><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>,
 };
 
-export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat }) {
+export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat, gamesVisible = false }) {
   const unread = useChat((s) => s.unread);
   const navigate = useNavigate();
+  // The Games tab stays hidden from customers until the operator flips GAMES_ENABLED (surfaced via /health).
+  const views = gamesVisible ? VIEWS : VIEWS.filter((v) => v.id !== 'games');
   return (
     <>
     <nav className="navbar">
@@ -44,7 +48,7 @@ export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat }) {
       </div>
 
       <div className="nav-links">
-        {VIEWS.map(({ id, label }) => (
+        {views.map(({ id, label }) => (
           <button
             key={id}
             className={`nav-link ${activeView === id ? 'active' : ''}`}
@@ -74,7 +78,7 @@ export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat }) {
 
     {/* mobile-only bottom tab bar (display:none on desktop, see mobile.css) */}
     <nav className="mobile-tabbar" aria-label="Primary">
-      {VIEWS.filter((v) => v.short).map(({ id, short }) => (
+      {views.filter((v) => v.short).map(({ id, short }) => (
         <button
           key={id}
           className={`mobile-tab ${activeView === id ? 'active' : ''}`}

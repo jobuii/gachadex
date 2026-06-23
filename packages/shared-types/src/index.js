@@ -301,6 +301,184 @@ export const DelegateCreateRequest = DelegateNonceRequest.extend({
   signature: z.string(), // base58 MASTER-wallet signature over `message`
 });
 
+// --- games (docs/games-spec.md) ----------------------------------------------
+
+// Rotate the provably-fair client seed (1–64 printable ASCII chars).
+export const ClientSeedRequest = z.object({
+  clientSeed: z.string().trim().min(1).max(64).regex(/^[\x20-\x7E]+$/, 'client seed: printable ASCII only'),
+});
+
+// Open a pack: a tier price (whole USD, validated against the live config server-side) + an idempotency key.
+export const PackRipOpenRequest = z.object({
+  tier: z.coerce.number().int().positive().max(10_000_000),
+  idempotencyKey: z.string().min(8),
+});
+
+// Sell a held prize back for USDC.
+export const PrizeSellRequest = z.object({
+  prizeId: z.string().min(1),
+});
+
+// Set Poker: deal a hand / swap one of the player's five cards (slot 0..4). Each carries an idempotency key.
+export const SetPokerDealRequest = z.object({
+  idempotencyKey: z.string().min(8),
+});
+export const SetPokerSwapRequest = z.object({
+  slot: z.coerce.number().int().min(0).max(4),
+  idempotencyKey: z.string().min(8),
+});
+// Settle the open hand; an optional playId targets a specific hand for an idempotent retry.
+export const SetPokerSettleRequest = z.object({
+  playId: z.string().optional(),
+});
+
+// Grade Gamble: pay an ante tier to draw + grade a card.
+export const GradeOpenRequest = z.object({
+  tier: z.coerce.number().int().positive().max(10_000_000),
+  idempotencyKey: z.string().min(8),
+});
+
+// The Break: buy a spot in the open case.
+export const BreakJoinRequest = z.object({
+  idempotencyKey: z.string().min(8),
+});
+// Admin: cancel + refund an open case.
+export const BreakCancelRequest = z.object({
+  roundId: z.string().min(1),
+});
+
+// Price Duel: quick-match with a picked card / the creator backs out of an unmatched duel.
+export const DuelJoinRequest = z.object({
+  marketId: z.string().min(1).max(128),
+  idempotencyKey: z.string().min(8).max(128),
+});
+export const DuelCancelRequest = z.object({
+  duelId: z.string().min(1).max(128),
+});
+
+// Card Fantasy: enter the open league with a roster of distinct card market ids.
+export const FantasyEnterRequest = z.object({
+  marketIds: z.array(z.string().min(1).max(128)).min(2).max(15),
+  idempotencyKey: z.string().min(8).max(128),
+});
+
+// Draft Arena: join the open lobby with a ranked wishlist over the pool / admin cancel an unfilled lobby.
+export const ArenaJoinRequest = z.object({
+  wishlist: z.array(z.string().min(1).max(128)).min(2).max(200),
+  idempotencyKey: z.string().min(8).max(128),
+});
+export const ArenaCancelRequest = z.object({
+  roundId: z.string().min(1).max(128),
+});
+
+// Live-tunable games config (admin Games view). Partial — only provided keys change. Bounds mirror
+// game-config.ts; `tiers` nests a per-tier weighted value-band table the rip draws from.
+const PackBandReq = z.object({
+  minUsd: z.coerce.number().int().min(0).max(10_000_000),
+  maxUsd: z.coerce.number().int().min(0).max(10_000_000),
+  weight: z.coerce.number().min(0).max(1_000_000_000),
+});
+const PackTierReq = z.object({
+  price: z.coerce.number().int().positive().max(10_000_000),
+  bands: z.array(PackBandReq).min(1).max(12),
+});
+export const GameConfigRequest = z
+  .object({
+    packRip: z
+      .object({
+        enabled: z.boolean().optional(),
+        buybackSpreadBps: z.coerce.number().int().min(0).max(9000).optional(),
+        maxPrizeUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+        tiers: z.array(PackTierReq).min(1).max(12).optional(),
+      })
+      .strict()
+      .optional(),
+    setPoker: z
+      .object({
+        enabled: z.boolean().optional(),
+        anteUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        swapFeeUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+        maxSwaps: z.coerce.number().int().min(0).max(25).optional(),
+        buybackSpreadBps: z.coerce.number().int().min(0).max(9000).optional(),
+        maxPrizeUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+        bands: z.array(PackBandReq).min(1).max(12).optional(),
+      })
+      .strict()
+      .optional(),
+    gradeGamble: z
+      .object({
+        enabled: z.boolean().optional(),
+        buybackSpreadBps: z.coerce.number().int().min(0).max(9000).optional(),
+        maxPrizeUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+        tiers: z.array(PackTierReq).min(1).max(12).optional(),
+        grades: z.array(z.object({
+          label: z.string().min(1).max(24),
+          multBps: z.coerce.number().int().min(1).max(100_000_000),
+          weight: z.coerce.number().min(0).max(1_000_000_000),
+        })).min(2).max(12).optional(),
+      })
+      .strict()
+      .optional(),
+    theBreak: z
+      .object({
+        enabled: z.boolean().optional(),
+        spots: z.coerce.number().int().min(2).max(100).optional(),
+        entryUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        buybackSpreadBps: z.coerce.number().int().min(0).max(9000).optional(),
+        maxPrizeUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+        bands: z.array(PackBandReq).min(1).max(12).optional(),
+      })
+      .strict()
+      .optional(),
+    priceDuel: z
+      .object({
+        enabled: z.boolean().optional(),
+        anteUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        windowHours: z.coerce.number().int().min(1).max(720).optional(),
+        rakeBps: z.coerce.number().int().min(0).max(5000).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+      })
+      .strict()
+      .optional(),
+    cardFantasy: z
+      .object({
+        enabled: z.boolean().optional(),
+        entryUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        capUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        rosterSize: z.coerce.number().int().min(2).max(15).optional(),
+        windowHours: z.coerce.number().int().min(1).max(720).optional(),
+        rakeBps: z.coerce.number().int().min(0).max(5000).optional(),
+        minEntries: z.coerce.number().int().min(2).max(1000).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+      })
+      .strict()
+      .optional(),
+    draftArena: z
+      .object({
+        enabled: z.boolean().optional(),
+        entryUsd: z.coerce.number().int().min(1).max(10_000_000).optional(),
+        spots: z.coerce.number().int().min(2).max(12).optional(),
+        rosterSize: z.coerce.number().int().min(2).max(10).optional(),
+        poolSize: z.coerce.number().int().min(4).max(200).optional(),
+        rakeBps: z.coerce.number().int().min(0).max(5000).optional(),
+        windowHours: z.coerce.number().int().min(1).max(720).optional(),
+        lobbyTimeoutHours: z.coerce.number().int().min(1).max(720).optional(),
+        bigWinUsd: z.coerce.number().int().min(0).max(10_000_000).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+// Seed the GAME_POOL bankroll (play-money) — a whole/fractional dollar amount.
+export const GamePoolSeedRequest = z.object({
+  amountUsd: z.coerce.number().positive().max(10_000_000),
+});
+
 // --- websocket protocol ------------------------------------------------------
 
 export const WS_PUBLIC_CHANNELS = ['mark', 'stats', 'oi', 'funding']; // channel:{marketId}

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, WithdrawalAutoProcessRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest } from '@pokex/shared-types';
+import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, WithdrawalAutoProcessRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest, GameConfigRequest, GamePoolSeedRequest, BreakCancelRequest, ArenaCancelRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { rl } from './_ratelimit.ts';
@@ -18,6 +18,12 @@ import { listChatUsers } from '../services/chat.ts';
 import { chatConfigView, setChatThresholds } from '../services/chat-config.ts';
 import { dropConfigView, setDropConfig, getDropView } from '../services/drop-config.ts';
 import { totalTippedE6, recentTips } from '../services/drop.ts';
+import { gamesAdminView, setPackRipConfig, setSetPokerConfig, setGradeGambleConfig, setTheBreakConfig, setPriceDuelConfig, setCardFantasyConfig, setDraftArenaConfig } from '../services/game-config.ts';
+import { seedGamePool, packRipEv } from '../services/games.ts';
+import { setPokerEv } from '../services/games-setpoker.ts';
+import { gradeGambleEv } from '../services/games-grade.ts';
+import { breakEv, cancelBreak } from '../services/games-break.ts';
+import { cancelArena } from '../services/games-arena.ts';
 import { getUserPositions, liquidateAllEligible } from '../services/engine.ts';
 import { withdrawalAutoProcessView, setWithdrawalAutoProcess } from '../services/withdrawal-config.ts';
 import { getCustomerHistory } from '../services/history.ts';
@@ -235,5 +241,36 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
       default:
         return reply.code(400).send({ error: 'unsupported action' }); // unreachable (Zod-validated) — defensive
     }
+  });
+
+  // --- GAMES admin view (docs/games-spec.md). Per-game config (live knobs) + the GAME_POOL bankroll.
+  // Registers in both fund modes (no real funds move); seeding the pool is play-money only.
+
+  // Current games config + defaults + the GAME_POOL balance + per-game EV/house-edge vs the live pool.
+  app.get('/admin/games/config', rl(config.routeRateLimits.admin), async () => {
+    const db = await getDb();
+    return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db), setPokerEv: await setPokerEv(db), gradeGambleEv: await gradeGambleEv(db), breakEv: await breakEv(db) };
+  });
+  // Apply a partial games config patch (Pack Rip / Set Poker / Grade Gamble / The Break knobs).
+  app.post('/admin/games/config', rl(config.routeRateLimits.admin), async (req) => {
+    const b = GameConfigRequest.parse(req.body);
+    const db = await getDb();
+    if (b.packRip) await setPackRipConfig(db, b.packRip);
+    if (b.setPoker) await setSetPokerConfig(db, b.setPoker);
+    if (b.gradeGamble) await setGradeGambleConfig(db, b.gradeGamble);
+    if (b.theBreak) await setTheBreakConfig(db, b.theBreak);
+    if (b.priceDuel) await setPriceDuelConfig(db, b.priceDuel);
+    if (b.cardFantasy) await setCardFantasyConfig(db, b.cardFantasy);
+    if (b.draftArena) await setDraftArenaConfig(db, b.draftArena);
+    return { ...(await gamesAdminView(db)), packRipEv: await packRipEv(db), setPokerEv: await setPokerEv(db), gradeGambleEv: await gradeGambleEv(db), breakEv: await breakEv(db) };
+  });
+  // Cancel + refund an open case (the safety valve for a break that won't fill).
+  app.post('/admin/games/break/cancel', rl(config.routeRateLimits.admin), async (req) => cancelBreak(await getDb(), BreakCancelRequest.parse(req.body).roundId));
+  // Cancel + refund an unfilled draft lobby (the worker also auto-cancels past the fill timeout).
+  app.post('/admin/games/arena/cancel', rl(config.routeRateLimits.admin), async (req) => cancelArena(await getDb(), ArenaCancelRequest.parse(req.body).roundId));
+  // Seed the GAME_POOL bankroll (play-money: from FAUCET_SOURCE) so prizes can be paid out.
+  app.post('/admin/games/seed-pool', rl(config.routeRateLimits.admin), async (req) => {
+    const { amountUsd } = GamePoolSeedRequest.parse(req.body);
+    return seedGamePool(await getDb(), amountUsd);
   });
 }

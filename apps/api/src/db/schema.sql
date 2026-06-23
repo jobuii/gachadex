@@ -678,3 +678,94 @@ ALTER TABLE markets ALTER COLUMN min_qty_e6 SET DEFAULT 100;
 ALTER TABLE markets ALTER COLUMN qty_step_e6 SET DEFAULT 100;
 UPDATE markets SET qty_step_e6 = 100 WHERE qty_step_e6 <> 100;
 UPDATE markets SET min_qty_e6 = 100 WHERE min_qty_e6 <> 100;
+
+-- =========================================================================
+-- Games surface (docs/games-spec.md). Provably-fair real-money games whose prize is a tokenized card
+-- that settles to USDC at the platform oracle mark. Wagers/prizes move through the GAME_POOL ledger
+-- account; the reconciler proves every play balances. Idempotent (CREATE ... IF NOT EXISTS).
+-- =========================================================================
+
+-- Per-user provable-fairness state for the SOLO (instant) games — the rotating commit-reveal seed.
+-- The commit hash + client seed + nonce are shown up front; nonce++ per play; the server seed is
+-- revealed (and a new one committed) when the player rotates their client seed.
+CREATE TABLE IF NOT EXISTS game_seeds (
+  user_id          TEXT PRIMARY KEY REFERENCES users(id),
+  server_seed      TEXT NOT NULL,      -- secret until rotation
+  server_seed_hash TEXT NOT NULL,      -- sha256(server_seed) — the public commitment
+  client_seed      TEXT NOT NULL,      -- player-chosen (or a fresh default)
+  nonce            BIGINT NOT NULL DEFAULT 0,
+  rotated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Multiplayer / round audit (created now; exercised by the PvP/round games in later phases). Resolution
+-- uses the shared worker_leases table (lease.ts), same as the oracle/funding loops.
+CREATE TABLE IF NOT EXISTS game_rounds (
+  id               TEXT PRIMARY KEY,
+  game_type        TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'open',  -- open | resolving | settled | cancelled
+  server_seed      TEXT,
+  server_seed_hash TEXT,
+  pot_uusdc        BIGINT NOT NULL DEFAULT 0,
+  prize_uusdc      BIGINT NOT NULL DEFAULT 0,
+  params           JSONB,
+  started_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at      TIMESTAMPTZ
+);
+
+-- Every play. Replay-safe via UNIQUE(user_id, idempotency_key) (the engine's anchorOrder pattern): a
+-- duplicate request returns the prior result instead of re-running. `result` is the game-specific
+-- reveal payload; the fairness columns let any play be recomputed from (server_seed, client_seed, nonce).
+CREATE TABLE IF NOT EXISTS game_plays (
+  id               TEXT PRIMARY KEY,
+  game_type        TEXT NOT NULL,
+  round_id         TEXT REFERENCES game_rounds(id),
+  user_id          TEXT NOT NULL REFERENCES users(id),
+  idempotency_key  TEXT NOT NULL,
+  wager_uusdc      BIGINT NOT NULL,
+  result           JSONB,
+  payout_uusdc     BIGINT NOT NULL DEFAULT 0,
+  server_seed_hash TEXT,
+  client_seed      TEXT,
+  nonce            BIGINT,
+  txn_id           TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_game_plays_user_key ON game_plays(user_id, idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_game_plays_user ON game_plays(user_id, created_at DESC);
+-- At most one OPEN Set Poker hand per user — backstops the race between two concurrent deals (whose
+-- "another open hand?" checks both pass while the new rows still have a NULL status): the second hand's
+-- UPDATE to status='open' then fails this constraint and rolls back, instead of leaving two open hands.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_setpoker_open_hand ON game_plays(user_id) WHERE game_type = 'set-poker' AND result->>'status' = 'open';
+-- The Break: list a case's entrants (every game_plays row in the round settles on fill).
+CREATE INDEX IF NOT EXISTS idx_game_plays_round ON game_plays(round_id) WHERE round_id IS NOT NULL;
+-- Card Fantasy: at most one roster per user per league (multi-entry is a v2 feature).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fantasy_one_entry ON game_plays(round_id, user_id) WHERE game_type = 'card-fantasy';
+-- Draft Arena: at most one seat per user per lobby.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_arena_one_entry ON game_plays(round_id, user_id) WHERE game_type = 'draft-arena';
+-- At most one OPEN round per game type — backstops the race between two concurrent The Break joins that
+-- both find no open case and create one; the second create then fails this constraint and rolls back.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_open_round_per_game ON game_rounds(game_type) WHERE status = 'open';
+
+-- A won card. value_e6 = the oracle mark captured AT WIN; on sell-back it settles to USDC at the live
+-- mark minus the buyback spread (recorded in sell_value_e6). status: held (just won) | sold | kept.
+CREATE TABLE IF NOT EXISTS game_prizes (
+  id            TEXT PRIMARY KEY,
+  play_id       TEXT REFERENCES game_plays(id),
+  round_id      TEXT REFERENCES game_rounds(id),
+  user_id       TEXT NOT NULL REFERENCES users(id),
+  market_id     TEXT NOT NULL REFERENCES markets(id),
+  value_e6      BIGINT NOT NULL,        -- oracle mark at win
+  sell_value_e6 BIGINT,                 -- USDC actually paid on sell-back
+  status        TEXT NOT NULL DEFAULT 'held',  -- held | sold | kept
+  txn_id        TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  settled_at    TIMESTAMPTZ
+);
+-- Buyback terms SNAPSHOT at win time so the sell-back honours the contract the player won under, even if
+-- the source game's config is retuned afterwards (and so each game's prize uses ITS own spread/cap).
+ALTER TABLE game_prizes ADD COLUMN IF NOT EXISTS spread_bps INT;
+ALTER TABLE game_prizes ADD COLUMN IF NOT EXISTS max_prize_e6 BIGINT;
+-- Value multiplier applied to the card's live mark at sell-back (Grade Gamble's rolled grade). 10000 = 1×
+-- (Pack Rip / Set Poker prizes leave it at the default, so they sell at the plain mark).
+ALTER TABLE game_prizes ADD COLUMN IF NOT EXISTS multiplier_bps INT NOT NULL DEFAULT 10000;
+CREATE INDEX IF NOT EXISTS idx_game_prizes_user ON game_prizes(user_id, status);

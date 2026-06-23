@@ -173,6 +173,39 @@ export function capturePendingReferral() {
 export const getPendingReferral = () => localStorage.getItem(REF_KEY);
 export const clearPendingReferral = () => localStorage.removeItem(REF_KEY);
 
+// --- games (docs/games-spec.md) ---
+export const getGames = () => req('/games'); // public: { enabled, games: [{ id, name, enabled, tiers, buybackSpreadBps }] }
+export const getGamesFairness = () => req('/games/fairness', { auth: true }); // { serverSeedHash, clientSeed, nonce }
+export const setGamesClientSeed = (clientSeed) => req('/games/fairness/client-seed', { method: 'POST', auth: true, body: { clientSeed } });
+export const packRipOpen = (tier, idempotencyKey) => req('/games/pack-rip/open', { method: 'POST', auth: true, body: { tier, idempotencyKey } });
+export const packRipSellBack = (prizeId) => req('/games/pack-rip/sell-back', { method: 'POST', auth: true, body: { prizeId } });
+export const getGamePrizes = () => req('/games/prizes', { auth: true }); // { prizes: [{ prizeId, displayName, imageSmall, valueE6, ... }] }
+export const sellGamePrize = (prizeId) => req('/games/prizes/sell-back', { method: 'POST', auth: true, body: { prizeId } }); // any game's won card
+// Set Poker
+export const getSetPokerHand = () => req('/games/set-poker/hand', { auth: true }); // { hand: SetPokerView | null }
+export const setPokerDeal = (idempotencyKey) => req('/games/set-poker/deal', { method: 'POST', auth: true, body: { idempotencyKey } });
+export const setPokerSwap = (slot, idempotencyKey) => req('/games/set-poker/swap', { method: 'POST', auth: true, body: { slot, idempotencyKey } });
+export const setPokerSettle = (playId) => req('/games/set-poker/settle', { method: 'POST', auth: true, body: { playId } });
+// Grade Gamble
+export const gradeOpen = (tier, idempotencyKey) => req('/games/grade/open', { method: 'POST', auth: true, body: { tier, idempotencyKey } });
+// The Break
+export const getBreak = () => req('/games/break', { auth: true }); // { round: BreakView | null }
+export const getBreakRound = (roundId) => req(`/games/break/${roundId}`, { auth: true });
+export const breakJoin = (idempotencyKey) => req('/games/break/join', { method: 'POST', auth: true, body: { idempotencyKey } });
+// Price Duel
+export const getMyDuel = () => req('/games/duel', { auth: true }); // { duel: DuelView | null }
+export const getDuelById = (duelId) => req(`/games/duel/${duelId}`, { auth: true });
+export const duelJoin = (marketId, idempotencyKey) => req('/games/duel/join', { method: 'POST', auth: true, body: { marketId, idempotencyKey } });
+export const duelCancel = (duelId) => req('/games/duel/cancel', { method: 'POST', auth: true, body: { duelId } });
+// Card Fantasy
+export const getFantasyLeague = () => req('/games/fantasy', { auth: true }); // { league: LeagueView | null }
+export const getFantasyLeagueById = (leagueId) => req(`/games/fantasy/${leagueId}`, { auth: true });
+export const fantasyEnter = (marketIds, idempotencyKey) => req('/games/fantasy/enter', { method: 'POST', auth: true, body: { marketIds, idempotencyKey } });
+// Draft Arena
+export const getArena = () => req('/games/arena', { auth: true }); // { arena: ArenaView | null }
+export const getArenaById = (roundId) => req(`/games/arena/${roundId}`, { auth: true });
+export const arenaJoin = (wishlist, idempotencyKey) => req('/games/arena/join', { method: 'POST', auth: true, body: { wishlist, idempotencyKey } });
+
 // --- LP ---
 export const getPool = () => req('/lp/pool');
 export const getLpPosition = () => req('/lp/position', { auth: true });
@@ -221,6 +254,12 @@ export const adminSetChatThresholds = (body, adminKey) => adminReq('/admin/chat/
 export const adminGetDropConfig = (adminKey) => adminGet('/admin/chat/drop-config', adminKey);
 export const adminSetDropConfig = (body, adminKey) => adminReq('/admin/chat/drop-config', adminKey, body);
 export const adminGetDrop = (adminKey) => adminGet('/admin/chat/drop', adminKey);
+// Games admin: per-game config (live knobs) + the GAME_POOL bankroll; seed the pool (play-money).
+export const adminGetGamesConfig = (adminKey) => adminGet('/admin/games/config', adminKey);
+export const adminSetGamesConfig = (body, adminKey) => adminReq('/admin/games/config', adminKey, body);
+export const adminSeedGamePool = (amountUsd, adminKey) => adminReq('/admin/games/seed-pool', adminKey, { amountUsd });
+export const adminCancelBreak = (roundId, adminKey) => adminReq('/admin/games/break/cancel', adminKey, { roundId });
+export const adminCancelArena = (roundId, adminKey) => adminReq('/admin/games/arena/cancel', adminKey, { roundId });
 // Treasury + insurance. /admin/treasury (full PoR view incl. insurance + allocatable surplus) is
 // real-funds-only; /admin/insurance (balance) + the fee-allocation moves work in play-money too.
 export const adminGetTreasury = (adminKey) => adminGet('/admin/treasury', adminKey);

@@ -31,9 +31,9 @@ dist-ssr
 .env.*
 !.env.example
 
-# Local embedded Postgres (PGlite) data dir
-.pglite/
-**/.pglite/
+# Local embedded Postgres (PGlite) data dir (incl. the .pglite-dev demo db + crash artifacts)
+.pglite*/
+**/.pglite*/
 
 # Turborepo cache
 .turbo

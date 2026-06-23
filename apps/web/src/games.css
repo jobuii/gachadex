@@ -1,0 +1,263 @@
+/* Games surface (docs/games-spec.md). Token-driven — colors/shape come from the active skin
+   (--bg, --gold, --accent, --radius, --pill, --border-w). Mobile rules live in mobile.css. */
+
+.page.games { max-width: none; } /* full-width lobby (was capped + left-aligned) */
+.games-back { display: inline-block; margin-bottom: 0.75rem; background: none; border: none; color: var(--accent-lit); cursor: pointer; }
+.games-hero { margin-bottom: 0.4rem; }
+.games-banner {
+  margin: 0.75rem 0; padding: 0.6rem 0.9rem; border: var(--border-w) solid var(--border);
+  border-radius: var(--radius); background: var(--bg-2); color: var(--text-muted);
+}
+
+/* --- lobby: sections of flip.gg-style illustrated cards --- */
+.games-section { margin-top: 1.6rem; }
+.games-section-head {
+  display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.85rem;
+  font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--text-muted);
+}
+.games-section-icon { font-size: 1.05rem; }
+/* Flex-wrap + center so EVERY row (including a partial last row, e.g. a section with fewer cards
+   than columns) is centered on the page rather than left-aligned with empty space. */
+.games-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 1.1rem; }
+
+.game-card {
+  flex: 0 0 300px; /* fixed card width; the flex row centers them (full + partial rows alike) */
+  display: flex; flex-direction: column; text-align: left; padding: 0; overflow: hidden;
+  border: var(--border-w) solid var(--border); border-radius: calc(var(--radius) + 5px);
+  background: var(--bg-2); color: var(--text); cursor: pointer;
+  transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.game-card:not(.disabled):hover {
+  transform: translateY(-5px);
+  border-color: color-mix(in srgb, var(--c1, var(--gold)) 70%, var(--border));
+  box-shadow: 0 16px 36px -18px var(--cg, var(--c1, var(--gold)));
+}
+.game-card.disabled { opacity: .5; cursor: not-allowed; }
+.game-card.disabled .game-art { filter: grayscale(.7) brightness(.82); }
+
+/* the illustrated hero: a per-game gradient scene with a fanned card deck + the game icon */
+.game-art {
+  position: relative; height: 152px; overflow: hidden;
+  background:
+    radial-gradient(120% 95% at 50% 16%, color-mix(in srgb, var(--c1, var(--accent)) 55%, transparent), transparent 68%),
+    linear-gradient(150deg, color-mix(in srgb, var(--c1, var(--accent)) 30%, var(--bg-3)) 0%, var(--bg-3) 52%, color-mix(in srgb, var(--c2, var(--gold)) 40%, var(--bg-3)) 100%);
+}
+.game-art::after { /* fine dot texture for depth */
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image: radial-gradient(color-mix(in srgb, var(--text) 10%, transparent) 1px, transparent 1.5px);
+  background-size: 13px 13px; opacity: .45; mix-blend-mode: overlay;
+}
+.game-art-deck { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.game-art-deck i {
+  position: absolute; width: 56px; height: 78px; border-radius: 8px;
+  background: linear-gradient(155deg, rgba(255,255,255,.95), color-mix(in srgb, var(--c1, var(--accent)) 32%, #fff) 55%, color-mix(in srgb, var(--c2, var(--gold)) 45%, #fff));
+  border: 1.5px solid rgba(255,255,255,.65); box-shadow: 0 7px 16px -7px rgba(0,0,0,.6);
+  transition: transform .22s ease;
+}
+.game-art-deck i:nth-child(1) { transform: rotate(-16deg) translate(-30px, 7px); }
+.game-art-deck i:nth-child(3) { transform: rotate(16deg) translate(30px, 7px); }
+.game-art-deck i:nth-child(2) { width: 60px; height: 84px; z-index: 1; box-shadow: 0 11px 24px -8px rgba(0,0,0,.7); }
+.game-card:not(.disabled):hover .game-art-deck i:nth-child(1) { transform: rotate(-23deg) translate(-41px, 2px); }
+.game-card:not(.disabled):hover .game-art-deck i:nth-child(3) { transform: rotate(23deg) translate(41px, 2px); }
+.game-art-icon {
+  position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center;
+  font-size: 2.7rem; filter: drop-shadow(0 4px 10px rgba(0,0,0,.5)); transition: transform .22s ease;
+}
+.game-card:not(.disabled):hover .game-art-icon { transform: scale(1.1) rotate(-3deg); }
+/* a real per-game image, dropped at public/games/<id>.webp, covers the CSS illustration when present
+   (and onError-hides itself if the file is missing, falling back to the deck+icon art). */
+.game-art-img { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; object-fit: cover; transition: transform .22s ease; }
+.game-card:not(.disabled):hover .game-art-img { transform: scale(1.06); }
+
+/* footer: name + blurb + a play pill */
+.game-foot { display: flex; align-items: center; gap: 0.6rem; padding: 0.7rem 0.85rem 0.8rem; }
+.game-foot-main { display: flex; flex-direction: column; gap: 0.16rem; min-width: 0; flex: 1; }
+.game-name { font-family: var(--font-display, inherit); font-weight: var(--weight-strong); font-size: 1.02rem; line-height: 1.1; }
+.game-blurb {
+  font-size: 0.72rem; color: var(--text-muted); line-height: 1.28;
+  overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.game-play {
+  flex-shrink: 0; align-self: center; font-size: 0.72rem; font-weight: var(--weight-strong);
+  padding: 0.36rem 0.74rem; border-radius: var(--pill); color: #fff;
+  background: linear-gradient(135deg, var(--c1, var(--accent)), var(--c2, var(--gold)));
+  box-shadow: 0 5px 14px -7px var(--cg, var(--c1, var(--accent)));
+}
+.game-card.disabled .game-play { background: var(--bg-3); color: var(--text-muted); box-shadow: none; }
+
+/* per-game color themes (vibrant, distinct — like flip.gg's per-game art) */
+.g-pack-rip     { --c1:#22d3ee; --c2:#8b5cf6; --cg:#22d3ee; }
+.g-set-poker    { --c1:#10b981; --c2:#065f46; --cg:#10b981; }
+.g-grade-gamble { --c1:#ec4899; --c2:#06b6d4; --cg:#ec4899; }
+.g-the-break    { --c1:#f59e0b; --c2:#dc2626; --cg:#f59e0b; }
+.g-price-duel   { --c1:#ef4444; --c2:#3b82f6; --cg:#a855f7; }
+.g-fantasy      { --c1:#fbbf24; --c2:#b45309; --cg:#fbbf24; }
+.g-draft-arena  { --c1:#22c55e; --c2:#0ea5e9; --cg:#22c55e; }
+
+@media (max-width: 640px) {
+  .games-grid { gap: 0.7rem; }
+  .game-card { flex: 0 0 calc(50% - 0.35rem); } /* exactly 2 per row; a lone odd card stays half-width, centered */
+  .game-art { height: 118px; }
+  .game-art-deck i { width: 44px; height: 62px; }
+  .game-art-deck i:nth-child(2) { width: 48px; height: 67px; }
+  .game-art-icon { font-size: 2.1rem; }
+  .game-name { font-size: 0.9rem; }
+  .game-blurb { font-size: 0.66rem; }
+  .game-foot { flex-direction: column; align-items: stretch; gap: 0.45rem; padding: 0.6rem 0.65rem 0.7rem; }
+  .game-play { align-self: stretch; text-align: center; }
+}
+
+/* --- pack rip --- */
+.rip-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.rip-head-right { display: flex; align-items: center; gap: 0.9rem; }
+.rip-tiers { display: flex; gap: 0.6rem; margin: 1rem 0; flex-wrap: wrap; }
+.rip-tier {
+  padding: 0.6rem 1.1rem; border: var(--border-w) solid var(--border); border-radius: var(--pill);
+  background: var(--bg-2); color: var(--text); cursor: pointer; font-weight: var(--weight-strong);
+}
+.rip-tier.active { border-color: var(--gold); color: var(--gold); }
+.rip-go { margin-bottom: 1rem; }
+
+.rip-reveal { padding: 1rem; margin-top: 1rem; }
+.rip-card { display: flex; align-items: center; gap: 1rem; }
+.rip-card-img { width: 96px; height: 134px; object-fit: contain; border-radius: var(--radius); background: var(--bg-3); display: flex; align-items: center; justify-content: center; font-size: 2rem; }
+.rip-card-meta { display: flex; flex-direction: column; gap: 0.35rem; }
+.rip-card-name { font-weight: var(--weight-strong); font-size: 1.05rem; }
+.rip-card-val { color: var(--gold); font-size: 1.4rem; font-weight: var(--weight-strong); }
+.rip-actions { display: flex; gap: 0.6rem; margin-top: 1rem; flex-wrap: wrap; }
+
+.rip-feed { margin-top: 1.5rem; }
+.rip-feed ul { list-style: none; padding: 0; margin: 0.5rem 0 0; }
+.rip-feed li { padding: 0.35rem 0; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+.rip-feed-who { color: var(--accent-lit); }
+.rip-feed-val { color: var(--gold); float: right; }
+
+/* --- set poker --- */
+.sp-table { margin-top: 1rem; }
+.sp-side { margin-bottom: 1.1rem; }
+.sp-side-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.4rem; color: var(--text-muted); }
+.sp-total { font-size: 1.2rem; color: var(--text); }
+.sp-total.up { color: var(--success); }
+.sp-hand { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.sp-card { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; width: 84px; }
+.sp-card-img { width: 84px; height: 117px; object-fit: contain; border-radius: var(--radius); background: var(--bg-3); display: flex; align-items: center; justify-content: center; font-size: 1.8rem; }
+.sp-card-val { color: var(--gold); font-size: 0.85rem; font-weight: var(--weight-strong); }
+.sp-swap { padding: 0.2rem 0.5rem; font-size: 0.7rem; }
+.sp-settle { margin-top: 0.5rem; }
+.sp-result { margin-top: 1rem; padding: 0.8rem; border: var(--border-w) solid var(--border); border-radius: var(--radius); background: var(--bg-2); }
+.sp-result.up { border-color: var(--success); }
+.sp-result.down { border-color: var(--danger); }
+@media (max-width: 768px) {
+  .sp-card, .sp-card-img { width: 64px; }
+  .sp-card-img { height: 90px; }
+}
+
+/* --- grade gamble --- */
+.gg-odds { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.6rem 0; }
+.gg-odd { font-size: 0.8rem; padding: 0.25rem 0.55rem; border: 1px solid var(--border); border-radius: var(--pill); background: var(--bg-2); color: var(--text-muted); }
+.gg-grade { color: var(--accent-lit); font-weight: var(--weight-strong); font-size: 0.95rem; }
+
+/* --- the break --- */
+.brk-case { padding: 1rem; margin-top: 1rem; }
+.brk-progress { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 0.9rem; }
+.brk-bar { flex: 1; height: 10px; background: var(--bg-3); border-radius: var(--pill); overflow: hidden; }
+.brk-fill { height: 100%; background: var(--gold); transition: width 0.4s ease; }
+.brk-cards { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.brk-card { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; width: 86px; }
+.brk-card-img { width: 86px; height: 120px; object-fit: contain; border-radius: var(--radius); background: var(--bg-3); display: flex; align-items: center; justify-content: center; font-size: 1.8rem; }
+.brk-card.sealed .brk-card-img { filter: grayscale(0.4) brightness(0.85); }
+.brk-card-val { color: var(--gold); font-size: 0.82rem; font-weight: var(--weight-strong); }
+.brk-card-name { font-size: 0.78rem; text-align: center; }
+.brk-card.brk-won { width: auto; min-width: 120px; padding: 0.5rem; border: var(--border-w) solid var(--success); border-radius: var(--radius); background: var(--bg-2); }
+.brk-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
+.brk-result { margin-top: 1rem; padding-top: 0.9rem; border-top: 1px solid var(--border); }
+.brk-fair { font-size: 0.72rem; margin-top: 0.6rem; }
+@media (max-width: 768px) {
+  .brk-card, .brk-card-img { width: 66px; }
+  .brk-card-img { height: 92px; }
+}
+
+/* --- price duel --- */
+.duel-picker { margin-top: 0.8rem; }
+.duel-search { width: 100%; max-width: 360px; margin-bottom: 0.7rem; }
+.duel-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 0.6rem; max-height: 380px; overflow-y: auto; }
+.duel-pick { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; padding: 0.5rem; border: var(--border-w) solid var(--border); border-radius: var(--radius); background: var(--bg-2); color: var(--text); cursor: pointer; }
+.duel-pick:hover { border-color: var(--gold); }
+.duel-pick-img { width: 64px; height: 90px; object-fit: contain; border-radius: var(--radius); background: var(--bg-3); display: flex; align-items: center; justify-content: center; font-size: 1.4rem; }
+.duel-pick-name { font-size: 0.68rem; text-align: center; line-height: 1.15; }
+.duel-pick-val { font-size: 0.72rem; color: var(--gold); font-weight: var(--weight-strong); }
+.duel-arena { padding: 1.2rem; margin-top: 1rem; }
+.duel-vs { display: flex; align-items: center; justify-content: center; gap: 1.4rem; }
+.duel-vs-x { font-size: 1.3rem; color: var(--accent-lit); font-weight: var(--weight-strong); }
+.duel-card { display: flex; flex-direction: column; align-items: center; gap: 0.35rem; width: 110px; }
+.duel-card-label { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.duel-card-img { width: 96px; height: 134px; object-fit: contain; border-radius: var(--radius); background: var(--bg-3); display: flex; align-items: center; justify-content: center; font-size: 2.2rem; }
+.duel-card-name { font-size: 0.78rem; text-align: center; line-height: 1.15; }
+.duel-wait { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1.1rem; flex-wrap: wrap; }
+.duel-live { margin-top: 1.1rem; text-align: center; }
+.duel-result { margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px solid var(--border); text-align: center; }
+@media (max-width: 768px) {
+  .duel-card, .duel-card-img { width: 80px; }
+  .duel-card-img { height: 112px; }
+}
+
+/* --- draft arena (reuses .fan-* for the battle + standings) --- */
+.arena-wishlist { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.2rem 0 0.7rem; padding-left: 1.2rem; }
+.arena-wishlist li { counter-increment: wl; }
+.arena-wl-item { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.25rem 0.5rem; border: var(--border-w) solid var(--gold); border-radius: var(--radius); background: var(--bg-2); color: var(--text); cursor: pointer; font-size: 0.72rem; }
+.arena-wl-x { color: var(--text-muted); font-weight: var(--weight-strong); }
+.arena-join { margin-bottom: 0.9rem; }
+.arena-pool .duel-pick { position: relative; }
+.arena-rank-badge { position: absolute; top: 4px; left: 4px; width: 18px; height: 18px; border-radius: 50%; background: var(--gold); color: var(--bg); font-size: 0.65rem; font-weight: var(--weight-strong); display: flex; align-items: center; justify-content: center; z-index: 1; }
+.arena-seed { margin-top: 0.8rem; font-size: 0.7rem; word-break: break-all; }
+
+/* --- card fantasy --- */
+.fan-capbar { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; margin-bottom: 0.6rem; }
+.fan-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.7rem; }
+.fan-chip { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.25rem 0.5rem; border: var(--border-w) solid var(--border); border-radius: var(--radius); background: var(--bg-2); color: var(--text); cursor: pointer; font-size: 0.72rem; }
+.fan-chip img, .fan-chip .idx-thumb { width: 22px; height: 30px; object-fit: contain; border-radius: 3px; }
+.fan-chip-x { color: var(--text-muted); font-weight: var(--weight-strong); }
+.fan-chip:hover { border-color: var(--accent-lit); }
+.fan-enter { margin-bottom: 0.8rem; }
+.duel-pick.picked { border-color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
+.fan-league { padding: 1.1rem; margin-top: 1rem; }
+.fan-league-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+.fan-pool { font-size: 1.3rem; font-weight: var(--weight-strong); color: var(--gold); }
+.fan-clock { font-size: 0.85rem; color: var(--text-muted); }
+.fan-settled { color: var(--gold); text-transform: uppercase; letter-spacing: 0.05em; }
+.fan-roster-title { display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 0.9rem 0 0.5rem; }
+.fan-score { font-size: 0.95rem; font-weight: var(--weight-strong); }
+.fan-row { display: grid; grid-template-columns: 34px 1fr auto auto; align-items: center; gap: 0.6rem; padding: 0.35rem 0; border-bottom: 1px solid var(--border); }
+.fan-row-img { width: 34px; height: 47px; object-fit: contain; border-radius: 4px; background: var(--bg-3); display: flex; align-items: center; justify-content: center; }
+.fan-row-name { font-size: 0.82rem; }
+.fan-row-val { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; }
+.fan-row-move { font-size: 0.85rem; font-weight: var(--weight-strong); min-width: 56px; text-align: right; }
+.fan-board-row { display: grid; grid-template-columns: 32px 1fr auto; align-items: center; gap: 0.5rem; padding: 0.3rem 0.4rem; border-radius: var(--radius); font-size: 0.85rem; }
+.fan-board-row.you { background: color-mix(in srgb, var(--gold) 14%, transparent); }
+.fan-rank { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.fan-board-score { font-weight: var(--weight-strong); font-variant-numeric: tabular-nums; }
+
+/* --- provably-fair modal --- */
+.games-modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center;
+  justify-content: center; z-index: 1000; padding: 1rem;
+}
+.games-modal { width: 100%; max-width: 520px; padding: 1.2rem; max-height: 90vh; overflow: auto; }
+.games-modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+.games-seed { display: block; word-break: break-all; font-size: 0.78rem; background: var(--bg-3); padding: 0.5rem; border-radius: var(--radius); margin-bottom: 0.6rem; }
+.games-fair-note { font-size: 0.78rem; margin-top: 0.5rem; }
+.games-revealed { margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
+
+/* --- admin --- */
+.games-admin-ev { margin: 0.8rem 0; }
+.games-ev-table { width: 100%; border-collapse: collapse; margin: 0.4rem 0; font-size: 0.82rem; }
+.games-ev-table th, .games-ev-table td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--border); }
+.games-ev-table th { color: var(--text-muted); font-weight: var(--weight-strong); }
+.games-ev-table tr.ev-negative td { color: var(--danger); }
+.games-admin-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.6rem 0; }
+.games-admin-fields { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+.games-admin-fields .field-label { flex: 1; min-width: 140px; }
+.games-admin-json {
+  width: 100%; font-family: monospace; font-size: 0.78rem; background: var(--bg-3); color: var(--text);
+  border: var(--border-w) solid var(--border); border-radius: var(--radius); padding: 0.6rem; margin-bottom: 0.8rem;
+}

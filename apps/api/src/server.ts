@@ -11,6 +11,7 @@ import { lpRoutes } from './routes/lp.ts';
 import { socialRoutes } from './routes/social.ts';
 import { historyRoutes } from './routes/history.ts';
 import { chatRoutes } from './routes/chat.ts';
+import { gameRoutes } from './routes/games.ts';
 import { walletRoutes } from './routes/wallet.ts';
 import { scrydexWebhookRoutes } from './routes/scrydex-webhook.ts';
 import { imageProxyRoutes } from './routes/image-proxy.ts';
@@ -99,6 +100,7 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
     env: config.env,
     realFunds: config.realFunds,
     listingEnabled: searchAndBetActive, // on-demand /markets/ensure is registered — lets the web hide a dead LIST button
+    gamesEnabled: config.gamesEnabled, // the web hides the Games nav tab + page entirely until this flips on
     apiVersion: API_VERSION,
     time: new Date().toISOString(),
   }));
@@ -112,6 +114,7 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
   await app.register(socialRoutes);
   await app.register(historyRoutes);
   await app.register(chatRoutes);
+  await app.register(gameRoutes); // Games surface (docs/games-spec.md); play routes self-gate on GAMES_ENABLED
   await app.register(walletRoutes);
   await app.register(scrydexWebhookRoutes); // Scrydex price webhook (§8), HMAC-verified; encapsulated raw-body parser
   await app.register(imageProxyRoutes); // same-origin re-serve of whitelisted CDN images (canvas-safe share cards)
