@@ -375,7 +375,7 @@ Visual: GDEX retro/arcade skin + cyan/violet/pink brand; not a pixel clone of CC
 ## 14. Build phasing
 
 - **P0 — Read-only lobby.** CC client + lobby UI (machines, tier legends, cards grid, winners). No buying. Flag off.
-  *(Blocked only by the branch decision, §15.)*
+  *(Branch resolved — the Games surface is on master; build on `development`, §15.)*
 - **P1 — Buy → open → sell-back (core loop, USDC only).** Dedicated NFT-custody path + JIT funding + the
   `signBase64Tx` port; two-phase open + reconciler + the refund/fail reversal; idempotent inventory; 5%/10%
   sell-back via `altRecipient`→hot; reveal modal. **No NFT leaves custody. Confirm CC mainnet + `altPlayerAddress`
@@ -384,7 +384,7 @@ Visual: GDEX retro/arcade skin + cyan/violet/pink brand; not a pixel clone of CC
   + a devnet pNFT round-trip spike) + Portfolio Inventory + per-request dest + step-up + DAS reconcile.
 - **P3 — Funnel + polish.** Turbo, Instant sell, **Convert (2-stage, market-gated)**, the card→market matching
   (best-effort — see §15), "Verify rip" (if §10 confirms), winners-feed richness.
-- **P4 — Tokens loyalty (own track, `TOKENS_ENABLED` off, markup required).** Token ledger + earn hooks +
+- **P4 — Tokens loyalty (own track, `TOKENS_ENABLED` off; markup optional + monitored).** Token ledger + earn hooks +
   pay-with-Tokens + the free-pack progress UI + the `Σ token_ledger == token_balances` reconciler.
 
 ## 15. Risks & open decisions
@@ -408,9 +408,9 @@ Visual: GDEX retro/arcade skin + cyan/violet/pink brand; not a pixel clone of CC
 7. **Funding** — at the operator's expected ~90% sell-back (CC data) the cut funds the rebate (~+$15/$1,000);
    **break-even ≈ 57% sell-back**, so **no markup for now**. Monitor the live net (admin readout); turn on
    `gacha_markup_bps` only if the sell-back rate drifts toward break-even.
-8. **DECIDE before P0 — build branch:** Classic Gacha lives on the Games surface, which is on the unpushed `game`
-   branch (currently behind master). Either build on `game` as a Pack Rip sibling, or merge the Games surface to
-   master first. This blocks P0 start.
+8. **Build branch — RESOLVED (2026-06-24):** the `game` branch was merged to master (`07e63ef`), so the Games
+   surface (Pack Rip, `game-fairness`, `GAME_POOL`, `GAMES_ENABLED`) is now on **master / `development`**. Build
+   Classic Gacha on `development` directly, as a Pack Rip sibling — no separate worktree needed. P0 is unblocked.
 9. **Sell-back basis** — CC's buyback amount, not the GDEX oracle (so unmatched cards can still be sold back; only
    Trade/Convert need a market).
 
