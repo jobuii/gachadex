@@ -220,7 +220,7 @@ async function createSession(
   return { sid, refreshToken: `${sid}.${secret}` };
 }
 
-async function upsertUser(db: Db, pubkey: string): Promise<string> {
+export async function upsertUser(db: Db, pubkey: string): Promise<string> {
   const id = randomUUID();
   const ins = await db.query<{ id: string }>(
     `INSERT INTO users(id, solana_pubkey) VALUES($1, $2) ON CONFLICT(solana_pubkey) DO NOTHING RETURNING id`,

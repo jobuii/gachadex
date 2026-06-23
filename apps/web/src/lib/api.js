@@ -54,7 +54,9 @@ async function req(path, opts = {}) {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `request failed (${res.status})`);
+    const e = new Error(err.error || `request failed (${res.status})`);
+    e.status = res.status; // let callers distinguish permanent (4xx) from transient (5xx/network) failures
+    throw e;
   }
   return res.json();
 }

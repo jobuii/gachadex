@@ -189,4 +189,18 @@ Hook points confirmed real (`engine.ts:18-36` chargeFee; open `:364`/`:408`, clo
    cashback only. (resolved by context)
 7. Hot-path lookup — **one joined query per fee** (revised from cached Map; see QA #4).
 8. Liquidation fees — **EXCLUDED** from discount + cashback (penalties, not commissions). ✅ confirmed.
-9. Attribution — **verify the `?ref=` held code auto-redeems on sign-in** before P1 (QA #3). ⏳ open (P1 step 0).
+9. Attribution — was MANUAL (the held `?ref=` only pre-filled the redeem box); **added auto-redeem-on-sign-in** in AuthContext. ✅
+
+## Status
+
+- **Step 0 + P1 (backend) BUILT** (2026-06-20; local commit on `development`, NOT merged to master): the
+  `affiliate_terms` schema + a `(account_id, reason)` ledger index; the `affiliate` service
+  (resolveFeeAffiliate / applyFeeDiscount / setAffiliateTerms / listAffiliates / getCashbackTotal /
+  maxCashbackBps); the `chargeFee` discount + cashback hooks (open/close only — liquidation excluded);
+  `cashbackTotalUusdc` on `/account/balance`; the `/admin/affiliates` API; and the sign-in auto-redeem.
+  348 API tests (7 new) + typecheck + web build green. Adversarial review done — fixed: deactivated-affiliate
+  silently re-enabled on a terms edit · missing ledger index · clear the held `?ref=` only on a permanent 4xx.
+- **Follow-up (deferred, low):** make `setAffiliateTerms` atomic — it runs `upsertUser` → `setReferralCode`
+  (own tx) → the `affiliate_terms` upsert as separate ops, so a crash mid-way leaves a partial state.
+  Admin-only, retryable, no fund impact → deferred (needs `setReferralCode` to accept a shared queryer).
+- **Remaining:** P2 (admin Affiliates tab) · P3 (Portfolio "Cashback" card + ReferralPanel earnings).

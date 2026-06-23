@@ -14,9 +14,19 @@ import { getCumulativeFundingE6, settlePositionFunding } from './funding.ts';
 import { openNotionalBySide } from './oi.ts';
 import { publish } from './bus.ts';
 import { usdc } from '../money.ts';
+import { resolveFeeAffiliate, applyFeeDiscount, type FeeAffiliate } from './affiliate.ts';
 
-/** Charge a trading fee, split between LPs and platform revenue (a balanced ledger txn). */
-async function chargeFee(q: Queryer, userId: string, feeAmt: bigint, reason: string, refId: string): Promise<void> {
+/** Charge a trading fee, split between LPs and platform revenue (a balanced ledger txn). When the trader
+ *  was referred by an affiliate, a second balanced txn pays that affiliate their cashback out of the
+ *  house revenue share (never the LP share). */
+async function chargeFee(
+  q: Queryer,
+  userId: string,
+  feeAmt: bigint,
+  reason: string,
+  refId: string,
+  cashback?: FeeAffiliate['cashback'],
+): Promise<void> {
   if (feeAmt <= 0n) return;
   const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
   const lp = await getOrCreateSystemAccount(q, 'LP_POOL');
@@ -33,6 +43,25 @@ async function chargeFee(q: Queryer, userId: string, feeAmt: bigint, reason: str
       { accountId: rev, amount: revPart },
     ],
   });
+  // Referral cashback: move a slice of the house revenue share to the referring affiliate. Clamp to
+  // revPart so FEE_REVENUE can never go negative (runtime guard, in case feeLpSharePct changed since the
+  // terms were set). cashback.userId is always the referrer (never the trader — self-redeem is blocked).
+  if (cashback && cashback.bps > 0 && cashback.userId !== userId) {
+    const want = (feeAmt * BigInt(cashback.bps)) / 10000n;
+    const cb = want > revPart ? revPart : want;
+    if (cb > 0n) {
+      const affColl = await getOrCreateUserAccount(q, cashback.userId, 'USER_COLLATERAL');
+      await postTxn(q, {
+        reason: 'REFERRAL_CASHBACK',
+        refType: 'fee',
+        refId,
+        entries: [
+          { accountId: rev, amount: -cb },
+          { accountId: affColl, amount: cb },
+        ],
+      });
+    }
+  }
 }
 
 /**
@@ -361,7 +390,8 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
       const notion = notional(input.qtyE6, markE6);
       const margin = initialMargin(notion, leverageE2);
       if (margin <= 0n) throw new HttpError(400, 'order too small');
-      const openFee = fee(notion, getFeeBps());
+      const feeAff = await resolveFeeAffiliate(q, userId);
+      const openFee = applyFeeDiscount(fee(notion, getFeeBps()), feeAff.discountBps);
 
       // ---- pool-protection checks (all per side) -----------------------------------------------
       const sideCap = input.side === 'long' ? BigInt(market.max_oi_long_uusdc) : BigInt(market.max_oi_short_uusdc);
@@ -405,7 +435,7 @@ export async function openPosition(db: Db, userId: string, input: OpenInput): Pr
           { accountId: marginAcct, amount: margin },
         ],
       });
-      await chargeFee(q, userId, openFee, 'OPEN_FEE', market.id);
+      await chargeFee(q, userId, openFee, 'OPEN_FEE', market.id, feeAff.cashback);
 
       // open or increase
       const existing = await getOpenPosition(q, userId, market.id, input.side);
@@ -490,7 +520,8 @@ export async function closePosition(db: Db, userId: string, input: CloseInput): 
       const entry = BigInt(pos.avg_entry_e6);
       const pnl = unrealizedPnl(pos.side, closeQty, entry, markE6);
       const marginRel = (BigInt(pos.margin_uusdc) * closeQty) / qty;
-      const closeFeeAmt = fee(notional(closeQty, markE6), getFeeBps());
+      const feeAff = await resolveFeeAffiliate(q, userId);
+      const closeFeeAmt = applyFeeDiscount(fee(notional(closeQty, markE6), getFeeBps()), feeAff.discountBps);
 
       const collAcct = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
       const marginAcct = await getOrCreateUserAccount(q, userId, 'USER_POSITION_MARGIN');
@@ -519,7 +550,7 @@ export async function closePosition(db: Db, userId: string, input: CloseInput): 
         });
       }
       // close fee
-      await chargeFee(q, userId, closeFeeAmt, 'CLOSE_FEE', pos.id);
+      await chargeFee(q, userId, closeFeeAmt, 'CLOSE_FEE', pos.id, feeAff.cashback);
 
       const remQty = qty - closeQty;
       const remMargin = BigInt(pos.margin_uusdc) - marginRel;
