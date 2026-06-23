@@ -44,7 +44,7 @@ function marketSubtitle(m) {
 }
 
 /** One whole-catalog search result: trade it if a market exists, list it on demand if it qualifies. */
-function CatalogRow({ r, existing, listingEnabled, game, onSelect, onListed }) {
+function CatalogRow({ r, existing, listingEnabled, game, onSelect, onListed, markListed }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -53,6 +53,7 @@ function CatalogRow({ r, existing, listingEnabled, game, onSelect, onListed }) {
     setBusy(true);
     try {
       const { marketId } = await api.ensureMarket(r.providerCardId, game);
+      markListed(r.providerCardId, marketId); // stamp the marketId onto this result so the row flips to TRADE (was stuck on LIST forever)
       await onListed(marketId);
     } catch (e) {
       setErr(e.message);
@@ -182,6 +183,10 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
   const shownIds = useMemo(() => new Set(list.map((m) => m.id)), [list]);
   const catalogRows = catalog?.filter((r) => !r.marketId || !shownIds.has(r.marketId));
   const marketById = useMemo(() => new Map(markets.map((m) => [m.id, m])), [markets]);
+  // After listing a catalog card, stamp its new marketId onto the result so the row flips LIST → TRADE
+  // (existing is derived from r.marketId, which the cached search results otherwise never gets).
+  const markListed = (providerCardId, marketId) =>
+    setCatalog((cat) => cat?.map((c) => (c.providerCardId === providerCardId ? { ...c, marketId } : c)) ?? cat);
 
   return (
     <div className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
@@ -326,6 +331,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
                     game={game}
                     onSelect={onSelect}
                     onListed={onListed}
+                    markListed={markListed}
                   />
                 ))}
                 {catalogError && !catalogLoading && (
