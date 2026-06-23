@@ -58,7 +58,8 @@
     padding: 0;
     cursor: pointer;
   }
-  .mobile-tab .mt-ico { font-size: 0.85rem; line-height: 1; }
+  .mobile-tab .mt-ico { display: flex; line-height: 1; }
+  .mobile-tab .mt-ico svg { width: 20px; height: 20px; } /* line glyphs inherit the tab colour via currentColor */
   .mobile-tab.active { color: var(--gold); }
   /* modern fonts read smaller than the pixel face at the same rem — floor the labels
      (same convention as the readability floors in themes.css) */

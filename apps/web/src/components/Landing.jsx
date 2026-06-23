@@ -17,15 +17,16 @@ const STEPS = [
   ['03', 'TRADE', 'Go long or short on any card or index — with leverage.'],
 ];
 
+// [branded icon (served from public/icons), title, body] — the reference SVGs recolored to our brand.
 const FEATURES = [
-  ['🎴', 'EVERY MARKET LIVE', 'Trade any card from day one. Our liquidity engine seeds every market, so you never wait for someone to take the other side.'],
-  ['📈', 'LONG OR SHORT', 'Win when prices pump or dump. Pick a side on any card, set, or index.'],
-  ['⚡', 'INSTANT EXECUTION', 'Lightning-fast order execution, settled on Solana.'],
-  ['📊', 'REAL-TIME PRICES', 'Live prices and market data on every card, at your fingertips.'],
-  ['💵', 'REAL USDC, ON-CHAIN', 'Deposit and withdraw real USDC on Solana — custodied transparently with on-chain proof-of-reserves.'],
-  ['🚀', 'UP TO 20× LEVERAGE', 'Isolated-margin leverage — amplify your conviction while capping the downside to your margin.'],
-  ['🏆', 'LEADERBOARD', 'Compete with other traders and climb the rankings.'],
-  ['🌍', 'MULTI-UNIVERSE', 'Pokémon now — One Piece, Magic & more collectible universes incoming.'],
+  ['every-market-live.svg', 'EVERY MARKET LIVE', 'Trade any card from day one. Our liquidity engine seeds every market, so you never wait for someone to take the other side.'],
+  ['long-or-short.svg', 'LONG OR SHORT', 'Win when prices pump or dump. Pick a side on any card, set, or index.'],
+  ['instant-execution.svg', 'INSTANT EXECUTION', 'Lightning-fast order execution, settled on Solana.'],
+  ['real-time-prices.svg', 'REAL-TIME PRICES', 'Live prices and market data on every card, at your fingertips.'],
+  ['real-usdc.svg', 'REAL USDC, ON-CHAIN', 'Deposit and withdraw real USDC on Solana — custodied transparently with on-chain proof-of-reserves.'],
+  ['leverage.svg', 'UP TO 20× LEVERAGE', 'Isolated-margin leverage — amplify your conviction while capping the downside to your margin.'],
+  ['leaderboard.svg', 'LEADERBOARD', 'Compete with other traders and climb the rankings.'],
+  ['multi-universe.svg', 'MULTI-UNIVERSE', 'Pokémon now — One Piece, Magic & more collectible universes incoming.'],
 ];
 
 const FAQ = [
@@ -222,7 +223,7 @@ export function Landing() {
         <div className="lp-features">
           {FEATURES.map(([icon, title, body], idx) => (
             <div className="lp-feature" data-reveal style={{ '--i': idx }} key={title}>
-              <div className="lp-feature-icon">{icon}</div>
+              <div className="lp-feature-icon"><img src={`/icons/${icon}`} alt="" loading="lazy" /></div>
               <div>
                 <h3 className="lp-h3">{title}</h3>
                 <p className="lp-body">{body}</p>
