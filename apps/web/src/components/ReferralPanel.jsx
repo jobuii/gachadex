@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
+import { formatUsd } from '@pokex/pricing';
 import { useCopy } from '../lib/useCopy.js';
 import * as api from '../lib/api.js';
 
-export function ReferralPanel({ onRedeemed }) {
+export function ReferralPanel({ onRedeemed, cashbackTotalUusdc }) {
   const [info, setInfo] = useState(null);
   const [code, setCode] = useState(api.getPendingReferral() ?? '');
   const [busy, setBusy] = useState(false);
@@ -101,6 +102,9 @@ export function ReferralPanel({ onRedeemed }) {
 
       <div className="ref-stats">
         <span>Friends referred: <strong>{info.referralsCount}</strong></span>
+        {BigInt(cashbackTotalUusdc || 0) > 0n && (
+          <span>Cashback earned: <strong className="up">{formatUsd(BigInt(cashbackTotalUusdc))}</strong></span>
+        )}
       </div>
 
       <div className="ref-redeem">

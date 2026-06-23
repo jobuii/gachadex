@@ -204,4 +204,12 @@ Hook points confirmed real (`engine.ts:18-36` chargeFee; open `:364`/`:408`, clo
   branded code → `affiliate_terms` upsert) now run in one `db.tx`. Extracted `setReferralCodeTx(q)` (the
   transactional core) so it joins the outer tx; `setReferralCode(db)` keeps its standalone wrapper, and
   `upsertUser` now takes a `Queryer` (Db extends Queryer → existing callers unaffected).
-- **Remaining:** P2 (admin Affiliates tab) · P3 (Portfolio "Cashback" card + ReferralPanel earnings).
+- **P2 + P3 DONE** (2026-06-20, local on `development`): admin **Affiliates** tab (`AffiliatesView` — list +
+  create/edit form + activate/deactivate; % in the UI ↔ bps over the wire); Portfolio **"Cashback"**
+  stat-card (left of Unrealized PnL, fed by `cashbackTotalUusdc`); ReferralPanel **"Cashback earned"** line.
+  Web build green; adversarial-reviewed + `/simplify`'d (fixed: editing an affiliate's rates no longer
+  silently re-activates a deactivated one — `save` omits `active`, the backend preserves it).
+- **Follow-up (low, money-safe):** if the operator later lowers the cashback ceiling (raises
+  `FEE_LP_SHARE_PCT`) below an existing affiliate's rate, the activate/deactivate toggle is rejected until
+  the rate is edited down. Rare (env redeploy), recoverable, and the runtime clamp still caps payout.
+- **Feature COMPLETE** on `development` — pending merge-to-master + deploy (your call).
