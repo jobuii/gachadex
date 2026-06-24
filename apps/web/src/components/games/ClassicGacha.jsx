@@ -43,6 +43,8 @@ export function ClassicGacha({ onTradeMarket }) {
   const [qty, setQty] = useState(1);
   const [summaryResults, setSummaryResults] = useState(null); // multi-open results → GachaSummary
   const [previewSell, setPreviewSell] = useState(false); // dev preview: stub the summary's onSell so the mock can show "Sold ✓"
+  const [previewSellable, setPreviewSellable] = useState(false); // dev preview: force the single-reveal Sell-back button on
+  const [instantCutBps, setInstantCutBps] = useState(1000); // GDEX cut on an instant sell-back (from /health); drives the net shown
   const [tokens, setTokens] = useState(null); // { balance, untilFreePackTokens }
   const [tokensEnabled, setTokensEnabled] = useState(false);
   const { signMessage } = useWallet();
@@ -73,7 +75,7 @@ export function ClassicGacha({ onTradeMarket }) {
   useEffect(() => { loadInventory(); }, []);
   // Loyalty Tokens: the balance/progress, and whether spending Tokens is enabled (earn always accrues).
   const loadTokens = () => { if (!api.hasSession()) return; api.getTokenBalance().then(setTokens).catch(() => {}); };
-  useEffect(() => { loadTokens(); api.getHealth().then((h) => setTokensEnabled(!!h.tokensEnabled)).catch(() => {}); }, []);
+  useEffect(() => { loadTokens(); api.getHealth().then((h) => { setTokensEnabled(!!h.tokensEnabled); if (h.gachaInstantCutBps != null) setInstantCutBps(Number(h.gachaInstantCutBps)); }).catch(() => {}); }, []);
 
   const requestRip = (m) => { setRipErr(null); setConfirmMachine(m); }; // → buy-confirm modal
 
@@ -97,7 +99,7 @@ export function ClassicGacha({ onTradeMarket }) {
     if (!m) return;
     setRipErr(null);
     setRipping(true);
-    setRevealSpentE6(m.priceE6); setRevealResult(null); setSummaryResults(null); setPreviewSell(false); setRevealOpen(true); // charging
+    setRevealSpentE6(m.priceE6); setRevealResult(null); setSummaryResults(null); setPreviewSell(false); setPreviewSellable(false); setRevealOpen(true); // charging
     try {
       if (n === 1) {
         const r = await openOne(m);
@@ -118,7 +120,7 @@ export function ClassicGacha({ onTradeMarket }) {
     }
   };
 
-  const closeReveal = () => { setRevealOpen(false); setRevealResult(null); setSummaryResults(null); setPreviewSell(false); };
+  const closeReveal = () => { setRevealOpen(false); setRevealResult(null); setSummaryResults(null); setPreviewSell(false); setPreviewSellable(false); };
 
   // Dev-only: fire the reveal with a mock pull so the animation/sound can be tuned without a real (paid) open.
   // Borrows a real card image from the current pool when available. Gated by import.meta.env.DEV → never ships.
@@ -130,10 +132,11 @@ export function ClassicGacha({ onTradeMarket }) {
       openId: 'preview', status: 'opened', verifyUrl: null,
       card: { mint: 'preview', name: c?.name ?? 'Charizard VMAX', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? PREVIEW_IMG, valueE6: valueByTier[rarity] ?? '12000000', rarity, marketId: null, year: '2000' },
     });
+    setPreviewSellable(true); // mock: show the Sell-back button (no real held row behind a preview)
     setRevealOpen(true);
   };
   const previewYolo = () => {
-    setRevealSpentE6('50000000'); setSummaryResults(null);
+    setRevealSpentE6('50000000'); setSummaryResults(null); setPreviewSellable(false);
     setRevealResult({ openId: 'preview', status: 'turbo_sold', card: null, verifyUrl: null, turboRefundE6: '27000000' });
     setRevealOpen(true);
   };
@@ -143,7 +146,7 @@ export function ClassicGacha({ onTradeMarket }) {
     const mk = (rarity, value) => ({ openId: `p${n}`, status: 'opened', verifyUrl: null, turboRefundE6: null, card: { mint: `p${n++}`, name: c?.name ?? 'Card', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? PREVIEW_IMG, valueE6: value, rarity, marketId: null, year: '2000' } });
     setRevealSpentE6('50000000');
     setSummaryResults([mk('common', '12000000'), mk('rare', '85000000'), mk('epic', '4475000000'), { openId: 'pt', status: 'turbo_sold', card: null, verifyUrl: null, turboRefundE6: '27000000' }, mk('uncommon', '28000000')]);
-    setPreviewSell(true); // mock: let the summary's Sell buttons resolve so the sell-all / sell-some flow is demoable
+    setPreviewSell(true); setPreviewSellable(false); // mock: let the summary's Sell buttons resolve so the sell-all / sell-some flow is demoable
     setRevealOpen(true);
   };
 
@@ -373,12 +376,13 @@ export function ClassicGacha({ onTradeMarket }) {
       )}
 
       {revealOpen && (summaryResults ? (
-        <GachaSummary results={summaryResults} spentE6={revealSpentE6} onSell={previewSell ? async () => true : sellByMint} onClose={closeReveal} />
+        <GachaSummary results={summaryResults} spentE6={revealSpentE6} instantCutBps={instantCutBps} onSell={previewSell ? async () => true : sellByMint} onClose={closeReveal} />
       ) : (
         <GachaReveal
           result={revealResult}
           spentE6={revealSpentE6}
-          canSell={!!revealItem}
+          instantCutBps={instantCutBps}
+          canSell={!!revealItem || previewSellable}
           canTrade={!!revealCard?.marketId}
           onSellNow={async () => { if (revealItem) await sellBack(revealItem, true); closeReveal(); }}
           onTrade={() => { if (revealCard) trade(revealCard); closeReveal(); }}

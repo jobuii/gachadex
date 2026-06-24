@@ -21,14 +21,16 @@ const RARITY = {
 };
 const tierOf = (r) => RARITY[(r || '').toLowerCase()] ?? RARITY.common;
 
-// Per-tier beat timings (ms): Year → Grade → Type → flip → done (revealed card). Epics linger for max suspense.
+// Per-tier beat timings (ms): Year → Grade → Type → flip → done (revealed card). Each beat lingers ~1.1s so the
+// reveal builds anticipation rare.win-style; rares/epics stretch further for the payoff. Multi-opens skip this
+// (they go straight to the summary) so a slow single reveal never becomes tedious across a 5-pack.
 const BEATS = {
-  base: { year: 350, grade: 1050, tier: 1750, flip: 2450, done: 2950 },
-  rare: { year: 450, grade: 1350, tier: 2250, flip: 3150, done: 3750 },
-  epic: { year: 600, grade: 1750, tier: 3050, flip: 4150, done: 4950 },
+  base: { year: 650, grade: 1800, tier: 3000, flip: 4050, done: 4750 },
+  rare: { year: 800, grade: 2200, tier: 3650, flip: 4900, done: 5800 },
+  epic: { year: 1000, grade: 2800, tier: 4700, flip: 6200, done: 7300 },
 };
 
-export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onTrade, onClose }) {
+export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onTrade, onClose, instantCutBps = 1000 }) {
   const card = result?.card ?? null;
   const tier = card ? tierOf(card.rarity) : null;
   const big = tier?.fx ?? null; // 'rare' | 'epic' | null
@@ -88,6 +90,8 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   const flipped = phase === 'flip' || phase === 'done';
   const done = phase === 'done';
   const valE6 = shownE6 != null ? String(shownE6) : (card?.valueE6 ?? '0');
+  // What the player nets selling this slab straight back to CC now (instant cut, e.g. 10%). Shown on the button.
+  const sellNetE6 = card?.valueE6 ? (BigInt(card.valueE6) * (10_000n - BigInt(instantCutBps))) / 10_000n : 0n;
 
   const close = () => { stopSound(coinLoop.current); onClose(); };
 
@@ -126,8 +130,10 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
             <div className="gacha-card3d-wrap" style={{ '--rarity': tier?.color ?? '#8b5cf6' }}>
               <div className={`gacha-card3d ${flipped ? 'flipped' : ''} ${done ? `done done-${big || 'base'}` : ''}`}>
                 {/* back face — charging + suspense beats */}
-                <div className="gacha-card3d-back">
+                <div className={`gacha-card3d-back ${['year', 'grade', 'tier'].includes(phase) ? 'beat-on' : ''}`}>
                   <div className="gacha-card3d-conic" aria-hidden />
+                  {/* dark vignette behind the beat text → high contrast (deepens while a beat shows) */}
+                  <div className="gacha-card3d-scrim" aria-hidden />
                   <div className="gacha-card3d-logo" aria-hidden>G</div>
                   <div className="gacha-beat">
                     {phase === 'year' && card?.year && (
@@ -137,7 +143,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
                       <div className="gacha-beat-in"><span className="gacha-beat-label">Certified</span><span className="gacha-beat-val">{card.grade}</span></div>
                     )}
                     {phase === 'tier' && tier && (
-                      <div className="gacha-beat-in"><span className="gacha-beat-label">Tier</span><span className="gacha-beat-val" style={{ color: tier.color }}>{tier.label}</span></div>
+                      <div className="gacha-beat-in"><span className="gacha-beat-label">Tier</span><span className="gacha-beat-val gacha-beat-tier">{tier.label}</span></div>
                     )}
                   </div>
                 </div>
@@ -152,12 +158,14 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
 
             {done && (
               <div className="gacha-reveal-info">
-                <div className="gacha-reveal-name">{card?.name ?? 'a card'}{card?.grade ? ` · ${card.grade}` : ''}</div>
-                <div className="gacha-reveal-val" style={{ color: tier.color }}>{usd(valE6)}</div>
-                <div className="gacha-reveal-tier" style={{ color: tier.color }}>{tier.label}</div>
+                <div className="gacha-reveal-infobox" style={{ '--rarity': tier.color }}>
+                  <div className="gacha-reveal-name">{card?.name ?? 'a card'}{card?.grade ? ` · ${card.grade}` : ''}</div>
+                  <div className="gacha-reveal-val" style={{ color: tier.color }}>{usd(valE6)}</div>
+                  <span className="gacha-reveal-tier-chip">{tier.label}</span>
+                </div>
                 <p className="gacha-reveal-spent muted">Spent {usd(spentE6)} · this slab is worth ~{usd(card?.valueE6)}</p>
                 <div className="gacha-reveal-actions">
-                  {canSell && <button className="btn-primary" onClick={onSellNow}>Sell now (−10%)</button>}
+                  {canSell && <button className="btn-primary" onClick={onSellNow}>Sell back {usd(sellNetE6)}</button>}
                   {canTrade && <button className="btn-ghost" onClick={onTrade}>Trade</button>}
                   <button className="btn-ghost" onClick={close}>Keep</button>
                 </div>
