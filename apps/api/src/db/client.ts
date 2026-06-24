@@ -31,8 +31,43 @@ let _db: Db | null = null;
 
 async function createPglite(): Promise<Db> {
   const { PGlite } = await import('@electric-sql/pglite');
-  const pg = new PGlite(config.pgliteDir);
-  await pg.waitReady;
+  const fs = await import('node:fs');
+  const dir = config.pgliteDir;
+  const onDisk = !!dir && !dir.startsWith('memory');
+
+  // A file-backed PGlite left un-checkpointed by an UNCLEAN stop (a hard kill, or a WSL distro halt that
+  // skips graceful shutdown) keeps a stale postmaster.pid / socket lock behind, and the WASM Postgres then
+  // aborts on the next boot ("Aborted in pg_initdb"). PGlite runs single-process, so any such lock is dead —
+  // clear it so the cluster can run its normal crash recovery and KEEP the data.
+  if (onDisk) {
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        if (f === 'postmaster.pid' || f.startsWith('.s.PGSQL')) fs.rmSync(`${dir}/${f}`, { force: true });
+      }
+    } catch {
+      /* dir doesn't exist yet — a fresh start, nothing to clear */
+    }
+  }
+
+  let pg = new PGlite(dir);
+  try {
+    await pg.waitReady;
+    await pg.query('SELECT 1'); // prove the cluster actually opens + answers
+  } catch (e) {
+    if (!onDisk) throw e;
+    // truly torn (clearing the stale lock wasn't enough) — quarantine it + start fresh so dev is never
+    // blocked. It's a re-seedable sandbox; the bad dir is kept for forensics.
+    const quarantine = `${dir}.corrupt-${Date.now()}`;
+    try {
+      fs.renameSync(dir, quarantine);
+    } catch {
+      /* best effort */
+    }
+    // eslint-disable-next-line no-console
+    console.warn(`[db] PGlite at ${dir} could not open (unclean shutdown) — quarantined to ${quarantine}; starting fresh. Re-seed: pnpm --filter @pokex/api exec tsx scripts/seed-dev.ts`);
+    pg = new PGlite(dir);
+    await pg.waitReady;
+  }
   return {
     driver: 'pglite',
     query: (text, params) => pg.query(text, params as any[]) as any,

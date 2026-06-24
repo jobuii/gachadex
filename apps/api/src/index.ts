@@ -25,6 +25,7 @@ import { GAMES } from '@pokex/shared-types';
 import { randomUUID } from 'node:crypto';
 import { solanaDepositChain, solanaWithdrawChain, solanaTreasuryChain } from './services/custody/solana.ts';
 import type { Db } from './db/client.ts';
+import { closeDb } from './db/client.ts';
 import type { FastifyBaseLogger } from 'fastify';
 import { config } from './config.ts';
 
@@ -280,7 +281,12 @@ async function main() {
 
   const shutdown = async (signal: string) => {
     app.log.info(`received ${signal}, shutting down`);
-    await app.close();
+    try {
+      await app.close();
+      await closeDb(); // flush PGlite — a file-backed cluster left un-checkpointed corrupts on the next boot
+    } catch (e) {
+      app.log.error(e, 'shutdown error');
+    }
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));
