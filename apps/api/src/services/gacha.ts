@@ -5,6 +5,7 @@ import { HttpError } from '../errors.ts';
 import { usdc } from '../money.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './ledger.ts';
 import { getNftCustodyKeypair } from './custody/wallet.ts';
+import { createNftWithdrawNonce, verifyNftWithdrawStepUp } from './auth.ts';
 import type { GachaChain } from './custody/gacha-chain.ts';
 import { defaultCcClient, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
 
@@ -320,4 +321,48 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
     await q.query(`UPDATE gacha_nft_inventory SET status='sold', sell_value_e6=$2, sell_cut_e6=$3, txn_id=$4, settled_at=now() WHERE id=$1`, [prizeId, payout.toString(), cut.toString(), txnId]);
     return { prizeId, payoutE6: payout.toString(), cutE6: cut.toString() };
   });
+}
+
+// ─────────────────────────────── withdraw the real NFT (P2) ───────────────────────────────
+/** Issue the step-up nonce/message the user signs to authorize sending a held NFT to `dest`. */
+export async function nftWithdrawNonce(db: Db, userId: string, pubkey: string, prizeId: string, dest: string): Promise<{ nonce: string; message: string }> {
+  if (!config.classicGachaEnabled) throw GACHA_OFF();
+  const inv = (await db.query<{ mint: string; status: string }>(`SELECT mint, status FROM gacha_nft_inventory WHERE id = $1 AND user_id = $2`, [prizeId, userId])).rows[0];
+  if (!inv) throw new HttpError(404, 'prize not found');
+  if (inv.status !== 'held') throw new HttpError(409, 'prize not withdrawable');
+  return createNftWithdrawNonce(db, pubkey, { mint: inv.mint, dest });
+}
+
+/** Withdraw a held NFT to the user's external `dest`, gated by a fresh step-up signature over (mint, dest). */
+export async function requestNftWithdraw(
+  db: Db, userId: string, pubkey: string, prizeId: string,
+  p: { dest: string; message: string; signature: string }, deps: GachaDeps,
+): Promise<{ status: string; sig?: string }> {
+  if (!config.classicGachaEnabled) throw GACHA_OFF();
+  const { chain } = deps;
+  // Claim held → withdrawing AND verify the step-up in one tx (a rollback un-claims the nonce, like the USDC
+  // withdrawal). A stolen access token alone can't move the asset — the dest is bound by a fresh wallet sig.
+  const claimed = await db.tx(async (q) => {
+    const row = (await q.query<{ mint: string; status: string }>(`SELECT mint, status FROM gacha_nft_inventory WHERE id = $1 AND user_id = $2 FOR UPDATE`, [prizeId, userId])).rows[0];
+    if (!row) throw new HttpError(404, 'prize not found');
+    if (row.status !== 'held') throw new HttpError(409, 'prize not withdrawable');
+    await verifyNftWithdrawStepUp(q, { pubkey, mint: row.mint, dest: p.dest, message: p.message, signature: p.signature });
+    await q.query(`UPDATE gacha_nft_inventory SET status = 'withdrawing', withdraw_dest = $2 WHERE id = $1`, [prizeId, p.dest]);
+    return { mint: row.mint };
+  });
+
+  let sig: string;
+  try {
+    const custody = await getNftCustodyKeypair(db, userId);
+    ({ sig } = await chain.transferNft(claimed.mint, p.dest, custody));
+  } catch (e) {
+    // Release the claim (withdrawing → held) so the user can re-authorize. If the revert ITSELF fails, surface
+    // it (don't swallow) — the row is then stuck 'withdrawing' with the NFT still in custody, an operator fix.
+    await db
+      .query(`UPDATE gacha_nft_inventory SET status = 'held', withdraw_dest = NULL WHERE id = $1 AND status = 'withdrawing'`, [prizeId])
+      .catch((revertErr) => console.error('[gacha] NFT-withdraw revert failed — prize stuck "withdrawing", NFT still in custody:', prizeId, revertErr));
+    throw e;
+  }
+  await db.query(`UPDATE gacha_nft_inventory SET status = 'withdrawn', withdraw_sig = $2, settled_at = now() WHERE id = $1 AND status = 'withdrawing'`, [prizeId, sig]);
+  return { status: 'withdrawn', sig };
 }

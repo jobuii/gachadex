@@ -16,6 +16,7 @@ import type { GachaChain } from '../services/custody/gacha-chain.ts';
 const MACHINE_CODE_RE = /^[a-z0-9_-]{1,64}$/i; // CC codes look like "pokemon_50" — a cheap guard before we proxy to CC
 const RARITIES = new Set(['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic']);
 const TRADE = { preHandler: authenticate, config: { scope: 'trade' as const } };
+const FULL = { preHandler: authenticate, config: { scope: 'full' as const } }; // withdrawing a real NFT is high-risk → full scope + step-up
 
 // The Solana chain + the gacha service are lazy-loaded so @solana/web3.js never loads on the read-only /
 // play-money boot path (mirrors how server.ts lazy-loads the custody chain).
@@ -101,5 +102,23 @@ export async function gachaRoutes(app: FastifyInstance): Promise<void> {
     realGate();
     const { sellBack } = await gachaSvc();
     return sellBack(await getDb(), req.userId!, (req.params as { id: string }).id, { chain: await realChain(), cc: defaultCcClient });
+  });
+
+  // Withdraw a held NFT to the user's own wallet (P2). Step 1: the step-up nonce/message over (mint, dest).
+  app.post('/gacha/prizes/:id/withdraw/nonce', rl(config.routeRateLimits.withdrawNonce, FULL), async (req) => {
+    realGate();
+    const { dest } = (req.body ?? {}) as { dest?: string };
+    if (!dest) throw new HttpError(400, 'dest required');
+    const { nftWithdrawNonce } = await gachaSvc();
+    return nftWithdrawNonce(await getDb(), req.userId!, req.pubkey!, (req.params as { id: string }).id, dest);
+  });
+
+  // Step 2: submit the signed step-up → transfer the NFT out to the destination.
+  app.post('/gacha/prizes/:id/withdraw', rl(config.routeRateLimits.withdraw, FULL), async (req) => {
+    realGate();
+    const b = (req.body ?? {}) as { dest?: string; message?: string; signature?: string };
+    if (!b.dest || !b.message || !b.signature) throw new HttpError(400, 'dest, message, signature required');
+    const { requestNftWithdraw } = await gachaSvc();
+    return requestNftWithdraw(await getDb(), req.userId!, req.pubkey!, (req.params as { id: string }).id, { dest: b.dest, message: b.message, signature: b.signature }, { chain: await realChain(), cc: defaultCcClient });
   });
 }

@@ -80,6 +80,26 @@ export function buildDelegationMessage(
   ].join('\n');
 }
 
+/**
+ * NFT-withdrawal step-up (Classic Gacha P2). Sending a won graded-card NFT off-platform needs a FRESH
+ * wallet signature over the exact mint + destination — same posture as a USDC withdrawal (a stolen token
+ * alone can't move the asset). Deterministic from (pubkey, mint, dest, nonce), re-rendered at verify time.
+ */
+export function buildNftWithdrawMessage(pubkey: string, p: { mint: string; dest: string; nonce: string }): string {
+  return [
+    'GachaDex NFT withdrawal authorization:',
+    pubkey,
+    '',
+    'Authorize sending this card (NFT) to:',
+    p.dest,
+    `Mint: ${p.mint}`,
+    '',
+    'Statement: This signature authorizes ONLY the single NFT transfer above (exact mint and destination).',
+    `Domain: ${config.authDomain}`,
+    `Nonce: ${p.nonce}`,
+  ].join('\n');
+}
+
 export function isValidPubkey(pubkey: string): boolean {
   try {
     // eslint-disable-next-line no-new
@@ -99,7 +119,7 @@ export interface LoginResult {
 
 /** Issue a single-use, 5-minute challenge nonce bound to a pubkey + purpose (login | withdraw |
  *  delegate). The purpose tag keeps a nonce minted for one flow from being claimed by another. */
-async function insertNonce(db: Db, pubkey: string, purpose: 'login' | 'withdraw' | 'delegate' = 'login'): Promise<string> {
+async function insertNonce(db: Db, pubkey: string, purpose: 'login' | 'withdraw' | 'delegate' | 'nft-withdraw' = 'login'): Promise<string> {
   if (!isValidPubkey(pubkey)) throw new HttpError(400, 'invalid pubkey');
   const nonce = bs58.encode(randomBytes(24));
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
@@ -127,6 +147,16 @@ export async function createWithdrawalNonce(
   return { nonce, message: buildWithdrawalMessage(pubkey, { ...p, nonce }) };
 }
 
+export async function createNftWithdrawNonce(
+  db: Db,
+  pubkey: string,
+  p: { mint: string; dest: string },
+): Promise<{ nonce: string; message: string }> {
+  if (!isValidPubkey(p.dest)) throw new HttpError(400, 'invalid destination address');
+  const nonce = await insertNonce(db, pubkey, 'nft-withdraw');
+  return { nonce, message: buildNftWithdrawMessage(pubkey, { ...p, nonce }) };
+}
+
 /**
  * Verify a wallet signature over a server-rendered, single-use nonce message, then atomically claim
  * the nonce (replay/race defense). `render(nonce)` rebuilds the exact message the server expects, so
@@ -140,7 +170,7 @@ async function verifyNonceSignature(
   message: string,
   signature: string,
   render: (nonce: string) => string,
-  purpose: 'login' | 'withdraw' | 'delegate' = 'login',
+  purpose: 'login' | 'withdraw' | 'delegate' | 'nft-withdraw' = 'login',
 ): Promise<void> {
   if (!isValidPubkey(pubkey)) throw new HttpError(400, 'invalid pubkey');
   const nonce = message.match(/^Nonce: (.+)$/m)?.[1];
@@ -188,6 +218,21 @@ export async function verifyWithdrawalStepUp(
     p.signature,
     (nonce) => buildWithdrawalMessage(p.pubkey, { amountE6: p.amountE6, dest: p.dest, nonce }),
     'withdraw',
+  );
+}
+
+/** NFT-withdrawal step-up: a fresh wallet signature over the exact (mint, dest) — token theft can't withdraw. */
+export async function verifyNftWithdrawStepUp(
+  db: Queryer,
+  p: { pubkey: string; mint: string; dest: string; message: string; signature: string },
+): Promise<void> {
+  await verifyNonceSignature(
+    db,
+    p.pubkey,
+    p.message,
+    p.signature,
+    (nonce) => buildNftWithdrawMessage(p.pubkey, { mint: p.mint, dest: p.dest, nonce }),
+    'nft-withdraw',
   );
 }
 

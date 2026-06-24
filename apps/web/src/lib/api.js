@@ -216,6 +216,9 @@ export const getGachaOpen = (id) => req(`/gacha/opens/${id}`, { auth: true });
 export const gachaReconcile = () => req('/gacha/reconcile', { method: 'POST', auth: true });
 export const getGachaInventory = () => req('/gacha/inventory', { auth: true }); // { inventory: [{ id, mint, name, grade, imageUrl, valueE6, status }] }
 export const sellGachaPrize = (id) => req(`/gacha/prizes/${id}/sell-back`, { method: 'POST', auth: true }); // GDEX keeps 5%
+// Withdraw the real NFT to an external wallet (P2; full scope + step-up). Step 1: nonce/message over (mint, dest).
+export const gachaWithdrawNonce = (prizeId, dest) => req(`/gacha/prizes/${prizeId}/withdraw/nonce`, { method: 'POST', auth: true, body: { dest } });
+export const gachaWithdraw = (prizeId, body) => req(`/gacha/prizes/${prizeId}/withdraw`, { method: 'POST', auth: true, body }); // { dest, message, signature }
 
 // --- LP ---
 export const getPool = () => req('/lp/pool');

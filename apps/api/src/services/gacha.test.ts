@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { Keypair } from '@solana/web3.js';
 
 // In-memory PGlite + Classic Gacha ON + a deposit seed (for the per-user NFT-custody keypair). Set before
 // importing config/client. The on-chain GachaChain + the CC API are FAKES (inline below), so these tests
@@ -14,8 +15,8 @@ process.env.DEPOSIT_MASTER_SEED = 'a'.repeat(64); // 32 bytes hex — pure-crypt
 const { getDb } = await import('../db/client.ts');
 const { migrate } = await import('../db/migrate.ts');
 const { usdc } = await import('../money.ts');
-const { fund } = await import('../test-helpers.ts');
-const { openPack, sellBack, reconcilePending } = await import('./gacha.ts');
+const { fund, sign } = await import('../test-helpers.ts');
+const { openPack, sellBack, reconcilePending, nftWithdrawNonce, requestNftWithdraw } = await import('./gacha.ts');
 
 const db = await getDb();
 await migrate();
@@ -33,6 +34,8 @@ function fakeChain() {
     },
     signTx(_b64: string, _kp: unknown) { c.signs++; return `signed-${c.signs}`; },
     hotPubkey() { return 'Hot1111111111111111111111111111111111111111'; },
+    transfers: [] as { mint: string; dest: string }[],
+    async transferNft(mint: string, dest: string, _signer: unknown) { c.transfers.push({ mint, dest }); return { sig: `nft-xfer-${c.transfers.length}` }; },
   };
   return c;
 }
@@ -171,4 +174,43 @@ test('sell-back: 95% to the user, 5% to FEE_REVENUE, prize sold once', async () 
   assert.equal(await feeRev(), feeBefore + 2_000_000n);
   // double-sell rejected
   await assert.rejects(sellBack(db, user, prize, { chain, cc, ...noWait }), /already settled/i);
+});
+
+// A user with a REAL keypair, so the withdraw step-up signature verifies.
+async function newSignerUser(faucetUsd = 10_000): Promise<{ userId: string; kp: InstanceType<typeof Keypair>; pubkey: string }> {
+  const kp = Keypair.generate();
+  const pubkey = kp.publicKey.toBase58();
+  const userId = randomUUID();
+  await db.query(`INSERT INTO users(id, solana_pubkey) VALUES($1, $2)`, [userId, pubkey]);
+  await fund(db, userId, usdc(faucetUsd));
+  return { userId, kp, pubkey };
+}
+
+test('withdraw: step-up authorizes the transfer; held → withdrawn; double-withdraw rejected', async () => {
+  const { userId, kp, pubkey } = await newSignerUser();
+  const chain = fakeChain();
+  await openPack(db, userId, { machineCode: 'pokemon_50', idempotencyKey: 'w' }, { chain, cc: fakeCc(), ...noWait });
+  const prize = (await db.query<{ id: string; mint: string }>(`SELECT id, mint FROM gacha_nft_inventory WHERE user_id = $1`, [userId])).rows[0];
+  const dest = Keypair.generate().publicKey.toBase58();
+
+  const { message } = await nftWithdrawNonce(db, userId, pubkey, prize.id, dest);
+  const r = await requestNftWithdraw(db, userId, pubkey, prize.id, { dest, message, signature: sign(message, kp) }, { chain });
+  assert.equal(r.status, 'withdrawn');
+  assert.deepEqual(chain.transfers[0], { mint: prize.mint, dest }); // transferred the right NFT to the right dest
+  assert.equal((await db.query<{ status: string }>(`SELECT status FROM gacha_nft_inventory WHERE id = $1`, [prize.id])).rows[0].status, 'withdrawn');
+  // a withdrawn prize is no longer withdrawable
+  await assert.rejects(nftWithdrawNonce(db, userId, pubkey, prize.id, dest), /not withdrawable/i);
+});
+
+test('withdraw: a bad step-up signature is rejected and the prize stays held', async () => {
+  const { userId, pubkey } = await newSignerUser();
+  const chain = fakeChain();
+  await openPack(db, userId, { machineCode: 'pokemon_50', idempotencyKey: 'w' }, { chain, cc: fakeCc(), ...noWait });
+  const prize = (await db.query<{ id: string }>(`SELECT id FROM gacha_nft_inventory WHERE user_id = $1`, [userId])).rows[0];
+  const dest = Keypair.generate().publicKey.toBase58();
+  const { message } = await nftWithdrawNonce(db, userId, pubkey, prize.id, dest);
+  const wrong = sign(message, Keypair.generate()); // signed by someone else
+  await assert.rejects(requestNftWithdraw(db, userId, pubkey, prize.id, { dest, message, signature: wrong }, { chain }), /signature|nonce|invalid/i);
+  assert.equal((await db.query<{ status: string }>(`SELECT status FROM gacha_nft_inventory WHERE id = $1`, [prize.id])).rows[0].status, 'held');
+  assert.equal(chain.transfers.length, 0); // no transfer attempted
 });

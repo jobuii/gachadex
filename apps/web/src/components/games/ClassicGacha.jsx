@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { formatUsd } from '@pokex/pricing';
+import { useWallet } from '@solana/wallet-adapter-react';
 import * as api from '../../lib/api.js';
+import { signAndSubmitNftWithdrawal } from '../../lib/withdraw.js';
 
 // Classic Gacha lobby (docs/classic-gacha-cc-packs-spec.md, P0 — read-only). Browses the live Collector
 // Crypt machines: a game-filter, a machine strip, the selected machine's detail (price + tier legend +
@@ -24,6 +26,7 @@ export function ClassicGacha() {
   const [reveal, setReveal] = useState(null); // the won card shown in the reveal modal
   const [ripErr, setRipErr] = useState(null);
   const [inventory, setInventory] = useState([]);
+  const { signMessage } = useWallet();
 
   useEffect(() => {
     let alive = true;
@@ -80,6 +83,21 @@ export function ClassicGacha() {
       loadInventory();
     } catch (e) {
       setRipErr(e.message);
+    }
+  };
+
+  // Withdraw the real graded-card NFT to the user's own wallet: a fresh wallet signature over (mint, dest).
+  const withdraw = async (item) => {
+    setRipErr(null);
+    if (!signMessage) { setRipErr('Connect a wallet that can sign messages to withdraw.'); return; }
+    const dest = window.prompt('Withdraw this card NFT to which Solana wallet address?');
+    if (!dest) return;
+    try {
+      await signAndSubmitNftWithdrawal({ prizeId: item.id, dest: dest.trim(), signMessage });
+      setReveal(null);
+      loadInventory();
+    } catch (e) {
+      setRipErr(e?.status === 401 ? 'Sign in to withdraw.' : e.message);
     }
   };
 
@@ -186,7 +204,14 @@ export function ClassicGacha() {
                 {it.imageUrl && <img src={it.imageUrl} alt={it.name ?? ''} loading="lazy" onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />}
                 <span className="gacha-card-name" title={it.name ?? ''}>{it.name ?? 'card'}{it.grade ? ` · ${it.grade}` : ''}</span>
                 <span className="gacha-card-val">{usd(it.valueE6)}</span>
-                <button className="btn-ghost sm" onClick={() => sellBack(it)}>Sell back</button>
+                {it.status === 'held' ? (
+                  <>
+                    <button className="btn-ghost sm" onClick={() => sellBack(it)}>Sell back</button>
+                    <button className="btn-ghost sm" onClick={() => withdraw(it)}>Withdraw</button>
+                  </>
+                ) : (
+                  <span className="muted" style={{ fontSize: '0.72rem' }}>Withdrawal in progress…</span>
+                )}
               </div>
             ))}
           </div>

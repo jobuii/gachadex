@@ -26,6 +26,11 @@ export interface GachaChain {
   /** The hot wallet's pubkey — passed as CC `altRecipient` so a buyback's USDC lands straight in the hot
    *  wallet (never in a scanned/credited address). */
   hotPubkey(): string;
+  /** Transfer a won NFT out of the user's custody wallet to their external `dest` (P2 withdraw). The hot
+   *  wallet is the fee-payer (gas relay); `signer` (the custody keypair) is the NFT owner. Awaits confirmation.
+   *  NOTE: standard SPL transfer — programmable-NFT (pNFT) slabs need the Token Metadata transfer
+   *  (@metaplex-foundation/mpl-token-metadata, not yet wired); a pNFT will reject this (spec §15.2). */
+  transferNft(mint: string, dest: string, signer: Keypair): Promise<{ sig: string }>;
 }
 
 // SOL top-up sent alongside the pack-price USDC so the custody wallet can cover the CC payment tx fee + its
@@ -72,6 +77,25 @@ export function solanaGachaChain(): GachaChain {
         t.partialSign(signer);
         return t.serialize({ requireAllSignatures: false }).toString('base64');
       }
+    },
+
+    async transferNft(mint, dest, signer) {
+      const hot = hotWallet();
+      const mintPk = new PublicKey(mint);
+      const destOwner = new PublicKey(dest);
+      const fromAta = getAssociatedTokenAddressSync(mintPk, signer.publicKey);
+      const toAta = getAssociatedTokenAddressSync(mintPk, destOwner, true); // allow a program-owned dest (vault/multisig)
+      const tx = new Transaction().add(
+        createAssociatedTokenAccountIdempotentInstruction(hot.publicKey, toAta, destOwner, mintPk),
+        createTransferInstruction(fromAta, toAta, signer.publicKey, 1n),
+      );
+      tx.feePayer = hot.publicKey; // gas relay — the custody wallet need not hold SOL
+      const bh = await conn.getLatestBlockhash('finalized');
+      tx.recentBlockhash = bh.blockhash;
+      tx.sign(hot, signer); // hot = fee payer; signer = NFT owner
+      const sig = await conn.sendRawTransaction(tx.serialize());
+      await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'finalized');
+      return { sig };
     },
   };
 }

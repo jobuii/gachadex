@@ -17,3 +17,11 @@ export async function signAndSubmitWithdrawal({ amountE6, dest, signMessage }) {
     signature: bs58.encode(sig),
   });
 }
+
+/** Same ceremony for withdrawing a won Classic Gacha NFT (Collector Crypt) to an external wallet:
+ *  fetch the server-rendered message binding (mint, dest, nonce), sign it, submit. */
+export async function signAndSubmitNftWithdrawal({ prizeId, dest, signMessage }) {
+  const { message } = await api.gachaWithdrawNonce(prizeId, dest);
+  const sig = await signMessage(new TextEncoder().encode(message));
+  return api.gachaWithdraw(prizeId, { dest, message, signature: bs58.encode(sig) });
+}
