@@ -7,7 +7,7 @@ import { GachaReveal } from './GachaReveal.jsx';
 
 // Classic Gacha (docs/classic-gacha-cc-packs-spec.md, P0–P4). Browses the live Collector Crypt machines (a
 // game-filter, a machine strip, the selected machine's detail = price + tier legend + buyback %, the real
-// graded cards in its pool, a recent-winners ticker), rips a pack (pay USDC or loyalty Tokens) and reveals
+// top cards in its pool by value), rips a pack (pay USDC or loyalty Tokens) and reveals
 // the won card, and manages pulls in inventory: sell back, trade the matched GDEX market, or withdraw the NFT.
 
 const usd = (e6) => formatUsd(BigInt(e6 || 0)); // `|| 0` guards '', null, undefined (e6 is always an integer string)
@@ -17,6 +17,7 @@ const TIER_COLOR = { common: '#ef4444', uncommon: '#22c55e', rare: '#a855f7', ep
 const tierColor = (label, i) => TIER_COLOR[(label ?? '').toLowerCase()] ?? ['#ef4444', '#22c55e', '#a855f7', '#f59e0b'][i] ?? '#ef4444';
 const GAMES = [['all', 'All'], ['pokemon', 'Pokémon'], ['onepiece', 'One Piece'], ['mtg', 'MTG']];
 const ALLOWED_GAMES = new Set(['pokemon', 'onepiece', 'mtg']);
+const HIDDEN_MACHINES = new Set(['pokemon_2500', 'pokemon_5000', 'pokemon_151']); // hidden per operator
 const titleCase = (s) => (s ?? '').replace(/\b\w/g, (c) => c.toUpperCase());
 const hideBrokenImg = (e) => { e.currentTarget.style.visibility = 'hidden'; }; // CC image 404 → hide, keep the card
 
@@ -25,7 +26,6 @@ export function ClassicGacha({ onTradeMarket }) {
   const [game, setGame] = useState('all');
   const [selected, setSelected] = useState(null); // selected machine code
   const [cards, setCards] = useState(null); // null = loading
-  const [winners, setWinners] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
   const [ripping, setRipping] = useState(false);
@@ -42,13 +42,12 @@ export function ClassicGacha({ onTradeMarket }) {
 
   useEffect(() => {
     let alive = true;
-    Promise.all([api.getCcMachines(), api.getCcWinners(30).catch(() => ({ winners: [] }))])
-      .then(([m, w]) => {
+    api.getCcMachines()
+      .then((m) => {
         if (!alive) return;
         const list = m.machines ?? [];
         setMachines(list);
-        setWinners(w.winners ?? []);
-        setSelected((cur) => cur ?? list[0]?.code ?? null);
+        setSelected((cur) => cur ?? list.find((x) => ALLOWED_GAMES.has(x.game) && !HIDDEN_MACHINES.has(x.code))?.code ?? null);
         setLoading(false);
       })
       .catch((e) => { if (alive) { setErr(e.message); setLoading(false); } });
@@ -65,11 +64,6 @@ export function ClassicGacha({ onTradeMarket }) {
 
   const loadInventory = () => { if (!api.hasSession()) return; api.getGachaInventory().then((r) => setInventory(r.inventory ?? [])).catch(() => {}); };
   useEffect(() => { loadInventory(); }, []);
-  // Keep the winners ticker fresh — CC's feed moves as other players rip.
-  useEffect(() => {
-    const t = setInterval(() => api.getCcWinners(30).then((w) => setWinners(w.winners ?? [])).catch(() => {}), 20000);
-    return () => clearInterval(t);
-  }, []);
   // Loyalty Tokens: the balance/progress, and whether spending Tokens is enabled (earn always accrues).
   const loadTokens = () => { if (!api.hasSession()) return; api.getTokenBalance().then(setTokens).catch(() => {}); };
   useEffect(() => { loadTokens(); api.getHealth().then((h) => setTokensEnabled(!!h.tokensEnabled)).catch(() => {}); }, []);
@@ -149,9 +143,10 @@ export function ClassicGacha({ onTradeMarket }) {
   if (err) return <div className="order-error">Couldn’t load packs: {err}</div>;
   if (machines.length === 0) return <div className="empty-state">No packs available right now.</div>;
 
-  const base = machines.filter((m) => ALLOWED_GAMES.has(m.game)); // only Pokémon / One Piece / MTG
+  const base = machines.filter((m) => ALLOWED_GAMES.has(m.game) && !HIDDEN_MACHINES.has(m.code)); // Pokémon / One Piece / MTG, minus hidden
   const shown = game === 'all' ? base : base.filter((m) => m.game === game);
   const machine = machines.find((m) => m.code === selected) ?? shown[0] ?? base[0] ?? machines[0];
+  const topCards = cards ? [...cards].sort((a, b) => Number(b.valueE6) - Number(a.valueE6)).slice(0, 25) : null; // top 25 by value
   const revealCard = revealResult?.card ?? null;
   const revealItem = revealCard ? inventory.find((i) => i.mint === revealCard.mint) : null; // held row backing the reveal
 
@@ -210,11 +205,11 @@ export function ClassicGacha({ onTradeMarket }) {
               <img className="gacha-machine-media" src={machine.image} alt={machine.name} referrerPolicy="no-referrer" />
             ) : <span className="gacha-machine-ph" aria-hidden="true">📦</span>}
           </div>
-          <h3>{machine.name}</h3>
-          <div className="gacha-machine-stats">
-            <div><span className="gacha-stat-label">Price</span><span className="gacha-stat-val">{usd(machine.priceE6)}</span></div>
-            {Number(machine.evE6) > 0 && <div><span className="gacha-stat-label">Expected</span><span className="gacha-stat-val up">{usd(machine.evE6)}</span></div>}
-            <div><span className="gacha-stat-label">Buyback</span><span className="gacha-stat-val up">{machine.buybackPct}%</span></div>
+          <div className="gacha-machine-head">
+            <div className="gacha-machine-title"><span className="gacha-eyebrow">Pack</span><h3>{machine.name}</h3></div>
+            {Number(machine.evE6) > 0 && (
+              <div className="gacha-machine-ev"><span className="gacha-eyebrow">Expected</span><strong className="up">{usd(machine.evE6)}</strong></div>
+            )}
           </div>
           {tokensEnabled && (
             <div className="gacha-paywith" role="group" aria-label="Pay with">
@@ -226,9 +221,13 @@ export function ClassicGacha({ onTradeMarket }) {
             {ripping ? 'Opening…' : payWith === 'tokens' ? `Open — ${tokenPrice(machine.priceE6)} 🪙` : `Open — ${usd(machine.priceE6)}`}
           </button>
           {ripErr && <div className="order-error" style={{ marginTop: '0.5rem' }}>{ripErr}</div>}
+          <div className="gacha-machine-grid">
+            <div><span className="gacha-eyebrow">Contains</span><strong>1 Card</strong></div>
+            <div><span className="gacha-eyebrow">Buyback</span><strong className="up">{machine.buybackPct}%</strong></div>
+          </div>
           {machine.tiers?.length > 0 && (
             <div className="gacha-odds">
-              <p className="gacha-odds-title">Odds</p>
+              <p className="gacha-odds-title">Statistics</p>
               {machine.tiers.map((t) => (
                 <div key={t.label} className="gacha-odds-row">
                   <span className="gacha-dot" style={{ background: tierColor(t.label) }} aria-hidden="true" />
@@ -239,18 +238,17 @@ export function ClassicGacha({ onTradeMarket }) {
               ))}
             </div>
           )}
-          <p className="gacha-meta-line">1 card per pack · guaranteed authentic</p>
         </aside>
 
         <section className="gacha-cards">
-          <h4>In this pack{cards ? ` (${cards.length})` : ''}</h4>
+          <h4>Top cards{topCards ? ` (${topCards.length})` : ''}</h4>
           {cards == null ? (
             <div className="empty-state">Loading cards…</div>
-          ) : cards.length === 0 ? (
+          ) : topCards.length === 0 ? (
             <div className="empty-state">No cards listed for this pack right now.</div>
           ) : (
             <div className="gacha-card-grid">
-              {cards.map((c) => (
+              {topCards.map((c) => (
                 <div key={c.mint} className="gacha-card">
                   <img src={c.imageUrl} alt={c.name} loading="lazy" referrerPolicy="no-referrer" onError={hideBrokenImg} />
                   <span className="gacha-card-name" title={c.name}>{c.name}</span>
@@ -264,21 +262,6 @@ export function ClassicGacha({ onTradeMarket }) {
           )}
         </section>
       </div>
-
-      {winners.length > 0 && (
-        <section className="gacha-winners">
-          <h4>Recent pulls</h4>
-          <ul>
-            {winners.map((w, i) => (
-              <li key={`${w.mint}-${i}`}>
-                <span className="gacha-win-who">{w.winner}</span>
-                <span className="gacha-win-name">{w.name ?? 'a card'}</span>
-                <span className="gacha-win-val up">{usd(w.valueE6)}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
 
       {inventory.length > 0 && (
         <section className="gacha-inventory">
