@@ -100,8 +100,9 @@ export async function gachaRoutes(app: FastifyInstance): Promise<void> {
   // Sell a held NFT back to CC for USDC (GDEX keeps 5%).
   app.post('/gacha/prizes/:id/sell-back', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
     realGate();
+    const instant = Boolean(((req.body ?? {}) as { instant?: boolean }).instant); // sell-on-reveal → 10% cut
     const { sellBack } = await gachaSvc();
-    return sellBack(await getDb(), req.userId!, (req.params as { id: string }).id, { chain: await realChain(), cc: defaultCcClient });
+    return sellBack(await getDb(), req.userId!, (req.params as { id: string }).id, { chain: await realChain(), cc: defaultCcClient }, { instant });
   });
 
   // Withdraw a held NFT to the user's own wallet (P2). Step 1: the step-up nonce/message over (mint, dest).

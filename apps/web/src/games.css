@@ -139,7 +139,9 @@
 .gacha-modal-img { max-height: 280px; max-width: 100%; object-fit: contain; }
 .gacha-modal-name { margin-top: 0.6rem; font-size: 0.9rem; }
 .gacha-modal-val { font-size: 1.6rem; font-weight: 800; color: var(--cg, #f59e0b); margin: 0.2rem 0 0.9rem; }
-.gacha-modal-actions { display: flex; gap: 0.5rem; justify-content: center; }
+.gacha-modal-actions { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
+.gacha-verify { display: inline-block; margin-top: 0.7rem; font-size: 0.76rem; color: var(--muted, #8b8b9a); text-decoration: none; opacity: 0.85; }
+.gacha-verify:hover { opacity: 1; text-decoration: underline; }
 
 @media (max-width: 640px) {
   .games-grid { gap: 0.7rem; }

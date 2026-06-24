@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Db } from '../db/client.ts';
+import type { Db, Queryer } from '../db/client.ts';
 import { config } from '../config.ts';
 import { HttpError } from '../errors.ts';
 import { usdc } from '../money.ts';
@@ -7,7 +7,7 @@ import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './led
 import { getNftCustodyKeypair } from './custody/wallet.ts';
 import { createNftWithdrawNonce, verifyNftWithdrawStepUp } from './auth.ts';
 import type { GachaChain } from './custody/gacha-chain.ts';
-import { defaultCcClient, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
+import { defaultCcClient, ccVerifyUrl, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
 
 /**
  * Classic Gacha service (docs/classic-gacha-cc-packs-spec.md, P1 — buy → open → sell-back, USDC only).
@@ -37,27 +37,41 @@ export interface GachaDeps {
   now?: () => number; // injectable clock for the reconcile grace window (tests)
 }
 
-export interface GachaCard { mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; rarity: string | null }
-export interface OpenResult { openId: string; status: string; card: GachaCard | null; duplicate?: boolean }
+export interface GachaCard { mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; rarity: string | null; marketId: string | null }
+export interface OpenResult { openId: string; status: string; card: GachaCard | null; verifyUrl: string | null; duplicate?: boolean }
 
 interface OpenRow {
   id: string; user_id: string; machine_code: string; price_e6: string; cc_memo: string | null;
   payment_sig: string | null; custody_pubkey: string | null; status: string;
   nft_mint: string | null; nft_name: string | null; nft_image: string | null; grade: string | null;
-  insured_value_e6: string | null; rarity: string | null; created_at: string;
+  insured_value_e6: string | null; rarity: string | null; nft_market_id: string | null; created_at: string;
 }
 
 const OPEN_COLS =
   `id, user_id, machine_code, price_e6::text AS price_e6, cc_memo, payment_sig, custody_pubkey, status,
-   nft_mint, nft_name, nft_image, grade, insured_value_e6::text AS insured_value_e6, rarity, created_at::text AS created_at`;
+   nft_mint, nft_name, nft_image, grade, insured_value_e6::text AS insured_value_e6, rarity, nft_market_id, created_at::text AS created_at`;
 
 const rowToResult = (r: OpenRow): OpenResult => ({
   openId: r.id,
   status: r.status,
   card: r.nft_mint
-    ? { mint: r.nft_mint, name: r.nft_name, grade: r.grade, imageUrl: r.nft_image, valueE6: r.insured_value_e6 ?? '0', rarity: r.rarity }
+    ? { mint: r.nft_mint, name: r.nft_name, grade: r.grade, imageUrl: r.nft_image, valueE6: r.insured_value_e6 ?? '0', rarity: r.rarity, marketId: r.nft_market_id }
     : null,
+  verifyUrl: r.cc_memo ? ccVerifyUrl(r.cc_memo) : null,
 });
+
+/** Best-effort match of a won CC card to a tradeable GDEX market (P3 trade tie-in). CC names carry year/#/grade,
+ *  so match a market whose display_name is a substring of the card name (longest wins). Often null — most CC
+ *  cards aren't in GDEX's featured universe; the Trade CTA only shows when matched. */
+async function matchMarket(q: Queryer, cardName: string | null): Promise<string | null> {
+  if (!cardName) return null;
+  const r = await q.query<{ id: string }>(
+    `SELECT id FROM markets WHERE kind = 'card' AND status IN ('active','reduce_only') AND length(display_name) >= 4
+       AND position(lower(display_name) in lower($1)) > 0 ORDER BY length(display_name) DESC LIMIT 1`,
+    [cardName],
+  );
+  return r.rows[0]?.id ?? null;
+}
 
 // ── reveal-metadata extraction (CC's openPack response carries the won card; real DAS reconcile is P2) ──
 function attr(reveal: CcOpenResult, key: string): string | null {
@@ -175,16 +189,17 @@ async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promi
     const cur = (await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE id = $1 FOR UPDATE`, [openId])).rows[0];
     if (!cur) throw new HttpError(404, 'open not found');
     if (cur.status !== 'paid') return rowToResult(cur); // already delivered (idempotent)
+    const marketId = await matchMarket(q, card.name); // best-effort GDEX market for the trade tie-in (often null)
     await q.query(
-      `INSERT INTO gacha_nft_inventory(id, user_id, open_id, mint, custody_pubkey, name, grade, set_name, year, image_url, insured_value_e6, status)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'held') ON CONFLICT (mint) DO NOTHING`,
-      [randomUUID(), cur.user_id, openId, card.mint, cur.custody_pubkey, card.name, card.grade, card.setName, card.year, card.imageUrl, card.insuredValueE6],
+      `INSERT INTO gacha_nft_inventory(id, user_id, open_id, mint, custody_pubkey, name, grade, set_name, year, image_url, insured_value_e6, market_id, status)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'held') ON CONFLICT (mint) DO NOTHING`,
+      [randomUUID(), cur.user_id, openId, card.mint, cur.custody_pubkey, card.name, card.grade, card.setName, card.year, card.imageUrl, card.insuredValueE6, marketId],
     );
     await q.query(
-      `UPDATE gacha_pack_opens SET status='opened', nft_mint=$2, nft_name=$3, nft_image=$4, grade=$5, insured_value_e6=$6, rarity=$7, opened_at=now() WHERE id=$1`,
-      [openId, card.mint, card.name, card.imageUrl, card.grade, card.insuredValueE6, card.rarity],
+      `UPDATE gacha_pack_opens SET status='opened', nft_mint=$2, nft_name=$3, nft_image=$4, grade=$5, insured_value_e6=$6, rarity=$7, nft_market_id=$8, opened_at=now() WHERE id=$1`,
+      [openId, card.mint, card.name, card.imageUrl, card.grade, card.insuredValueE6, card.rarity, marketId],
     );
-    return { openId, status: 'opened', card: { mint: card.mint, name: card.name, grade: card.grade, imageUrl: card.imageUrl, valueE6: card.insuredValueE6, rarity: card.rarity } };
+    return { openId, status: 'opened', verifyUrl: cur.cc_memo ? ccVerifyUrl(cur.cc_memo) : null, card: { mint: card.mint, name: card.name, grade: card.grade, imageUrl: card.imageUrl, valueE6: card.insuredValueE6, rarity: card.rarity, marketId } };
   });
 }
 
@@ -228,7 +243,7 @@ async function settleRefund(db: Db, openId: string, finalStatus: 'refunded' | 'f
       entries: [{ accountId: coll, amount: price }, { accountId: treasury, amount: -price }],
     });
     await q.query(`UPDATE gacha_pack_opens SET status = $2, settled_at = now() WHERE id = $1`, [openId, finalStatus]);
-    return { openId, status: finalStatus, card: null };
+    return { openId, status: finalStatus, card: null, verifyUrl: null };
   });
 }
 
@@ -254,24 +269,24 @@ export async function getOpen(db: Db, userId: string, openId: string): Promise<O
 }
 
 // ─────────────────────────────── sell-back ───────────────────────────────
-export interface InventoryItem { id: string; mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; status: string }
+export interface InventoryItem { id: string; mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; marketId: string | null; status: string }
 
 export async function listInventory(db: Db, userId: string): Promise<InventoryItem[]> {
-  const r = await db.query<{ id: string; mint: string; name: string | null; grade: string | null; image_url: string | null; insured_value_e6: string | null; status: string }>(
-    `SELECT id, mint, name, grade, image_url, insured_value_e6::text AS insured_value_e6, status
+  const r = await db.query<{ id: string; mint: string; name: string | null; grade: string | null; image_url: string | null; insured_value_e6: string | null; market_id: string | null; status: string }>(
+    `SELECT id, mint, name, grade, image_url, insured_value_e6::text AS insured_value_e6, market_id, status
        FROM gacha_nft_inventory WHERE user_id = $1 AND status IN ('held','withdrawing') ORDER BY acquired_at DESC`,
     [userId],
   );
-  return r.rows.map((x) => ({ id: x.id, mint: x.mint, name: x.name, grade: x.grade, imageUrl: x.image_url, valueE6: x.insured_value_e6 ?? '0', status: x.status }));
+  return r.rows.map((x) => ({ id: x.id, mint: x.mint, name: x.name, grade: x.grade, imageUrl: x.image_url, valueE6: x.insured_value_e6 ?? '0', marketId: x.market_id, status: x.status }));
 }
 
 export interface SellBackResult { prizeId: string; payoutE6: string; cutE6: string }
 
-export async function sellBack(db: Db, userId: string, prizeId: string, deps: GachaDeps): Promise<SellBackResult> {
+export async function sellBack(db: Db, userId: string, prizeId: string, deps: GachaDeps, opts: { instant?: boolean } = {}): Promise<SellBackResult> {
   if (!config.classicGachaEnabled) throw GACHA_OFF();
   const cc = deps.cc ?? defaultCcClient;
   const { chain } = deps;
-  const cutBps = BigInt(config.gachaBuybackCutBps);
+  const cutBps = BigInt(opts.instant ? config.gachaTurboCutBps : config.gachaBuybackCutBps); // 10% instant (sell-on-reveal) vs 5% manual
 
   // Claim the prize (held → selling) under a row lock BEFORE the irreversible on-chain buyback, so two
   // concurrent sell-backs can't both submit it (the second sees 'selling', not 'held').

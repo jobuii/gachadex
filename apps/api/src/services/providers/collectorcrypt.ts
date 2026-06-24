@@ -218,3 +218,8 @@ export interface CcClient {
   buybackAvailable(params: { wallet: string; nft: string }): Promise<{ available: boolean; amount?: number }>;
 }
 export const defaultCcClient: CcClient = { getMachines, getNfts, generatePack, submitTransaction, openPackReveal, getPackStatus, buyback, buybackAvailable };
+
+/** CC's provably-fair VRF verify URL for a pack memo (docs/gacha/vrf) — surfaced to the player on the reveal. */
+export function ccVerifyUrl(memo: string): string {
+  return `${gachaBase()}/api/vrf/verify?memo=${encodeURIComponent(memo)}`;
+}

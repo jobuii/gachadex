@@ -788,7 +788,8 @@ CREATE TABLE IF NOT EXISTS gacha_pack_opens (
   custody_pubkey   TEXT,                             -- the user's dedicated NFT-custody wallet (payer + NFT recipient)
   status           TEXT NOT NULL DEFAULT 'pending',
   nft_mint         TEXT, nft_name TEXT, nft_image TEXT, grade TEXT, insured_value_e6 BIGINT, rarity TEXT,
-  turbo_refund_e6  BIGINT,                            -- USDC paid on a turbo Common auto-sell (P3)
+  nft_market_id    TEXT,                              -- matched GDEX market (P3 trade tie-in; often NULL)
+  turbo_refund_e6  BIGINT,                            -- USDC paid on a turbo Common auto-sell (deferred)
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   opened_at        TIMESTAMPTZ,
   settled_at       TIMESTAMPTZ

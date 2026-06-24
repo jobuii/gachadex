@@ -14,7 +14,7 @@ const TIER_COLOR = { common: '#eab308', uncommon: '#22c55e', rare: '#3b82f6', ep
 const tierColor = (label, i) => TIER_COLOR[(label ?? '').toLowerCase()] ?? ['#eab308', '#22c55e', '#3b82f6', '#ef4444'][i] ?? '#eab308';
 const titleCase = (s) => (s ?? '').replace(/\b\w/g, (c) => c.toUpperCase());
 
-export function ClassicGacha() {
+export function ClassicGacha({ onTradeMarket }) {
   const [machines, setMachines] = useState([]);
   const [game, setGame] = useState('all');
   const [selected, setSelected] = useState(null); // selected machine code
@@ -53,6 +53,11 @@ export function ClassicGacha() {
 
   const loadInventory = () => api.getGachaInventory().then((r) => setInventory(r.inventory ?? [])).catch(() => {});
   useEffect(() => { loadInventory(); }, []);
+  // Keep the winners ticker fresh — CC's feed moves as other players rip.
+  useEffect(() => {
+    const t = setInterval(() => api.getCcWinners(30).then((w) => setWinners(w.winners ?? [])).catch(() => {}), 20000);
+    return () => clearInterval(t);
+  }, []);
 
   // Rip: open a pack, then poll until CC's reveal lands (the payment webhook can lag a few seconds).
   const rip = async (m) => {
@@ -65,7 +70,7 @@ export function ClassicGacha() {
         await new Promise((res) => setTimeout(res, 2000));
         r = await api.getGachaOpen(r.openId);
       }
-      if (r.status === 'opened' && r.card) { await loadInventory(); setReveal(r.card); } // inventory first → the modal's Sell-back resolves
+      if (r.status === 'opened' && r.card) { await loadInventory(); setReveal(r); } // inventory first → the modal's Sell-now resolves
       else if (r.status === 'refunded' || r.status === 'failed') setRipErr('The pack didn’t open — you were refunded.');
       else setRipErr('Still opening — it’ll show in Your pulls shortly.');
     } catch (e) {
@@ -75,16 +80,19 @@ export function ClassicGacha() {
     }
   };
 
-  const sellBack = async (item) => {
+  const sellBack = async (item, instant = false) => {
     setRipErr(null);
     try {
-      await api.sellGachaPrize(item.id);
+      await api.sellGachaPrize(item.id, instant);
       setReveal(null);
       loadInventory();
     } catch (e) {
       setRipErr(e.message);
     }
   };
+
+  // Trade tie-in: jump to the card's GDEX perp market (only shown when the won card matched one).
+  const trade = (item) => { if (onTradeMarket && item?.marketId) onTradeMarket({ id: item.marketId }); };
 
   // Withdraw the real graded-card NFT to the user's own wallet: a fresh wallet signature over (mint, dest).
   const withdraw = async (item) => {
@@ -108,7 +116,7 @@ export function ClassicGacha() {
   const games = ['all', ...Array.from(new Set(machines.map((m) => m.game)))];
   const shown = game === 'all' ? machines : machines.filter((m) => m.game === game);
   const machine = machines.find((m) => m.code === selected) ?? shown[0] ?? machines[0];
-  const revealItem = reveal ? inventory.find((i) => i.mint === reveal.mint) : null; // the held row backing the reveal (enables Sell back)
+  const revealItem = reveal?.card ? inventory.find((i) => i.mint === reveal.card.mint) : null; // the held row backing the reveal (enables Sell now)
 
   return (
     <div className="gacha g-classic-gacha">
@@ -207,6 +215,7 @@ export function ClassicGacha() {
                 {it.status === 'held' ? (
                   <>
                     <button className="btn-ghost sm" onClick={() => sellBack(it)}>Sell back</button>
+                    {it.marketId && <button className="btn-ghost sm" onClick={() => trade(it)}>Trade</button>}
                     <button className="btn-ghost sm" onClick={() => withdraw(it)}>Withdraw</button>
                   </>
                 ) : (
@@ -220,17 +229,19 @@ export function ClassicGacha() {
 
       <p className="muted gacha-note">Real graded-card packs from Collector Crypt — bought with your GachaDex balance. Sell a pull back for USDC (GDEX keeps 5%) or keep it.</p>
 
-      {reveal && (
+      {reveal?.card && (
         <div className="gacha-modal-overlay" onClick={() => setReveal(null)}>
           <div className="gacha-modal" onClick={(e) => e.stopPropagation()}>
             <h3>You pulled a card!</h3>
-            {reveal.imageUrl && <img className="gacha-modal-img" src={reveal.imageUrl} alt={reveal.name ?? ''} />}
-            <div className="gacha-modal-name">{reveal.name ?? 'a card'}{reveal.grade ? ` · ${reveal.grade}` : ''}</div>
-            <div className="gacha-modal-val">{usd(reveal.valueE6)}</div>
+            {reveal.card.imageUrl && <img className="gacha-modal-img" src={reveal.card.imageUrl} alt={reveal.card.name ?? ''} />}
+            <div className="gacha-modal-name">{reveal.card.name ?? 'a card'}{reveal.card.grade ? ` · ${reveal.card.grade}` : ''}</div>
+            <div className="gacha-modal-val">{usd(reveal.card.valueE6)}</div>
             <div className="gacha-modal-actions">
-              {revealItem && <button className="btn-primary" onClick={() => sellBack(revealItem)}>Sell back (−5%)</button>}
+              {revealItem && <button className="btn-primary" onClick={() => sellBack(revealItem, true)}>Sell now (−10%)</button>}
+              {reveal.card.marketId && <button className="btn-ghost" onClick={() => trade(reveal.card)}>Trade</button>}
               <button className="btn-ghost" onClick={() => setReveal(null)}>Keep</button>
             </div>
+            {reveal.verifyUrl && <a className="gacha-verify" href={reveal.verifyUrl} target="_blank" rel="noreferrer">Verify this rip ↗</a>}
             {ripErr && <div className="order-error" style={{ marginTop: '0.5rem' }}>{ripErr}</div>}
           </div>
         </div>

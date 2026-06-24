@@ -214,3 +214,25 @@ test('withdraw: a bad step-up signature is rejected and the prize stays held', a
   assert.equal((await db.query<{ status: string }>(`SELECT status FROM gacha_nft_inventory WHERE id = $1`, [prize.id])).rows[0].status, 'held');
   assert.equal(chain.transfers.length, 0); // no transfer attempted
 });
+
+test('sell-back: instant (sell-on-reveal) takes the 10% cut, not 5%', async () => {
+  const user = await newUser();
+  const chain = fakeChain();
+  const cc = fakeCc();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'inst' }, { chain, cc, ...noWait });
+  const prize = (await db.query<{ id: string }>(`SELECT id FROM gacha_nft_inventory WHERE user_id = $1`, [user])).rows[0].id;
+  cc.buybackAmount = 40_000_000; // $40
+  const sell = await sellBack(db, user, prize, { chain, cc, ...noWait }, { instant: true });
+  assert.equal(sell.payoutE6, '36000000'); // 90%
+  assert.equal(sell.cutE6, '4000000'); // 10%
+});
+
+test('open: best-effort matches the won card to a GDEX market + surfaces a verify link', async () => {
+  const user = await newUser();
+  const marketId = randomUUID();
+  // the fake reveal's name is "Charizard PSA 10" → a "Charizard" market is a substring match
+  await db.query(`INSERT INTO markets(id, kind, symbol, display_name) VALUES($1, 'card', 'CHAR-MATCH', 'Charizard')`, [marketId]);
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'match' }, { chain: fakeChain(), cc: fakeCc(), ...noWait });
+  assert.equal(r.card!.marketId, marketId);
+  assert.ok(r.verifyUrl && r.verifyUrl.includes('/api/vrf/verify?memo='));
+});

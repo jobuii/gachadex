@@ -160,7 +160,8 @@ export const config = {
   ccEnv: process.env.CC_ENV ?? 'main', // 'main' | 'dev'
   ccGachaUrl: process.env.CC_GACHA_URL ?? '', // base override; default derived from ccEnv in the CC client
   ccApiKey: process.env.COLLECTORCRYPT_API_KEY ?? '', // optional — CC gacha endpoints don't enforce it
-  gachaBuybackCutBps: num('GACHA_BUYBACK_CUT_BPS', 500), // GDEX's cut of a sell-back → FEE_REVENUE (5%); the 10% turbo cut is P3
+  gachaBuybackCutBps: num('GACHA_BUYBACK_CUT_BPS', 500), // GDEX's cut of a manual sell-back → FEE_REVENUE (5%)
+  gachaTurboCutBps: num('GACHA_TURBO_CUT_BPS', 1000), // higher cut for an instant (sell-on-reveal) sell-back (10%)
   heliusDasUrl: process.env.HELIUS_DAS_URL ?? '', // DAS-capable RPC for getAsset (a won NFT's collection/owner — needed to transfer an MPL Core asset out); falls back to solanaRpcUrl
 
   // Funding: per-accrual rate = skewFactor * (skew / openInterest), bps (the heavy side pays)
