@@ -17,6 +17,7 @@ export interface ChatMessage {
   id: string;
   userId: string;
   handle: string;
+  avatar: string | null; // profile sprite path under /avatars/ (null → client derives one from userId)
   body: string;
   createdAt: string;
   replyTo: ReplyContext | null;
@@ -33,12 +34,12 @@ export interface ChatMessage {
 export async function listChat(db: Db, opts: { limit?: number; viewerUserId?: string } = {}): Promise<ChatMessage[]> {
   const n = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const r = await db.query<{
-    id: string; user_id: string; body: string; created_at: string; dn: string | null; pk: string; author_mod: boolean;
+    id: string; user_id: string; body: string; created_at: string; dn: string | null; pk: string; av: string | null; author_mod: boolean;
     author_mu: string | null; author_banned: boolean;
     kind: string; meta: Record<string, unknown> | null;
     reply_to: string | null; p_body: string | null; p_dn: string | null; p_pk: string | null;
   }>(
-    `SELECT c.id, c.user_id, c.body, c.created_at, c.kind, c.meta, u.display_name AS dn, u.solana_pubkey AS pk,
+    `SELECT c.id, c.user_id, c.body, c.created_at, c.kind, c.meta, u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av,
             u.is_mod AS author_mod, u.chat_muted_until AS author_mu, u.chat_banned AS author_banned,
             c.reply_to, p.body AS p_body, pu.display_name AS p_dn, pu.solana_pubkey AS p_pk
      FROM chat_messages c
@@ -71,6 +72,7 @@ export async function listChat(db: Db, opts: { limit?: number; viewerUserId?: st
     id: m.id,
     userId: m.user_id,
     handle: handleFor(m.dn, m.pk),
+    avatar: m.av,
     body: m.body,
     createdAt: m.created_at,
     // a soft-deleted parent is excluded by the join (p_pk null) -> drop the quote rather than leak its body
@@ -114,12 +116,12 @@ export async function postChat(db: Db, userId: string, rawBody: string, replyToI
   let ins;
   try {
     // Insert and fetch the poster's display name/pubkey in one round-trip (RETURNING joined to users).
-    ins = await db.query<{ created_at: string; dn: string | null; pk: string; is_mod: boolean }>(
+    ins = await db.query<{ created_at: string; dn: string | null; pk: string; av: string | null; is_mod: boolean }>(
       `WITH new_msg AS (
          INSERT INTO chat_messages(id, user_id, body, reply_to) VALUES($1, $2, $3, $4)
          RETURNING created_at, user_id
        )
-       SELECT m.created_at, u.display_name AS dn, u.solana_pubkey AS pk, u.is_mod
+       SELECT m.created_at, u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av, u.is_mod
        FROM new_msg m JOIN users u ON u.id = m.user_id`,
       [id, userId, body, replyToId ?? null],
     );
@@ -133,6 +135,7 @@ export async function postChat(db: Db, userId: string, rawBody: string, replyToI
     id,
     userId,
     handle: handleFor(ins.rows[0].dn, ins.rows[0].pk),
+    avatar: ins.rows[0].av,
     body,
     createdAt: ins.rows[0].created_at,
     replyTo,
@@ -172,8 +175,8 @@ function eventBody(handle: string, marketName: string, evt: ChatEventInput): str
  * the engine swallow its errors. The bar persists (kind='event') so it shows in chat history too.
  */
 export async function emitChatEvent(db: Db, evt: ChatEventInput): Promise<void> {
-  const r = await db.query<{ dn: string | null; pk: string; mkt: string; is_mod: boolean }>(
-    `SELECT u.display_name AS dn, u.solana_pubkey AS pk, u.is_mod, m.display_name AS mkt
+  const r = await db.query<{ dn: string | null; pk: string; av: string | null; mkt: string; is_mod: boolean }>(
+    `SELECT u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av, u.is_mod, m.display_name AS mkt
      FROM users u JOIN markets m ON m.id = $2 WHERE u.id = $1`,
     [evt.userId, evt.marketId],
   );
@@ -198,7 +201,7 @@ export async function emitChatEvent(db: Db, evt: ChatEventInput): Promise<void> 
     [id, evt.userId, body, JSON.stringify(meta)],
   );
   publish('chat', 'event', {
-    id, userId: evt.userId, handle, body, createdAt: ins.rows[0].created_at, replyTo: null, kind: 'event', meta, isMod: r.rows[0].is_mod,
+    id, userId: evt.userId, handle, avatar: r.rows[0].av, body, createdAt: ins.rows[0].created_at, replyTo: null, kind: 'event', meta, isMod: r.rows[0].is_mod,
   } satisfies ChatMessage);
 }
 
@@ -211,8 +214,8 @@ export async function emitGameWinEvent(
   db: Db,
   evt: { userId: string; marketId: string; payoutE6: bigint; game: string },
 ): Promise<void> {
-  const r = await db.query<{ dn: string | null; pk: string; is_mod: boolean; mkt: string }>(
-    `SELECT u.display_name AS dn, u.solana_pubkey AS pk, u.is_mod, m.display_name AS mkt
+  const r = await db.query<{ dn: string | null; pk: string; av: string | null; is_mod: boolean; mkt: string }>(
+    `SELECT u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av, u.is_mod, m.display_name AS mkt
      FROM users u JOIN markets m ON m.id = $2 WHERE u.id = $1`,
     [evt.userId, evt.marketId],
   );
@@ -234,7 +237,7 @@ export async function emitGameWinEvent(
     [id, evt.userId, body, JSON.stringify(meta)],
   );
   publish('chat', 'event', {
-    id, userId: evt.userId, handle, body, createdAt: ins.rows[0].created_at, replyTo: null, kind: 'event', meta, isMod: r.rows[0].is_mod,
+    id, userId: evt.userId, handle, avatar: r.rows[0].av, body, createdAt: ins.rows[0].created_at, replyTo: null, kind: 'event', meta, isMod: r.rows[0].is_mod,
   } satisfies ChatMessage);
 }
 
@@ -242,30 +245,46 @@ export interface Profile {
   userId: string;
   username: string | null; // the chosen display name (null if unset)
   handle: string; // what shows in chat (username or truncated pubkey)
+  avatar: string | null; // chosen profile sprite path under /avatars/ (null → client derives one from userId)
   isMod: boolean; // viewer is a moderator (drives whether mod controls render)
   mutedUntil: string | null; // viewer's mute expiry (drives the disabled-input "you're muted" state)
   banned: boolean; // viewer is banned (drives the disabled-input "you're banned" state)
+  // Own-account stats for the Portfolio banner strip (own data — safe to expose to oneself). From the
+  // cached leaderboard snapshot, so this stays cheap.
+  rank: number | null;
+  total: number;
+  level: number;
+  realizedE6: string; // lifetime net realized P/L
+  volumeE6: string; // lifetime traded notional
 }
 
 export async function getProfile(db: Db, userId: string): Promise<Profile> {
-  const r = await db.query<{ dn: string | null; pk: string; is_mod: boolean; mu: string | null; banned: boolean }>(
-    `SELECT display_name AS dn, solana_pubkey AS pk, is_mod, chat_muted_until AS mu, chat_banned AS banned FROM users WHERE id = $1`,
+  const r = await db.query<{ dn: string | null; pk: string; av: string | null; is_mod: boolean; mu: string | null; banned: boolean }>(
+    `SELECT display_name AS dn, solana_pubkey AS pk, avatar AS av, is_mod, chat_muted_until AS mu, chat_banned AS banned FROM users WHERE id = $1`,
     [userId],
   );
   if (!r.rows[0]) throw new HttpError(404, 'user not found');
+  const s = await userStanding(db, userId);
   return {
     userId,
     username: r.rows[0].dn,
     handle: handleFor(r.rows[0].dn, r.rows[0].pk),
+    avatar: r.rows[0].av,
     isMod: r.rows[0].is_mod,
     mutedUntil: r.rows[0].mu,
     banned: r.rows[0].banned,
+    rank: s.rank,
+    total: s.total,
+    level: s.level,
+    realizedE6: s.pnlUusdc,
+    volumeE6: s.volumeUusdc,
   };
 }
 
 export interface ProfileCard {
   userId: string;
   handle: string;
+  avatar: string | null; // profile sprite path under /avatars/ (null → client derives one from userId)
   isMod: boolean;
   rank: number | null; // leaderboard rank (null if no standing)
   total: number; // size of the ranked field
@@ -277,13 +296,13 @@ export interface ProfileCard {
 
 /** Public profile card for the chat hover popover: identity + leaderboard standing (rank + level). */
 export async function getProfileCard(db: Db, userId: string): Promise<ProfileCard> {
-  const u = await db.query<{ dn: string | null; pk: string; is_mod: boolean }>(
-    `SELECT display_name AS dn, solana_pubkey AS pk, is_mod FROM users WHERE id = $1`,
+  const u = await db.query<{ dn: string | null; pk: string; av: string | null; is_mod: boolean }>(
+    `SELECT display_name AS dn, solana_pubkey AS pk, avatar AS av, is_mod FROM users WHERE id = $1`,
     [userId],
   );
   if (!u.rows[0]) throw new HttpError(404, 'user not found');
   const s = await userStanding(db, userId);
-  return { userId, handle: handleFor(u.rows[0].dn, u.rows[0].pk), isMod: u.rows[0].is_mod, rank: s.rank, total: s.total, level: s.level };
+  return { userId, handle: handleFor(u.rows[0].dn, u.rows[0].pk), avatar: u.rows[0].av, isMod: u.rows[0].is_mod, rank: s.rank, total: s.total, level: s.level };
 }
 
 /**
@@ -329,6 +348,18 @@ export async function setUsername(db: Db, userId: string, rawName: string): Prom
     await q.query(`DELETE FROM display_name_aliases WHERE name_lower = $1 AND user_id = $2`, [lower, userId]);
     return { username: name };
   });
+}
+
+const AVATAR_RE = /^(default|shiny)\/\d{1,4}\.png$/; // a sprite bundled under apps/web/public/avatars/
+
+/** Set the caller's profile avatar — a sprite path under /avatars/ (validated to the bundled set so we
+ *  never store an arbitrary string). */
+export async function setAvatar(db: Db, userId: string, rawAvatar: string): Promise<{ avatar: string }> {
+  const avatar = rawAvatar.trim();
+  if (!AVATAR_RE.test(avatar)) throw new HttpError(400, 'invalid avatar');
+  const r = await db.query<{ id: string }>(`UPDATE users SET avatar = $1 WHERE id = $2 RETURNING id`, [avatar, userId]);
+  if (!r.rows[0]) throw new HttpError(404, 'user not found');
+  return { avatar };
 }
 
 export interface ChatUserRow {
