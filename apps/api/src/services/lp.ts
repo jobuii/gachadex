@@ -16,6 +16,11 @@ export function lpShareValue(shares: bigint, nav: bigint, totalShares: bigint): 
   return totalShares > 0n ? (shares * nav) / totalShares : 0n;
 }
 
+/** Value of 1e6 shares at the current NAV — the scaled share price (1e6 == $1.00 when the pool bootstraps). */
+export function poolSharePriceE6(nav: bigint, totalShares: bigint): bigint {
+  return totalShares > 0n ? (nav * 1_000_000n) / totalShares : 1_000_000n;
+}
+
 async function poolMeta(q: Queryer): Promise<{ totalShares: bigint; reserved: bigint }> {
   const r = await q.query<{ s: string; r: string }>(
     `SELECT total_shares::text AS s, reserved_for_oi_uusdc::text AS r FROM lp_pool WHERE id='pool'`,
@@ -24,7 +29,7 @@ async function poolMeta(q: Queryer): Promise<{ totalShares: bigint; reserved: bi
 }
 
 /** Pool snapshot: LP_POOL account id, NAV (ledger balance), outstanding shares, reserved capital. */
-async function poolState(q: Queryer): Promise<{ lp: string; nav: bigint; totalShares: bigint; reserved: bigint }> {
+export async function poolState(q: Queryer): Promise<{ lp: string; nav: bigint; totalShares: bigint; reserved: bigint }> {
   const lp = await getOrCreateSystemAccount(q, 'LP_POOL');
   const nav = await getBalance(q, lp);
   const { totalShares, reserved } = await poolMeta(q);
@@ -106,12 +111,11 @@ export interface PoolView {
 
 export async function getPool(db: Db): Promise<PoolView> {
   const { nav, totalShares, reserved } = await poolState(db);
-  const sharePriceE6 = totalShares > 0n ? (nav * 1_000_000n) / totalShares : 1_000_000n;
   return {
     navUusdc: nav.toString(),
     totalShares: totalShares.toString(),
     reservedUusdc: reserved.toString(),
-    sharePriceE6: sharePriceE6.toString(),
+    sharePriceE6: poolSharePriceE6(nav, totalShares).toString(),
   };
 }
 

@@ -955,7 +955,8 @@ function isLiquidatable(pos: PositionRow, market: MarketRow, markE6: bigint): bo
  * Force-close a position at the mark. The user's loss is capped at their margin; any shortfall
  * (bad debt, e.g. a gap through the liq price) is drawn from the insurance fund, and whatever
  * the insurance can't cover is socialized to the LP pool. A liquidation penalty (from any
- * remaining equity) tops up the insurance fund. Every leg is a balanced ledger txn.
+ * remaining equity) is split between the LP pool and house revenue per getLpLiquidationPct().
+ * Every leg is a balanced ledger txn.
  */
 async function liquidatePositionInTx(q: Queryer, pos: PositionRow, market: MarketRow, markE6: bigint, indexE6: bigint): Promise<void> {
   await settlePositionFunding(q, pos, market.id);
