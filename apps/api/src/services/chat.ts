@@ -350,13 +350,16 @@ export async function setUsername(db: Db, userId: string, rawName: string): Prom
   });
 }
 
-const AVATAR_RE = /^(default|shiny)\/\d{1,4}\.png$/; // a sprite bundled under apps/web/public/avatars/
+const AVATAR_RE = /^(default|shiny)\/(\d{1,4})\.png$/; // a sprite bundled under apps/web/public/avatars/
+const AVATAR_DEX_MAX = 649; // #1–649 ship in both default/ and shiny/ (matches the web picker's range)
 
-/** Set the caller's profile avatar — a sprite path under /avatars/ (validated to the bundled set so we
- *  never store an arbitrary string). */
+/** Set the caller's profile avatar — a sprite path under /avatars/, validated to the EXACT bundled set
+ *  (dir + #1–649) so we never persist a value with no sprite file behind it. */
 export async function setAvatar(db: Db, userId: string, rawAvatar: string): Promise<{ avatar: string }> {
   const avatar = rawAvatar.trim();
-  if (!AVATAR_RE.test(avatar)) throw new HttpError(400, 'invalid avatar');
+  const m = AVATAR_RE.exec(avatar);
+  const n = m ? Number(m[2]) : 0;
+  if (!m || n < 1 || n > AVATAR_DEX_MAX) throw new HttpError(400, 'invalid avatar');
   const r = await db.query<{ id: string }>(`UPDATE users SET avatar = $1 WHERE id = $2 RETURNING id`, [avatar, userId]);
   if (!r.rows[0]) throw new HttpError(404, 'user not found');
   return { avatar };

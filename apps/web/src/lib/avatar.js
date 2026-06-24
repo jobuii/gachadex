@@ -12,3 +12,8 @@ export function avatarSrc(avatar, seed = '') {
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0;
   return `/avatars/default/${(h % AVATAR_DEX_MAX) + 1}.png`;
 }
+
+/** <img onError> that swaps a missing sprite for the deterministic default (once, so it can't loop). */
+export function avatarFallback(seed) {
+  return (e) => { e.currentTarget.onerror = null; e.currentTarget.src = avatarSrc(null, seed); };
+}

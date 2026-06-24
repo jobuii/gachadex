@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { formatUsd } from '@pokex/pricing';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAuth } from '../auth/AuthContext';
-import { avatarSrc } from '../lib/avatar.js';
+import { avatarSrc, avatarFallback } from '../lib/avatar.js';
 import { AvatarPicker } from './AvatarPicker';
 import * as api from '../lib/api.js';
 
@@ -62,7 +62,7 @@ export function ProfileBanner({ balance }) {
       <div aria-hidden className="pf-banner-glow" />
 
       <button className="pf-avatar" onClick={() => setPickerOpen(true)} title="Change avatar" disabled={busy}>
-        <img src={av} alt="Your avatar" className="pf-avatar-img" />
+        <img src={av} alt="Your avatar" className="pf-avatar-img" onError={avatarFallback(user.id)} />
         <span className="pf-avatar-overlay">Change</span>
       </button>
 
