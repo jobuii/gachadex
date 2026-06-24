@@ -2,6 +2,11 @@ import { Connection, Keypair, PublicKey, SystemProgram, Transaction, VersionedTr
 import { createAssociatedTokenAccountIdempotentInstruction, createTransferInstruction, getAssociatedTokenAddressSync } from '@solana/spl-token';
 import { config } from '../../config.ts';
 import { hotWallet } from './solana.ts';
+import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
+import { mplCore, transferV1 } from '@metaplex-foundation/mpl-core';
+import { createNoopSigner, publicKey } from '@metaplex-foundation/umi';
+import { toWeb3JsInstruction, fromWeb3JsPublicKey } from '@metaplex-foundation/umi-web3js-adapters';
+import { getAssetTransferInfo } from '../das.ts';
 
 /**
  * On-chain surface for Classic Gacha (docs/classic-gacha-cc-packs-spec.md §5, P1). Two ops the gacha service
@@ -26,10 +31,10 @@ export interface GachaChain {
   /** The hot wallet's pubkey — passed as CC `altRecipient` so a buyback's USDC lands straight in the hot
    *  wallet (never in a scanned/credited address). */
   hotPubkey(): string;
-  /** Transfer a won NFT out of the user's custody wallet to their external `dest` (P2 withdraw). The hot
-   *  wallet is the fee-payer (gas relay); `signer` (the custody keypair) is the NFT owner. Awaits confirmation.
-   *  NOTE: standard SPL transfer — programmable-NFT (pNFT) slabs need the Token Metadata transfer
-   *  (@metaplex-foundation/mpl-token-metadata, not yet wired); a pNFT will reject this (spec §15.2). */
+  /** Transfer a won Metaplex Core NFT (CC cards are MplCoreAssets, verified on live mints) out of the user's
+   *  custody wallet to their external `dest` (P2 withdraw): build MPL Core `transferV1` → convert to a web3.js
+   *  instruction → submit with the hot wallet as fee-payer (gas relay) + the custody keypair (signer) as the
+   *  current owner/authority. Awaits confirmation. */
   transferNft(mint: string, dest: string, signer: Keypair): Promise<{ sig: string }>;
 }
 
@@ -37,6 +42,10 @@ export interface GachaChain {
 // USDC-ATA rent. A guess for now — the live test confirms whether CC forces the signer to pay gas + the real
 // cost; tune then. (If CC supports altPlayerAddress, JIT funding is skipped entirely — spec §5.)
 const FUND_SOL_LAMPORTS = 12_000_000; // 0.012 SOL
+
+// MPL Core instruction-builder (transferV1). Used ONLY to build the instruction — the RPC endpoint is never hit
+// by `.getInstructions()`, so the URL just needs to be valid; the tx is signed + sent via web3.js below.
+const umi = createUmi(config.heliusDasUrl || config.solanaRpcUrl).use(mplCore());
 
 export function solanaGachaChain(): GachaChain {
   const conn = new Connection(config.solanaRpcUrl, 'finalized');
@@ -80,19 +89,26 @@ export function solanaGachaChain(): GachaChain {
     },
 
     async transferNft(mint, dest, signer) {
+      // The MPL Core program needs the asset's collection (CC cards are collection assets); DAS gives it + the
+      // current owner + frozen flag in one call.
+      const info = await getAssetTransferInfo(mint);
+      if (info?.owner === dest) return { sig: 'already-transferred' }; // idempotent — a prior transfer already landed
+      if (info?.frozen) throw new Error('this card is frozen on-chain and cannot be withdrawn');
       const hot = hotWallet();
-      const mintPk = new PublicKey(mint);
-      const destOwner = new PublicKey(dest);
-      const fromAta = getAssociatedTokenAddressSync(mintPk, signer.publicKey);
-      const toAta = getAssociatedTokenAddressSync(mintPk, destOwner, true); // allow a program-owned dest (vault/multisig)
-      const tx = new Transaction().add(
-        createAssociatedTokenAccountIdempotentInstruction(hot.publicKey, toAta, destOwner, mintPk),
-        createTransferInstruction(fromAta, toAta, signer.publicKey, 1n),
-      );
+      const ixs = transferV1(umi, {
+        asset: publicKey(mint),
+        collection: info?.collection ? publicKey(info.collection) : undefined,
+        newOwner: publicKey(dest),
+        authority: createNoopSigner(fromWeb3JsPublicKey(signer.publicKey)), // the owner (custody wallet) authorizes
+        payer: createNoopSigner(fromWeb3JsPublicKey(hot.publicKey)), // the hot wallet pays rent + gas
+      })
+        .getInstructions()
+        .map(toWeb3JsInstruction);
+      const tx = new Transaction().add(...ixs);
       tx.feePayer = hot.publicKey; // gas relay — the custody wallet need not hold SOL
       const bh = await conn.getLatestBlockhash('finalized');
       tx.recentBlockhash = bh.blockhash;
-      tx.sign(hot, signer); // hot = fee payer; signer = NFT owner
+      tx.sign(hot, signer); // hot = fee payer; signer = the asset's owner/authority
       const sig = await conn.sendRawTransaction(tx.serialize());
       await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'finalized');
       return { sig };

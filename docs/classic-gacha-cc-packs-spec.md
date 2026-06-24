@@ -35,6 +35,11 @@ Three independent reviews grounded against the real rare.win + GDEX code. Surviv
   no SOL — the hot/treasury wallet pays gas); and a note on why GDEX gates on the **off-chain ledger** (pooled
   funds) where the handoff's per-user-on-chain model gates on chain. Folded into §5/§8/§9/§16.
 
+- **P2 build correction (2026-06-24):** CC cards are **Metaplex Core** (`MplCoreAsset`) — NOT pNFTs — verified
+  against live mints + rare.win's `lib/nftTransfer.ts`. So `transferNft` uses **mpl-core `transferV1`** (hybrid →
+  web3.js via the umi adapter) + a DAS `getAssetTransferInfo` for the collection, NOT Token Metadata / SPL. Deps
+  installed: `@metaplex-foundation/{mpl-core,umi,umi-bundle-defaults,umi-web3js-adapters}`.
+
 ## 1. Goal
 
 A **"Classic Gacha"** entry on the Games page → a rare.win-style **lobby** of CC pack "machines" (machine
@@ -91,7 +96,7 @@ can return `WAITING_FOR_WEBHOOK` → retry 3 × ~1.5s → reconciler. `openPack`
 | Draw | GDEX commit-reveal (`game-fairness.ts`) | CC's draw (we don't run RNG) |
 | Prize | synthetic (USDC at oracle mark) | **real graded NFT** in the user's wallet |
 | Sell-back | `oracle × (1−spread)` from `GAME_POOL` | CC buyback amount; GDEX keeps 5%/10% |
-| Withdraw real card | stub | yes (pNFT transfer to external wallet, P2) |
+| Withdraw real card | stub | yes (MPL Core transfer to external wallet, P2) |
 
 Shared: the Games shell, live-feed/chat, the trade→perp hook. Keep both.
 
@@ -259,8 +264,9 @@ New USDC ledger account: **`GACHA_REWARDS_BUDGET`** (funds token-bought packs). 
   `openPack` is idempotent so it retries on `WAITING_FOR_WEBHOOK`; `$ → micro-USDC` on the way in.
 - `services/custody/gacha-chain.ts` — **port of rare.win `signBase64Tx`** (versioned + legacy) + `broadcast` +
   `sigStatus`; the per-user dedicated-path keypair derivation + JIT funding; and **`transferNft(fromKeypair, mint,
-  dest)`** — pNFT-aware (Token Metadata transfer), the heaviest net-new piece (P2; greenfield — rare.win has no
-  NFT-out code either).
+  dest)`** — Metaplex **Core** transfer: mpl-core `transferV1` built via umi → `toWeb3JsInstruction` → the same
+  web3.js tx (hot fee-payer + custody signer); the collection comes from a DAS `getAssetTransferInfo`
+  (services/das.ts). Ported from rare.win's proven `lib/nftTransfer.ts`.
 - `services/das.ts` — Helius DAS `getAsset`/`getAssetsByOwner` (net-new; needs a DAS-capable RPC, e.g. Helius —
   GDEX's deposit scanner uses plain RPC today, so this is new infra, not just code).
 - `services/gacha.ts` — orchestration: `openPack`, `sellBack`, `requestNftWithdraw`, `convert`, `listInventory`,
@@ -380,8 +386,9 @@ Visual: GDEX retro/arcade skin + cyan/violet/pink brand; not a pixel clone of CC
   `signBase64Tx` port; two-phase open + reconciler + the refund/fail reversal; idempotent inventory; 5%/10%
   sell-back via `altRecipient`→hot; reveal modal. **No NFT leaves custody. Confirm CC mainnet + `altPlayerAddress`
   on a tiny live test here.**
-- **P2 — Withdraw the real NFT.** The pNFT `transferNft` (greenfield — needs `@metaplex-foundation/mpl-token-metadata`
-  + a devnet pNFT round-trip spike) + Portfolio Inventory + per-request dest + step-up + DAS reconcile.
+- **P2 — Withdraw the real NFT (BUILT).** The MPL **Core** `transferNft` (mpl-core/umi `transferV1` hybrid → web3.js
+  + a DAS `getAssetTransferInfo` for the collection) + per-request dest + step-up. Deps: `@metaplex-foundation/mpl-core`
+  + `umi` + `umi-bundle-defaults` + `umi-web3js-adapters`.
 - **P3 — Funnel + polish.** Turbo, Instant sell, **Convert (2-stage, market-gated)**, the card→market matching
   (best-effort — see §15), "Verify rip" (if §10 confirms), winners-feed richness.
 - **P4 — Tokens loyalty (own track, `TOKENS_ENABLED` off; markup optional + monitored).** Token ledger + earn hooks +
@@ -391,8 +398,9 @@ Visual: GDEX retro/arcade skin + cyan/violet/pink brand; not a pixel clone of CC
 
 1. **`altPlayerAddress` unverified** — the convenience of paying from the hot wallet without JIT funding depends on
    it; the spec works either way (JIT primary). Confirm on the live test (§2.6).
-2. **pNFT transfer-out (P2)** — greenfield in both repos; new Metaplex dependency; a wrong transfer on a real slab
-   is unrecoverable. Spike it with a devnet pNFT round-trip.
+2. **NFT transfer-out (P2)** — CC cards are Metaplex **Core** (`MplCoreAsset`, verified on live mints), transferred
+   via mpl-core `transferV1` (hybrid → web3.js), ported from rare.win's `nftTransfer.ts`. A wrong transfer on a
+   real slab is unrecoverable → verify on the live test.
 3. **CC on the critical path** — reconciler + receipt-before-payment + `payment_sig`-gating are mandatory.
    Add a CC-failure matrix at build (each call's failure → recovery; DAS-down → record the NFT with null metadata,
    back-fill later).
