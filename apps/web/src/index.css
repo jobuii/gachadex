@@ -1718,3 +1718,66 @@ td.addr:hover { text-decoration: underline; }
 .screener-jpy { background: var(--bg-3); border: var(--border-w) solid var(--border); color: var(--text-muted);
   font-family: var(--font-base); font-size: 0.45rem; padding: 0.42rem 0.5rem; cursor: pointer; border-radius: var(--radius); }
 .screener-jpy.on { color: var(--gold); border-color: var(--gold); }
+
+/* ===== Profile avatars: chat sprites · Portfolio banner · avatar picker ===== */
+.chat-avatar { overflow: hidden; }
+.chat-avatar-img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+
+.pf-banner {
+  position: relative; display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap;
+  padding: 1.1rem 1.25rem; margin-bottom: 1rem; border-radius: 14px; border: 1px solid var(--border);
+  background: linear-gradient(135deg, var(--bg-3), var(--bg-2)); overflow: hidden;
+}
+.pf-banner-glow { position: absolute; inset-inline: 0; top: 0; height: 1px; opacity: 0.5;
+  background: linear-gradient(to right, transparent, var(--accent), transparent); }
+.pf-avatar { position: relative; flex-shrink: 0; width: 104px; height: 104px; border-radius: 14px;
+  border: 2px solid var(--accent); background: var(--bg); padding: 0; cursor: pointer; overflow: hidden;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.45); }
+.pf-avatar-img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated;
+  filter: drop-shadow(0 2px 3px rgba(0,0,0,0.4)); }
+.pf-avatar-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.55); color: #fff; font-size: 0.66rem; font-weight: 800; letter-spacing: 0.08em;
+  text-transform: uppercase; opacity: 0; transition: opacity 0.15s; }
+.pf-avatar:hover .pf-avatar-overlay { opacity: 1; }
+.pf-identity { flex: 1; min-width: 200px; }
+.pf-eyebrow { margin: 0 0 0.2rem; font-size: 0.6rem; font-weight: 800; letter-spacing: 0.22em;
+  text-transform: uppercase; color: var(--text-muted); }
+.pf-name { display: inline-flex; align-items: center; gap: 0.5rem; background: none; border: none; padding: 0;
+  cursor: pointer; color: var(--text); max-width: 100%; }
+.pf-name h1 { margin: 0; font-size: 1.7rem; font-weight: 800; letter-spacing: -0.01em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-name-pencil { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  width: 1.5rem; height: 1.5rem; border-radius: 6px; border: 1px solid var(--border); color: var(--text-muted); font-size: 0.8rem; }
+.pf-name:hover .pf-name-pencil { color: var(--text); border-color: var(--accent); }
+.pf-name-edit { display: flex; align-items: center; gap: 0.4rem; margin: 0.1rem 0; flex-wrap: wrap; }
+.pf-name-edit .wallet-input { width: 180px; }
+.pf-wallet { display: inline-flex; align-items: center; gap: 0.4rem; margin-top: 0.35rem; background: none;
+  border: none; padding: 0; cursor: pointer; font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.72rem; color: var(--text-muted); }
+.pf-wallet-k { text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; font-size: 0.62rem; }
+.pf-wallet:hover { color: var(--text); }
+.pf-err { margin-top: 0.4rem; }
+.pf-stats { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+.pf-stat { display: flex; flex-direction: column; gap: 0.15rem; }
+.pf-stat-k { font-size: 0.6rem; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+.pf-stat-v { font-size: 1.05rem; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--text); }
+
+.avatar-modal-backdrop { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.avatar-modal { width: min(560px, 96vw); max-height: 86vh; display: flex; flex-direction: column;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.avatar-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 0.9rem 1rem; border-bottom: 1px solid var(--border); }
+.avatar-modal-head h3 { margin: 0; font-size: 0.95rem; }
+.avatar-modal-close { background: none; border: none; color: var(--text-muted); font-size: 1rem; cursor: pointer; }
+.avatar-modal-close:hover { color: var(--text); }
+.avatar-modal-controls { display: flex; align-items: center; gap: 0.6rem; padding: 0.7rem 1rem; flex-wrap: wrap; }
+.avatar-variant-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.avatar-variant-toggle button { background: var(--bg-3); border: none; color: var(--text-muted); padding: 0.35rem 0.7rem; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
+.avatar-variant-toggle button.on { background: var(--accent); color: #fff; }
+.avatar-search { width: 120px; }
+.avatar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 0.4rem; padding: 0.8rem 1rem; overflow-y: auto; }
+.avatar-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: var(--bg-3);
+  border: 1px solid var(--border); border-radius: 8px; cursor: pointer; padding: 4px; }
+.avatar-cell:hover { border-color: var(--accent); background: var(--bg); }
+.avatar-cell.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.avatar-cell img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }

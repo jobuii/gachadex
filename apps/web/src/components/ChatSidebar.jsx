@@ -4,6 +4,7 @@ import { CHAT_REACTIONS } from '@pokex/shared-types';
 import { useAuth } from '../auth/AuthContext';
 import { useChat } from '../store/chat';
 import { BrandMark } from './Brand';
+import { avatarSrc, avatarFallback } from '../lib/avatar.js';
 import * as api from '../lib/api.js';
 
 const PALETTE = ['#f0c040', '#3fb950', '#58a6ff', '#e74c3c', '#bc8cff', '#f78166', '#39d3bb'];
@@ -408,7 +409,7 @@ export function ChatSidebar({ open, onToggle }) {
                     onClick={() => onIdentity(m)}
                     title={mine ? 'Edit your username' : `Tag ${m.handle}`}
                   >
-                    {m.handle?.[0]?.toUpperCase()}
+                    <img className="chat-avatar-img" src={avatarSrc(m.avatar, m.userId)} alt="" loading="lazy" onError={avatarFallback(m.userId)} />
                   </span>
                 )}
                 <div className="chat-msg-main">
@@ -528,7 +529,7 @@ export function ChatSidebar({ open, onToggle }) {
             onClick={openNameEditor}
             title="Change your username"
           >
-            {me?.handle?.[0]?.toUpperCase() ?? '?'}
+            <img className="chat-avatar-img" src={avatarSrc(me?.avatar, user?.id)} alt="" onError={avatarFallback(user?.id)} />
           </span>
           <div className="chat-compose">
             <input

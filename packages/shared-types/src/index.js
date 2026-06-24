@@ -249,6 +249,11 @@ export const UsernameRequest = z.object({
   username: z.string().trim().min(3).max(20).regex(/^[A-Za-z0-9_-]+$/, 'letters, numbers, _ and - only'),
 });
 
+// Profile avatar: a sprite path under /avatars/, e.g. 'default/151.png' or 'shiny/25.png'.
+export const AvatarRequest = z.object({
+  avatar: z.string().trim().regex(/^(default|shiny)\/\d{1,4}\.png$/, 'invalid avatar'),
+});
+
 // --- chat moderation ---------------------------------------------------------
 
 // Mute a user for N minutes (1 min – 30 days); omitted -> server default.

@@ -1,11 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { ChatPostRequest, UsernameRequest, ChatMuteRequest, ReactRequest, ChatTipRequest } from '@pokex/shared-types';
+import { ChatPostRequest, UsernameRequest, AvatarRequest, ChatMuteRequest, ReactRequest, ChatTipRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { usdc } from '../money.ts';
 import { getDb } from '../db/client.ts';
 import { authenticate, requireMod, optionalViewerId } from '../plugins/auth.ts';
 import { rl } from './_ratelimit.ts';
-import { listChat, postChat, getProfile, setUsername, getProfileCard } from '../services/chat.ts';
+import { listChat, postChat, getProfile, setUsername, setAvatar, getProfileCard } from '../services/chat.ts';
 import { deleteMessage, muteUser, unmuteUser, setBanned } from '../services/chat-mod.ts';
 import { toggleReaction } from '../services/chat-reactions.ts';
 import { tipDrop } from '../services/drop.ts';
@@ -50,6 +50,11 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.post('/me/username', rl(config.routeRateLimits.username, { preHandler: authenticate, config: { scope: 'full' } }), async (req) => {
     const { username } = UsernameRequest.parse(req.body ?? {});
     return setUsername(await getDb(), req.userId!, username);
+  });
+
+  app.post('/me/avatar', rl(config.routeRateLimits.username, { preHandler: authenticate, config: { scope: 'full' } }), async (req) => {
+    const { avatar } = AvatarRequest.parse(req.body ?? {});
+    return setAvatar(await getDb(), req.userId!, avatar);
   });
 
   // toggle an emoji reaction on a message (add if absent, remove if present)
