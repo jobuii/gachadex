@@ -12,6 +12,7 @@ import { loadMarkClampBps } from './services/marks.ts';
 import { loadChatConfig } from './services/chat-config.ts';
 import { loadDropConfig } from './services/drop-config.ts';
 import { loadGameConfig } from './services/game-config.ts';
+import { loadGachaConfig } from './services/gacha-config.ts';
 import { settleExpiredDuels } from './services/games-duel.ts';
 import { settleExpiredLeagues } from './services/games-fantasy.ts';
 import { settleExpiredArenas } from './services/games-arena.ts';
@@ -241,7 +242,7 @@ async function main() {
     startGamesSettleLoop(db, app.log);
     // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
     // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.
-    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
+    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadGachaConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
     await loadLiveKnobs(db);
     setInterval(() => void loadLiveKnobs(db).catch((e) => app.log.warn(e, 'live-knob refresh failed')), 30_000);
     if (config.realFunds) {

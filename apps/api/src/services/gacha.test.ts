@@ -11,12 +11,14 @@ process.env.PGLITE_DIR = 'memory://';
 process.env.DATABASE_URL = '';
 process.env.CLASSIC_GACHA_ENABLED = 'true';
 process.env.DEPOSIT_MASTER_SEED = 'a'.repeat(64); // 32 bytes hex — pure-crypto derivation, no real funds
+process.env.TOKENS_ENABLED = 'true'; // P4: enable pay-with-Tokens + loyalty earn for the token tests
 
 const { getDb } = await import('../db/client.ts');
 const { migrate } = await import('../db/migrate.ts');
 const { usdc } = await import('../money.ts');
 const { fund, sign } = await import('../test-helpers.ts');
 const { openPack, sellBack, reconcilePending, nftWithdrawNonce, requestNftWithdraw } = await import('./gacha.ts');
+const { tokensEarnedForOpen, tokenPriceForPack, earnTokens, getTokenSummary } = await import('./tokens.ts');
 
 const db = await getDb();
 await migrate();
@@ -235,4 +237,74 @@ test('open: best-effort matches the won card to a GDEX market + surfaces a verif
   const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'match' }, { chain: fakeChain(), cc: fakeCc(), ...noWait });
   assert.equal(r.card!.marketId, marketId);
   assert.ok(r.verifyUrl && r.verifyUrl.includes('/api/vrf/verify?memo='));
+});
+
+// ── P4: loyalty Tokens ──
+const tokenBal = async (userId: string): Promise<bigint> =>
+  BigInt((await db.query<{ balance: string }>(`SELECT balance FROM token_balances WHERE user_id = $1`, [userId])).rows[0]?.balance ?? '0');
+const rewardsBudget = async (): Promise<bigint> =>
+  BigInt((await db.query<{ a: string }>(`SELECT b.amount_uusdc AS a FROM balances b JOIN accounts a ON a.id = b.account_id WHERE a.user_id IS NULL AND a.type = 'GACHA_REWARDS_BUDGET'`)).rows[0]?.a ?? '0');
+
+test('tokens: earn-rate + price helpers are correct at the $1000 default threshold', () => {
+  assert.equal(tokensEarnedForOpen(usdc(50), 1000), 1250n);  // $50 open → 1,250 Tokens (≈2.5% rebate)
+  assert.equal(tokensEarnedForOpen(usdc(25), 1000), 625n);   // $25 open → 625
+  assert.equal(tokensEarnedForOpen(usdc(100), 1000), 2500n); // $100 open → 2,500
+  assert.equal(tokensEarnedForOpen(usdc(50), 500), 2500n);   // a more generous $500 threshold doubles it
+  assert.equal(tokenPriceForPack(usdc(50)), 50_000n);        // a $50 pack costs 50,000 Tokens
+});
+
+test('tokens: a USDC open earns loyalty Tokens (PACK_OPEN_EARN)', async () => {
+  const user = await newUser();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'earn1' }, { chain: fakeChain(), cc: fakeCc(), ...noWait });
+  assert.equal(await tokenBal(user), 1250n); // $50 at the $1000 threshold
+  assert.equal((await getTokenSummary(db, user)).untilFreePackTokens, (25_000n - 1250n).toString());
+});
+
+test('tokens: a token-bought open spends Tokens, funds CC from the rewards budget, earns nothing', async () => {
+  const user = await newUser();
+  await db.tx(async (q) => earnTokens(q, user, 100_000n, 'SEED', {})); // enough for a $50 pack (50,000)
+  const budgetBefore = await rewardsBudget();
+  const collBefore = await collOf(user);
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'tok1', payWith: 'tokens' }, { chain: fakeChain(), cc: fakeCc(), ...noWait });
+  assert.equal(r.status, 'opened');
+  assert.equal(await tokenBal(user), 100_000n - 50_000n); // spent the token price; NO earn on a token open
+  assert.equal(await collOf(user), collBefore);           // no USDC collateral debit
+  assert.equal((await rewardsBudget()) - budgetBefore, -PRICE); // the budget paid CC the real USDC
+});
+
+test('tokens: a token open with too few Tokens is rejected (no pack, no charge)', async () => {
+  const user = await newUser();
+  await assert.rejects(
+    openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'tok-broke', payWith: 'tokens' }, { chain: fakeChain(), cc: fakeCc(), ...noWait }),
+    /insufficient Tokens/i,
+  );
+  assert.equal(await tokenBal(user), 0n);
+});
+
+test('tokens: Σ token_ledger == token_balances per user (invariant)', async () => {
+  const user = await newUser();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'tinv1' }, { chain: fakeChain(), cc: fakeCc(), ...noWait }); // +1250
+  await db.tx(async (q) => earnTokens(q, user, 100_000n, 'SEED', {}));
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'tinv2', payWith: 'tokens' }, { chain: fakeChain(), cc: fakeCc(), ...noWait }); // -50,000
+  const ledgerSum = BigInt((await db.query<{ s: string }>(`SELECT COALESCE(SUM(delta),0)::text AS s FROM token_ledger WHERE user_id = $1`, [user])).rows[0].s);
+  assert.equal(ledgerSum, await tokenBal(user));
+  assert.equal(await tokenBal(user), 1250n + 100_000n - 50_000n);
+});
+
+test('tokens: a refunded token-bought open returns Tokens (not USDC) and reverses the budget', async () => {
+  const user = await newUser();
+  await db.tx(async (q) => earnTokens(q, user, 100_000n, 'SEED', {}));
+  const cc = fakeCc();
+  cc.alwaysWait = true;   // CC never reveals
+  cc.packRefunded = true; // then reports refunded
+  const future = () => Date.now() + 120_000;
+  const collBefore = await collOf(user);
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'tref', payWith: 'tokens' }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(await tokenBal(user), 100_000n - 50_000n); // spent the token price
+  const budgetAfterBuy = await rewardsBudget();
+  const rec = await reconcilePending(db, user, { chain: fakeChain(), cc, now: future, ...noWait });
+  assert.equal(rec.recovered, 1);
+  assert.equal(await tokenBal(user), 100_000n);                  // Tokens fully returned
+  assert.equal(await collOf(user), collBefore);                 // NO USDC credited (no money minted)
+  assert.equal(await rewardsBudget(), budgetAfterBuy + PRICE);   // rewards budget reversed
 });

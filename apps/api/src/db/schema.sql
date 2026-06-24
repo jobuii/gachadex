@@ -782,6 +782,7 @@ CREATE TABLE IF NOT EXISTS gacha_pack_opens (
   idempotency_key  TEXT NOT NULL,
   machine_code     TEXT NOT NULL,                    -- CC packType, e.g. 'pokemon_50'
   price_e6         BIGINT NOT NULL,                  -- charged price (micro-USDC)
+  paid_with        TEXT NOT NULL DEFAULT 'usdc',     -- usdc | tokens (P4 loyalty)
   turbo            BOOLEAN NOT NULL DEFAULT false,
   cc_memo          TEXT UNIQUE,                      -- CC receipt; set after generatePack
   payment_sig      TEXT,                             -- on-chain payment signature (set ⇒ money may have moved ⇒ never auto-fail)
@@ -816,3 +817,20 @@ CREATE TABLE IF NOT EXISTS gacha_nft_inventory (
   settled_at       TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_gacha_inventory_user ON gacha_nft_inventory(user_id, status);
+
+-- Loyalty Tokens (P4; 1 Token = $0.001). A per-player points currency, separate from the USDC ledger and from
+-- on-chain $GDEX: non-transferable, non-withdrawable. Earned on paid (USDC) opens; spent to buy packs. The
+-- reconciler invariant is Σ token_ledger.delta == token_balances.balance per user (no Σ=0 cross-account partner).
+CREATE TABLE IF NOT EXISTS token_balances (
+  user_id TEXT PRIMARY KEY REFERENCES users(id),
+  balance BIGINT NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS token_ledger (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id),
+  delta      BIGINT NOT NULL,                         -- signed Tokens; + earn / - spend
+  reason     TEXT NOT NULL,                           -- PACK_OPEN_EARN | PACK_BUY_TOKENS | GDEX_HOLD_EARN | TRADE_EARN | LP_EARN
+  ref_type   TEXT, ref_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_token_ledger_user ON token_ledger(user_id, created_at DESC);

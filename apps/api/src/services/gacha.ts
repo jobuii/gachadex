@@ -6,6 +6,8 @@ import { usdc } from '../money.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './ledger.ts';
 import { getNftCustodyKeypair } from './custody/wallet.ts';
 import { createNftWithdrawNonce, verifyNftWithdrawStepUp } from './auth.ts';
+import { spendTokens, earnTokens, tokensEarnedForOpen, tokenPriceForPack } from './tokens.ts';
+import { gachaConfig } from './gacha-config.ts';
 import type { GachaChain } from './custody/gacha-chain.ts';
 import { defaultCcClient, ccVerifyUrl, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
 
@@ -41,14 +43,14 @@ export interface GachaCard { mint: string; name: string | null; grade: string | 
 export interface OpenResult { openId: string; status: string; card: GachaCard | null; verifyUrl: string | null; duplicate?: boolean }
 
 interface OpenRow {
-  id: string; user_id: string; machine_code: string; price_e6: string; cc_memo: string | null;
+  id: string; user_id: string; machine_code: string; price_e6: string; paid_with: string; cc_memo: string | null;
   payment_sig: string | null; custody_pubkey: string | null; status: string;
   nft_mint: string | null; nft_name: string | null; nft_image: string | null; grade: string | null;
   insured_value_e6: string | null; rarity: string | null; nft_market_id: string | null; created_at: string;
 }
 
 const OPEN_COLS =
-  `id, user_id, machine_code, price_e6::text AS price_e6, cc_memo, payment_sig, custody_pubkey, status,
+  `id, user_id, machine_code, price_e6::text AS price_e6, paid_with, cc_memo, payment_sig, custody_pubkey, status,
    nft_mint, nft_name, nft_image, grade, insured_value_e6::text AS insured_value_e6, rarity, nft_market_id, created_at::text AS created_at`;
 
 const rowToResult = (r: OpenRow): OpenResult => ({
@@ -103,8 +105,10 @@ async function getOpenRow(db: Db, openId: string): Promise<OpenRow | null> {
 }
 
 // ─────────────────────────────── open ───────────────────────────────
-export async function openPack(db: Db, userId: string, opts: { machineCode: string; idempotencyKey: string; expectedPriceE6?: string }, deps: GachaDeps): Promise<OpenResult> {
+export async function openPack(db: Db, userId: string, opts: { machineCode: string; idempotencyKey: string; expectedPriceE6?: string; payWith?: 'usdc' | 'tokens' }, deps: GachaDeps): Promise<OpenResult> {
   if (!config.classicGachaEnabled) throw GACHA_OFF();
+  const payWith = opts.payWith === 'tokens' ? 'tokens' : 'usdc';
+  if (payWith === 'tokens' && !config.tokensEnabled) throw new HttpError(403, 'paying with Tokens is not available');
   const cc = deps.cc ?? defaultCcClient;
   const { chain } = deps;
 
@@ -122,24 +126,37 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
   const anchor = await db.tx(async (q) => {
     const id = randomUUID();
     const ins = await q.query<{ id: string }>(
-      `INSERT INTO gacha_pack_opens(id, user_id, idempotency_key, machine_code, price_e6, custody_pubkey, status)
-       VALUES($1,$2,$3,$4,$5,$6,'pending') ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id`,
-      [id, userId, opts.idempotencyKey, opts.machineCode, price.toString(), custodyPubkey],
+      `INSERT INTO gacha_pack_opens(id, user_id, idempotency_key, machine_code, price_e6, custody_pubkey, paid_with, status)
+       VALUES($1,$2,$3,$4,$5,$6,$7,'pending') ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id`,
+      [id, userId, opts.idempotencyKey, opts.machineCode, price.toString(), custodyPubkey, payWith],
     );
     if (!ins.rows[0]) {
       const ex = await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE user_id = $1 AND idempotency_key = $2`, [userId, opts.idempotencyKey]);
       if (!ex.rows[0]) throw new HttpError(409, 'that idempotency key was already used');
       return { duplicate: true as const, row: ex.rows[0] };
     }
-    const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
-    const lock = await q.query<{ amount_uusdc: string }>(`SELECT amount_uusdc FROM balances WHERE account_id = $1 FOR UPDATE`, [coll]);
-    const avail = lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n;
-    if (avail < price) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
     const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
-    await postTxn(q, {
-      reason: 'GACHA_PACK_BUY', refType: 'gacha_open', refId: id,
-      entries: [{ accountId: coll, amount: -price }, { accountId: treasury, amount: price }],
-    });
+    if (payWith === 'tokens') {
+      // Token-bought pack: debit the player's loyalty Tokens; GDEX still pays CC real USDC — from the rewards
+      // budget (NOT USER_COLLATERAL, NOT FEE_REVENUE). Token opens earn nothing (anti-abuse, spec §6b).
+      await spendTokens(q, userId, tokenPriceForPack(price), { refType: 'gacha_open', refId: id });
+      const budget = await getOrCreateSystemAccount(q, 'GACHA_REWARDS_BUDGET');
+      await postTxn(q, {
+        reason: 'PACK_BUY_TOKENS_FUND', refType: 'gacha_open', refId: id,
+        entries: [{ accountId: budget, amount: -price }, { accountId: treasury, amount: price }],
+      });
+    } else {
+      const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
+      const lock = await q.query<{ amount_uusdc: string }>(`SELECT amount_uusdc FROM balances WHERE account_id = $1 FOR UPDATE`, [coll]);
+      const avail = lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n;
+      if (avail < price) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
+      await postTxn(q, {
+        reason: 'GACHA_PACK_BUY', refType: 'gacha_open', refId: id,
+        entries: [{ accountId: coll, amount: -price }, { accountId: treasury, amount: price }],
+      });
+      // Loyalty earn — only on paid (USDC) opens (spec §6b); floored, derived from the admin threshold knob.
+      await earnTokens(q, userId, tokensEarnedForOpen(price, gachaConfig.freePackThresholdUsd.get()), 'PACK_OPEN_EARN', { refType: 'gacha_open', refId: id });
+    }
     await q.query(`UPDATE gacha_pack_opens SET status = 'paid' WHERE id = $1`, [id]);
     return { duplicate: false as const, id };
   });
@@ -235,13 +252,24 @@ async function settleRefund(db: Db, openId: string, finalStatus: 'refunded' | 'f
     const row = (await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE id = $1 FOR UPDATE`, [openId])).rows[0];
     if (!row) throw new HttpError(404, 'open not found');
     if (row.status !== 'paid') return rowToResult(row); // refund only ONCE, from 'paid' (idempotent)
-    const coll = await getOrCreateUserAccount(q, row.user_id, 'USER_COLLATERAL');
     const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
     const price = BigInt(row.price_e6);
-    await postTxn(q, {
-      reason: 'GACHA_REFUND', refType: 'gacha_open', refId: openId,
-      entries: [{ accountId: coll, amount: price }, { accountId: treasury, amount: -price }],
-    });
+    if (row.paid_with === 'tokens') {
+      // Token-bought pack: return the Tokens the user spent + reverse the rewards-budget funding. NEVER credit
+      // USDC for a Token purchase (that would mint money). Mirrors the PACK_BUY_TOKENS_FUND posting in reverse.
+      await earnTokens(q, row.user_id, tokenPriceForPack(price), 'PACK_REFUND_TOKENS', { refType: 'gacha_open', refId: openId });
+      const budget = await getOrCreateSystemAccount(q, 'GACHA_REWARDS_BUDGET');
+      await postTxn(q, {
+        reason: 'GACHA_REFUND', refType: 'gacha_open', refId: openId,
+        entries: [{ accountId: budget, amount: price }, { accountId: treasury, amount: -price }],
+      });
+    } else {
+      const coll = await getOrCreateUserAccount(q, row.user_id, 'USER_COLLATERAL');
+      await postTxn(q, {
+        reason: 'GACHA_REFUND', refType: 'gacha_open', refId: openId,
+        entries: [{ accountId: coll, amount: price }, { accountId: treasury, amount: -price }],
+      });
+    }
     await q.query(`UPDATE gacha_pack_opens SET status = $2, settled_at = now() WHERE id = $1`, [openId, finalStatus]);
     return { openId, status: finalStatus, card: null, verifyUrl: null };
   });

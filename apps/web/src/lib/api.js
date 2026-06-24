@@ -211,7 +211,7 @@ export const getCcMachines = () => req('/gacha/machines'); // { machines: [{ cod
 export const getCcMachineCards = (code) => req(`/gacha/machines/${encodeURIComponent(code)}/cards`); // { cards: [{ mint, name, imageUrl, valueE6, rarity }] }
 export const getCcWinners = (count = 50) => req(`/gacha/winners?count=${count}`); // { winners: [{ winner, mint, name, imageUrl, valueE6, tier, packType }] }
 // P1 — buy → open → sell-back (real-funds; trade-scoped). open returns {openId, status, card}; poll opens/:id until status='opened'.
-export const openGachaPack = (machineCode, idempotencyKey, expectedPriceE6) => req('/gacha/open', { method: 'POST', auth: true, body: { machineCode, idempotencyKey, expectedPriceE6 } });
+export const openGachaPack = (machineCode, idempotencyKey, expectedPriceE6, payWith = 'usdc') => req('/gacha/open', { method: 'POST', auth: true, body: { machineCode, idempotencyKey, expectedPriceE6, payWith } });
 export const getGachaOpen = (id) => req(`/gacha/opens/${id}`, { auth: true });
 export const gachaReconcile = () => req('/gacha/reconcile', { method: 'POST', auth: true });
 export const getGachaInventory = () => req('/gacha/inventory', { auth: true }); // { inventory: [{ id, mint, name, grade, imageUrl, valueE6, marketId, status }] }
@@ -219,6 +219,9 @@ export const sellGachaPrize = (id, instant = false) => req(`/gacha/prizes/${id}/
 // Withdraw the real NFT to an external wallet (P2; full scope + step-up). Step 1: nonce/message over (mint, dest).
 export const gachaWithdrawNonce = (prizeId, dest) => req(`/gacha/prizes/${prizeId}/withdraw/nonce`, { method: 'POST', auth: true, body: { dest } });
 export const gachaWithdraw = (prizeId, body) => req(`/gacha/prizes/${prizeId}/withdraw`, { method: 'POST', auth: true, body }); // { dest, message, signature }
+// P4 — loyalty Tokens.
+export const getTokenBalance = () => req('/tokens/balance', { auth: true }); // { balance, perUsd, untilFreePackTokens }
+export const getTokenHistory = () => req('/tokens/history', { auth: true }); // { history: [{ delta, reason, createdAt }] }
 
 // --- LP ---
 export const getPool = () => req('/lp/pool');

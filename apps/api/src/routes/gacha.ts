@@ -5,6 +5,7 @@ import { rl } from './_ratelimit.ts';
 import { authenticate } from '../plugins/auth.ts';
 import { getDb } from '../db/client.ts';
 import { getMachines, getNfts, getAllWinners, toLobbyMachine, toLobbyCard, toLobbyWinner, defaultCcClient } from '../services/providers/collectorcrypt.ts';
+import { getTokenSummary, getTokenHistory } from '../services/tokens.ts'; // no @solana/web3.js dep → safe to load eagerly (unlike gacha.ts)
 import type { GachaChain } from '../services/custody/gacha-chain.ts';
 
 /**
@@ -68,12 +69,13 @@ export async function gachaRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/gacha/open', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
     realGate();
-    const b = (req.body ?? {}) as { machineCode?: string; idempotencyKey?: string; expectedPriceE6?: string };
+    const b = (req.body ?? {}) as { machineCode?: string; idempotencyKey?: string; expectedPriceE6?: string; payWith?: string };
     if (!b.machineCode || !MACHINE_CODE_RE.test(b.machineCode)) throw new HttpError(400, 'bad machine code');
     if (typeof b.idempotencyKey !== 'string' || b.idempotencyKey.length < 1 || b.idempotencyKey.length > 100) throw new HttpError(400, 'bad idempotency key');
     const expectedPriceE6 = typeof b.expectedPriceE6 === 'string' && /^\d{1,20}$/.test(b.expectedPriceE6) ? b.expectedPriceE6 : undefined;
+    const payWith = b.payWith === 'tokens' ? ('tokens' as const) : ('usdc' as const);
     const { openPack } = await gachaSvc();
-    return openPack(await getDb(), req.userId!, { machineCode: b.machineCode, idempotencyKey: b.idempotencyKey, expectedPriceE6 }, { chain: await realChain(), cc: defaultCcClient });
+    return openPack(await getDb(), req.userId!, { machineCode: b.machineCode, idempotencyKey: b.idempotencyKey, expectedPriceE6, payWith }, { chain: await realChain(), cc: defaultCcClient });
   });
 
   // Poll a single open (the web polls until the reveal lands).
@@ -95,6 +97,16 @@ export async function gachaRoutes(app: FastifyInstance): Promise<void> {
     gate();
     const { listInventory } = await gachaSvc();
     return { inventory: await listInventory(await getDb(), req.userId!) };
+  });
+
+  // Loyalty Tokens (P4): balance (+ progress to a free pack) and ledger history.
+  app.get('/tokens/balance', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => {
+    gate();
+    return getTokenSummary(await getDb(), req.userId!);
+  });
+  app.get('/tokens/history', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => {
+    gate();
+    return { history: await getTokenHistory(await getDb(), req.userId!) };
   });
 
   // Sell a held NFT back to CC for USDC (GDEX keeps 5%).

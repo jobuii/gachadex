@@ -103,6 +103,7 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
     listingEnabled: searchAndBetActive, // on-demand /markets/ensure is registered — lets the web hide a dead LIST button
     gamesEnabled: config.gamesEnabled, // the web hides the Games nav tab + page entirely until this flips on
     classicGachaEnabled: config.classicGachaEnabled, // the web hides the Classic Gacha entry until this flips on
+    tokensEnabled: config.tokensEnabled, // pay-with-Tokens toggle (loyalty earn always accrues; only spending is gated)
     apiVersion: API_VERSION,
     time: new Date().toISOString(),
   }));

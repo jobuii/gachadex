@@ -10,6 +10,8 @@ import { signAndSubmitNftWithdrawal } from '../../lib/withdraw.js';
 // Rip button is a disabled placeholder here.
 
 const usd = (e6) => formatUsd(BigInt(e6 || 0)); // `|| 0` guards '', null, undefined (e6 is always an integer string)
+const tokenPrice = (e6) => Math.floor(Number(e6 || 0) / 1000).toLocaleString(); // a pack's Token price = USD×1000 = priceE6/1000
+const fmtTokens = (n) => Number(n || 0).toLocaleString();
 const TIER_COLOR = { common: '#eab308', uncommon: '#22c55e', rare: '#3b82f6', epic: '#ef4444', legendary: '#a855f7', mythic: '#f472b6' };
 const tierColor = (label, i) => TIER_COLOR[(label ?? '').toLowerCase()] ?? ['#eab308', '#22c55e', '#3b82f6', '#ef4444'][i] ?? '#eab308';
 const titleCase = (s) => (s ?? '').replace(/\b\w/g, (c) => c.toUpperCase());
@@ -26,6 +28,9 @@ export function ClassicGacha({ onTradeMarket }) {
   const [reveal, setReveal] = useState(null); // the won card shown in the reveal modal
   const [ripErr, setRipErr] = useState(null);
   const [inventory, setInventory] = useState([]);
+  const [payWith, setPayWith] = useState('usdc');
+  const [tokens, setTokens] = useState(null); // { balance, untilFreePackTokens }
+  const [tokensEnabled, setTokensEnabled] = useState(false);
   const { signMessage } = useWallet();
 
   useEffect(() => {
@@ -58,6 +63,9 @@ export function ClassicGacha({ onTradeMarket }) {
     const t = setInterval(() => api.getCcWinners(30).then((w) => setWinners(w.winners ?? [])).catch(() => {}), 20000);
     return () => clearInterval(t);
   }, []);
+  // Loyalty Tokens: the balance/progress, and whether spending Tokens is enabled (earn always accrues).
+  const loadTokens = () => api.getTokenBalance().then(setTokens).catch(() => {});
+  useEffect(() => { loadTokens(); api.getHealth().then((h) => setTokensEnabled(!!h.tokensEnabled)).catch(() => {}); }, []);
 
   // Rip: open a pack, then poll until CC's reveal lands (the payment webhook can lag a few seconds).
   const rip = async (m) => {
@@ -65,18 +73,19 @@ export function ClassicGacha({ onTradeMarket }) {
     setRipping(true);
     try {
       const key = crypto.randomUUID();
-      let r = await api.openGachaPack(m.code, key, m.priceE6);
+      let r = await api.openGachaPack(m.code, key, m.priceE6, payWith);
       for (let i = 0; i < 12 && r.status === 'paid'; i++) {
         await new Promise((res) => setTimeout(res, 2000));
         r = await api.getGachaOpen(r.openId);
       }
       if (r.status === 'opened' && r.card) { await loadInventory(); setReveal(r); } // inventory first → the modal's Sell-now resolves
-      else if (r.status === 'refunded' || r.status === 'failed') setRipErr('The pack didn’t open — you were refunded.');
+      else if (r.status === 'refunded' || r.status === 'failed') setRipErr('The pack didn’t open — your payment was refunded.');
       else setRipErr('Still opening — it’ll show in Your pulls shortly.');
     } catch (e) {
       setRipErr(e?.status === 401 ? 'Sign in to rip a pack.' : e.message);
     } finally {
       setRipping(false);
+      loadTokens(); // earn (USDC) or spend (Tokens) changed the balance
     }
   };
 
@@ -123,6 +132,13 @@ export function ClassicGacha({ onTradeMarket }) {
       <div className="games-hero">
         <h2>Classic Gacha</h2>
         <p className="muted">Real graded-card packs from Collector Crypt — win a genuine slab, sell it back or keep it.</p>
+        {tokens && (
+          <div className="gacha-token-bal" title="Loyalty Tokens — earned on every USDC open">
+            <span className="gacha-coin" aria-hidden="true">🪙</span>
+            <strong>{fmtTokens(tokens.balance)}</strong>&nbsp;Tokens
+            {Number(tokens.untilFreePackTokens) > 0 && <span className="gacha-token-until">· {fmtTokens(tokens.untilFreePackTokens)} to your next free $25 pack</span>}
+          </div>
+        )}
       </div>
 
       <div className="gacha-tabs">
@@ -148,7 +164,15 @@ export function ClassicGacha({ onTradeMarket }) {
           <div className="gacha-machine-art">{machine.image ? <img src={machine.image} alt={machine.name} /> : <span aria-hidden="true">📦</span>}</div>
           <h3>{machine.name}</h3>
           <div className="gacha-price">{usd(machine.priceE6)}</div>
-          <button className="btn-primary" disabled={ripping} onClick={() => rip(machine)}>{ripping ? 'Ripping…' : `Rip — ${usd(machine.priceE6)}`}</button>
+          {tokensEnabled && (
+            <div className="gacha-paywith" role="group" aria-label="Pay with">
+              <button className={`gacha-pay ${payWith === 'usdc' ? 'active' : ''}`} onClick={() => setPayWith('usdc')}>USDC</button>
+              <button className={`gacha-pay ${payWith === 'tokens' ? 'active' : ''}`} onClick={() => setPayWith('tokens')}>🪙 Tokens</button>
+            </div>
+          )}
+          <button className="btn-primary" disabled={ripping} onClick={() => rip(machine)}>
+            {ripping ? 'Ripping…' : payWith === 'tokens' ? `Rip — ${tokenPrice(machine.priceE6)} Tokens` : `Rip — ${usd(machine.priceE6)}`}
+          </button>
           {ripErr && <div className="order-error" style={{ marginTop: '0.5rem' }}>{ripErr}</div>}
           {machine.tiers?.length > 0 && (
             <ul className="gacha-tiers">

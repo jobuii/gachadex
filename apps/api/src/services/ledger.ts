@@ -21,7 +21,8 @@ export type AccountType =
   | 'FAUCET_SOURCE'
   | 'TREASURY_USDC'
   | 'DROP_POOL'
-  | 'GAME_POOL';
+  | 'GAME_POOL'
+  | 'GACHA_REWARDS_BUDGET';
 
 /** System (house) accounts — one row each, user_id NULL. */
 export const SYSTEM_ACCOUNT_TYPES: AccountType[] = [
@@ -38,6 +39,10 @@ export const SYSTEM_ACCOUNT_TYPES: AccountType[] = [
   // it; the net house edge (the buyback spread) accrues here. Operator seeds the float (play-money
   // from FAUCET_SOURCE; real-funds from treasury/fees) — a single prize can exceed its play's wager.
   'GAME_POOL',
+  // Classic Gacha loyalty budget (docs/classic-gacha-cc-packs-spec.md §6b). Pre-funded by the operator; a
+  // token-bought pack debits it to pay CC real USDC (Tokens are a cost, not revenue — kept OUT of FEE_REVENUE,
+  // which is shared with LP fees + affiliate cashback). Its negative balance = outstanding deferred liability.
+  'GACHA_REWARDS_BUDGET',
   // Real-funds custody mirror (docs/real-funds-custody-plan.md): the only account real deposits/
   // withdrawals touch. Its negative balance == total internal claims; the chain reconciler asserts
   // on-chain treasury USDC >= |TREASURY_USDC| (proof of reserves). Unused until REAL_FUNDS paths land.
