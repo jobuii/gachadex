@@ -20,6 +20,10 @@ export function ClassicGacha() {
   const [winners, setWinners] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
+  const [ripping, setRipping] = useState(false);
+  const [reveal, setReveal] = useState(null); // the won card shown in the reveal modal
+  const [ripErr, setRipErr] = useState(null);
+  const [inventory, setInventory] = useState([]);
 
   useEffect(() => {
     let alive = true;
@@ -44,6 +48,41 @@ export function ClassicGacha() {
     return () => { alive = false; };
   }, [selected]);
 
+  const loadInventory = () => api.getGachaInventory().then((r) => setInventory(r.inventory ?? [])).catch(() => {});
+  useEffect(() => { loadInventory(); }, []);
+
+  // Rip: open a pack, then poll until CC's reveal lands (the payment webhook can lag a few seconds).
+  const rip = async (m) => {
+    setRipErr(null);
+    setRipping(true);
+    try {
+      const key = crypto.randomUUID();
+      let r = await api.openGachaPack(m.code, key, m.priceE6);
+      for (let i = 0; i < 12 && r.status === 'paid'; i++) {
+        await new Promise((res) => setTimeout(res, 2000));
+        r = await api.getGachaOpen(r.openId);
+      }
+      if (r.status === 'opened' && r.card) { await loadInventory(); setReveal(r.card); } // inventory first → the modal's Sell-back resolves
+      else if (r.status === 'refunded' || r.status === 'failed') setRipErr('The pack didn’t open — you were refunded.');
+      else setRipErr('Still opening — it’ll show in Your pulls shortly.');
+    } catch (e) {
+      setRipErr(e?.status === 401 ? 'Sign in to rip a pack.' : e.message);
+    } finally {
+      setRipping(false);
+    }
+  };
+
+  const sellBack = async (item) => {
+    setRipErr(null);
+    try {
+      await api.sellGachaPrize(item.id);
+      setReveal(null);
+      loadInventory();
+    } catch (e) {
+      setRipErr(e.message);
+    }
+  };
+
   if (loading) return <div className="empty-state">Loading packs…</div>;
   if (err) return <div className="order-error">Couldn’t load packs: {err}</div>;
   if (machines.length === 0) return <div className="empty-state">No packs available right now.</div>;
@@ -51,6 +90,7 @@ export function ClassicGacha() {
   const games = ['all', ...Array.from(new Set(machines.map((m) => m.game)))];
   const shown = game === 'all' ? machines : machines.filter((m) => m.game === game);
   const machine = machines.find((m) => m.code === selected) ?? shown[0] ?? machines[0];
+  const revealItem = reveal ? inventory.find((i) => i.mint === reveal.mint) : null; // the held row backing the reveal (enables Sell back)
 
   return (
     <div className="gacha g-classic-gacha">
@@ -82,7 +122,8 @@ export function ClassicGacha() {
           <div className="gacha-machine-art">{machine.image ? <img src={machine.image} alt={machine.name} /> : <span aria-hidden="true">📦</span>}</div>
           <h3>{machine.name}</h3>
           <div className="gacha-price">{usd(machine.priceE6)}</div>
-          <button className="btn-primary" disabled title="Buying opens in the next phase">Rip — coming soon</button>
+          <button className="btn-primary" disabled={ripping} onClick={() => rip(machine)}>{ripping ? 'Ripping…' : `Rip — ${usd(machine.priceE6)}`}</button>
+          {ripErr && <div className="order-error" style={{ marginTop: '0.5rem' }}>{ripErr}</div>}
           {machine.tiers?.length > 0 && (
             <ul className="gacha-tiers">
               {machine.tiers.map((t, i) => (
@@ -136,7 +177,39 @@ export function ClassicGacha() {
         </section>
       )}
 
-      <p className="muted gacha-note">Read-only preview — buying real packs with your GachaDex balance arrives next.</p>
+      {inventory.length > 0 && (
+        <section className="gacha-inventory">
+          <h4>Your pulls ({inventory.length})</h4>
+          <div className="gacha-card-grid">
+            {inventory.map((it) => (
+              <div key={it.id} className="gacha-card">
+                {it.imageUrl && <img src={it.imageUrl} alt={it.name ?? ''} loading="lazy" onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />}
+                <span className="gacha-card-name" title={it.name ?? ''}>{it.name ?? 'card'}{it.grade ? ` · ${it.grade}` : ''}</span>
+                <span className="gacha-card-val">{usd(it.valueE6)}</span>
+                <button className="btn-ghost sm" onClick={() => sellBack(it)}>Sell back</button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <p className="muted gacha-note">Real graded-card packs from Collector Crypt — bought with your GachaDex balance. Sell a pull back for USDC (GDEX keeps 5%) or keep it.</p>
+
+      {reveal && (
+        <div className="gacha-modal-overlay" onClick={() => setReveal(null)}>
+          <div className="gacha-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>You pulled a card!</h3>
+            {reveal.imageUrl && <img className="gacha-modal-img" src={reveal.imageUrl} alt={reveal.name ?? ''} />}
+            <div className="gacha-modal-name">{reveal.name ?? 'a card'}{reveal.grade ? ` · ${reveal.grade}` : ''}</div>
+            <div className="gacha-modal-val">{usd(reveal.valueE6)}</div>
+            <div className="gacha-modal-actions">
+              {revealItem && <button className="btn-primary" onClick={() => sellBack(revealItem)}>Sell back (−5%)</button>}
+              <button className="btn-ghost" onClick={() => setReveal(null)}>Keep</button>
+            </div>
+            {ripErr && <div className="order-error" style={{ marginTop: '0.5rem' }}>{ripErr}</div>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

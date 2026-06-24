@@ -160,6 +160,7 @@ export const config = {
   ccEnv: process.env.CC_ENV ?? 'main', // 'main' | 'dev'
   ccGachaUrl: process.env.CC_GACHA_URL ?? '', // base override; default derived from ccEnv in the CC client
   ccApiKey: process.env.COLLECTORCRYPT_API_KEY ?? '', // optional — CC gacha endpoints don't enforce it
+  gachaBuybackCutBps: num('GACHA_BUYBACK_CUT_BPS', 500), // GDEX's cut of a sell-back → FEE_REVENUE (5%); the 10% turbo cut is P3
 
   // Funding: per-accrual rate = skewFactor * (skew / openInterest), bps (the heavy side pays)
   fundingSkewFactorBps: num('FUNDING_SKEW_FACTOR_BPS', 30), // skew-balancing component (max)

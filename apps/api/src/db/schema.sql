@@ -769,3 +769,49 @@ ALTER TABLE game_prizes ADD COLUMN IF NOT EXISTS max_prize_e6 BIGINT;
 -- (Pack Rip / Set Poker prizes leave it at the default, so they sell at the plain mark).
 ALTER TABLE game_prizes ADD COLUMN IF NOT EXISTS multiplier_bps INT NOT NULL DEFAULT 10000;
 CREATE INDEX IF NOT EXISTS idx_game_prizes_user ON game_prizes(user_id, status);
+
+-- ─────────────────────────── Classic Gacha (docs/classic-gacha-cc-packs-spec.md) ───────────────────────────
+-- Real Collector Crypt graded-card packs. P0 = read-only lobby; P1 = buy → open → sell-back (these tables).
+-- A pack purchase/open: the idempotency anchor + state machine. The receipt row is written BEFORE the
+-- on-chain payment (crash-safe — a paid-but-undelivered pack is finished by the reconciler). status:
+-- pending (anchored) | paid (CC paid, awaiting reveal) | opened (NFT held) | turbo_sold (Common auto-sold)
+-- | refunded (CC refunded) | failed (no payment ever landed). A row with payment_sig is NEVER auto-failed.
+CREATE TABLE IF NOT EXISTS gacha_pack_opens (
+  id               TEXT PRIMARY KEY,
+  user_id          TEXT NOT NULL REFERENCES users(id),
+  idempotency_key  TEXT NOT NULL,
+  machine_code     TEXT NOT NULL,                    -- CC packType, e.g. 'pokemon_50'
+  price_e6         BIGINT NOT NULL,                  -- charged price (micro-USDC)
+  turbo            BOOLEAN NOT NULL DEFAULT false,
+  cc_memo          TEXT UNIQUE,                      -- CC receipt; set after generatePack
+  payment_sig      TEXT,                             -- on-chain payment signature (set ⇒ money may have moved ⇒ never auto-fail)
+  custody_pubkey   TEXT,                             -- the user's dedicated NFT-custody wallet (payer + NFT recipient)
+  status           TEXT NOT NULL DEFAULT 'pending',
+  nft_mint         TEXT, nft_name TEXT, nft_image TEXT, grade TEXT, insured_value_e6 BIGINT, rarity TEXT,
+  turbo_refund_e6  BIGINT,                            -- USDC paid on a turbo Common auto-sell (P3)
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  opened_at        TIMESTAMPTZ,
+  settled_at       TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_gacha_opens_user_idem ON gacha_pack_opens(user_id, idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_gacha_opens_user ON gacha_pack_opens(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gacha_opens_paid ON gacha_pack_opens(status) WHERE status = 'paid'; -- reconciler scan
+
+-- A won NFT held in the user's GDEX custody wallet (the Portfolio → Inventory source; mirrored vs DAS).
+-- status: held | selling (mid-buyback) | sold (CC buyback done) | withdrawing | withdrawn (real NFT sent out — P2).
+CREATE TABLE IF NOT EXISTS gacha_nft_inventory (
+  id               TEXT PRIMARY KEY,
+  user_id          TEXT NOT NULL REFERENCES users(id),
+  open_id          TEXT REFERENCES gacha_pack_opens(id),
+  mint             TEXT NOT NULL UNIQUE,            -- on-chain truth; UNIQUE makes the reveal write idempotent
+  custody_pubkey   TEXT NOT NULL,
+  name TEXT, grade TEXT, set_name TEXT, year TEXT, image_url TEXT,
+  insured_value_e6 BIGINT,                           -- CC insured value at win (advisory)
+  market_id        TEXT REFERENCES markets(id),      -- matched GDEX market (often NULL — most CC cards aren't featured)
+  status           TEXT NOT NULL DEFAULT 'held',
+  sell_value_e6    BIGINT, sell_cut_e6 BIGINT, txn_id TEXT,
+  withdraw_dest    TEXT, withdraw_sig TEXT,           -- P2 (withdraw the real slab)
+  acquired_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  settled_at       TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_gacha_inventory_user ON gacha_nft_inventory(user_id, status);

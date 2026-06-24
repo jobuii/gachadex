@@ -134,3 +134,87 @@ export function toLobbyWinner(w: CcWinner): LobbyWinner {
     packType: w.pack_type,
   };
 }
+
+// ── Paying mutations (P1) — generate / submit / open / buyback. **0 retries** (never double-process a
+//    payment); the 15s abort timeout still caps a hung request. Monetary fields HERE (buybackAmount /
+//    refundAmount / buyback/available.amount) are USDC BASE UNITS, unlike the dollar reads above. ──
+async function gachaPost<T>(path: string, body: unknown, opts: { timeoutMs?: number; fetchFn?: typeof fetch } = {}): Promise<T> {
+  const { timeoutMs = 15_000, fetchFn = fetch } = opts;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetchFn(`${gachaBase()}${path}`, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', ...(config.ccApiKey ? { 'x-api-key': config.ccApiKey } : {}) },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`CC gacha ${path} → ${res.status}`);
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Step 1 of an open: CC returns a `memo` (receipt) + an unsigned base64 USDC-payment tx the player's wallet
+    must sign + submit. `playerAddress` is the payer AND the NFT recipient (the user's custody wallet). */
+export function generatePack(params: { playerAddress: string; packType: string; turbo?: boolean }, opts: { fetchFn?: typeof fetch } = {}): Promise<{ memo: string; transaction: string }> {
+  return gachaPost('/api/generatePack', { ...params, turbo: params.turbo ?? false }, opts);
+}
+
+/** Submit a signed (base64) tx to the gacha service (pays for the pack, or executes a buyback). */
+export function submitTransaction(signedTransaction: string, opts: { fetchFn?: typeof fetch } = {}): Promise<{ success: boolean; signature: string; confirmationStatus: string }> {
+  return gachaPost('/api/submitTransaction', { signedTransaction }, opts);
+}
+
+export type CcOpenResult = {
+  success: boolean;
+  code?: string; // 'WAITING_FOR_WEBHOOK' (payment unconfirmed — retry) | 'TURBO_MODE_BUYBACK' (Common auto-sold)
+  nft_address?: string;
+  nftWon?: { content?: { metadata?: { name?: string; attributes?: Array<{ trait_type?: string; value?: unknown }> }; links?: { image?: string } } };
+  rarity?: string;
+  roll?: number;
+  buybackAmount?: number; // USDC base units, present on a turbo buyback
+  memo?: string;
+};
+/** Step 2 of an open: reveals the won NFT + transfers it to the player. Idempotent by memo (re-call returns
+    the same result), so the retry loop + reconciler are safe. */
+export function openPackReveal(memo: string, opts: { fetchFn?: typeof fetch } = {}): Promise<CcOpenResult> {
+  return gachaPost('/api/openPack', { memo }, opts);
+}
+
+export type CcPackStatus = {
+  memo: string;
+  pack: { status?: string; refunded?: boolean | null } | null;
+  send: { nft_address?: string; insured_value?: number } | null;
+  buyback: Array<{ refund_amount?: string; status?: string }>;
+};
+/** Read-only pack status by memo — the reconciler uses it to resolve a stranded open (refunded? delivered?). */
+export function getPackStatus(memo: string, opts: { fetchFn?: typeof fetch } = {}): Promise<CcPackStatus> {
+  return gachaGet(`/api/pack/status?memo=${encodeURIComponent(memo)}`, opts);
+}
+
+/** Instant buyback (≤72h after the open): CC builds a tx that returns the NFT to CC + pays USDC to
+    `altRecipient` (or `playerAddress`). Sign with the NFT owner's keypair + submitTransaction. Base units. */
+export function buyback(params: { playerAddress: string; nftAddress: string; altRecipient?: string }, opts: { fetchFn?: typeof fetch } = {}): Promise<{ success: boolean; serializedTransaction: string; refundAmount: number; memo: string }> {
+  return gachaPost('/api/buyback', params, opts);
+}
+
+/** Read-only: is an instant buyback available for this wallet+nft, and the USDC refund (base units, haircut applied). */
+export function buybackAvailable(params: { wallet: string; nft: string }, opts: { fetchFn?: typeof fetch } = {}): Promise<{ available: boolean; amount?: number }> {
+  return gachaGet(`/api/buyback/available?wallet=${encodeURIComponent(params.wallet)}&nft=${encodeURIComponent(params.nft)}`, opts);
+}
+
+// ── Injectable bundle — the gacha service takes a `CcClient`; tests pass a fake (the seam for unit-testing
+//    the money/idempotency/state-machine logic without hitting CC). ──
+export interface CcClient {
+  getMachines(): Promise<{ machines: CcMachine[] }>;
+  getNfts(code: string, opts?: { rarity?: string; page?: number; limit?: number }): Promise<{ nfts: CcPackNft[] }>;
+  generatePack(params: { playerAddress: string; packType: string; turbo?: boolean }): Promise<{ memo: string; transaction: string }>;
+  submitTransaction(signedTransaction: string): Promise<{ success: boolean; signature: string; confirmationStatus: string }>;
+  openPackReveal(memo: string): Promise<CcOpenResult>;
+  getPackStatus(memo: string): Promise<CcPackStatus>;
+  buyback(params: { playerAddress: string; nftAddress: string; altRecipient?: string }): Promise<{ success: boolean; serializedTransaction: string; refundAmount: number; memo: string }>;
+  buybackAvailable(params: { wallet: string; nft: string }): Promise<{ available: boolean; amount?: number }>;
+}
+export const defaultCcClient: CcClient = { getMachines, getNfts, generatePack, submitTransaction, openPackReveal, getPackStatus, buyback, buybackAvailable };

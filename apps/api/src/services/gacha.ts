@@ -1,0 +1,323 @@
+import { randomUUID } from 'node:crypto';
+import type { Db } from '../db/client.ts';
+import { config } from '../config.ts';
+import { HttpError } from '../errors.ts';
+import { usdc } from '../money.ts';
+import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './ledger.ts';
+import { getNftCustodyKeypair } from './custody/wallet.ts';
+import type { GachaChain } from './custody/gacha-chain.ts';
+import { defaultCcClient, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
+
+/**
+ * Classic Gacha service (docs/classic-gacha-cc-packs-spec.md, P1 — buy → open → sell-back, USDC only).
+ *
+ * Custodial + real-money: the user pays from their GDEX balance (the USDC ledger is the spend gate), the hot
+ * wallet JIT-funds a per-user NFT-custody wallet, that wallet pays CC + receives the real graded-card NFT,
+ * and a sell-back returns CC's buyback USDC to the hot wallet (altRecipient) with GDEX taking a 5% cut.
+ *
+ * The on-chain ops are behind an injected `GachaChain` and the CC API behind an injected `CcClient`, so the
+ * money / idempotency / state-machine logic below is unit-tested with fakes; the live Solana + CC behavior is
+ * the operator's real-funds test (spec P1). Money invariants (spec §16): receipt-before-payment; a row with a
+ * payment_sig is never auto-failed; every failed/refunded buy posts exactly one GACHA_REFUND; the inventory
+ * write is idempotent on the mint; sell-back locks the prize row + checks status='held'. Turbo / instant-sell /
+ * withdraw / convert are later phases.
+ */
+
+const GACHA_OFF = () => new HttpError(404, 'classic gacha is not available');
+const MAX_REVEAL_ATTEMPTS = 3;
+const REVEAL_RETRY_MS = 1500;
+const RECONCILE_GRACE_MS = 90_000;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+export interface GachaDeps {
+  chain: GachaChain;
+  cc?: CcClient;
+  sleepMs?: (ms: number) => Promise<void>;
+  now?: () => number; // injectable clock for the reconcile grace window (tests)
+}
+
+export interface GachaCard { mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; rarity: string | null }
+export interface OpenResult { openId: string; status: string; card: GachaCard | null; duplicate?: boolean }
+
+interface OpenRow {
+  id: string; user_id: string; machine_code: string; price_e6: string; cc_memo: string | null;
+  payment_sig: string | null; custody_pubkey: string | null; status: string;
+  nft_mint: string | null; nft_name: string | null; nft_image: string | null; grade: string | null;
+  insured_value_e6: string | null; rarity: string | null; created_at: string;
+}
+
+const OPEN_COLS =
+  `id, user_id, machine_code, price_e6::text AS price_e6, cc_memo, payment_sig, custody_pubkey, status,
+   nft_mint, nft_name, nft_image, grade, insured_value_e6::text AS insured_value_e6, rarity, created_at::text AS created_at`;
+
+const rowToResult = (r: OpenRow): OpenResult => ({
+  openId: r.id,
+  status: r.status,
+  card: r.nft_mint
+    ? { mint: r.nft_mint, name: r.nft_name, grade: r.grade, imageUrl: r.nft_image, valueE6: r.insured_value_e6 ?? '0', rarity: r.rarity }
+    : null,
+});
+
+// ── reveal-metadata extraction (CC's openPack response carries the won card; real DAS reconcile is P2) ──
+function attr(reveal: CcOpenResult, key: string): string | null {
+  const hit = (reveal.nftWon?.content?.metadata?.attributes ?? []).find((x) => (x.trait_type ?? '').toLowerCase() === key.toLowerCase());
+  return hit && hit.value != null ? String(hit.value) : null;
+}
+export function extractCard(reveal: CcOpenResult): {
+  mint: string; name: string | null; grade: string | null; imageUrl: string | null; insuredValueE6: string; year: string | null; setName: string | null; rarity: string | null;
+} {
+  const company = attr(reveal, 'Grading Company');
+  const num = attr(reveal, 'GradeNum') ?? attr(reveal, 'Grade');
+  const grade = company ? `${company} ${num ?? ''}`.trim() : num;
+  const insured = Number(attr(reveal, 'insured value') ?? attr(reveal, 'Insured Value') ?? 0);
+  return {
+    mint: reveal.nft_address ?? '',
+    name: reveal.nftWon?.content?.metadata?.name ?? null,
+    grade: grade || null,
+    imageUrl: reveal.nftWon?.content?.links?.image ?? null,
+    insuredValueE6: usdc(Number.isFinite(insured) ? insured : 0).toString(),
+    year: attr(reveal, 'Year'),
+    setName: attr(reveal, 'Set'),
+    rarity: reveal.rarity ?? null,
+  };
+}
+
+async function getOpenRow(db: Db, openId: string): Promise<OpenRow | null> {
+  const r = await db.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE id = $1`, [openId]);
+  return r.rows[0] ?? null;
+}
+
+// ─────────────────────────────── open ───────────────────────────────
+export async function openPack(db: Db, userId: string, opts: { machineCode: string; idempotencyKey: string; expectedPriceE6?: string }, deps: GachaDeps): Promise<OpenResult> {
+  if (!config.classicGachaEnabled) throw GACHA_OFF();
+  const cc = deps.cc ?? defaultCcClient;
+  const { chain } = deps;
+
+  const machine = (await cc.getMachines()).machines?.find((m) => m.code === opts.machineCode);
+  if (!machine) throw new HttpError(404, 'unknown machine');
+  const price = usdc(machine.price); // $ → micro-USDC
+  if (price <= 0n) throw new HttpError(503, 'machine price unavailable');
+  // No surprise charge: reject if the live price drifted >2% above what the client displayed (spec §9).
+  if (opts.expectedPriceE6 && price > (BigInt(opts.expectedPriceE6) * 102n) / 100n) throw new HttpError(409, 'pack price changed — refresh and try again', 'price_drift');
+
+  const custody = await getNftCustodyKeypair(db, userId);
+  const custodyPubkey = custody.publicKey.toBase58();
+
+  // Receipt-first + debit, one tx, idempotency-anchored on (user, key).
+  const anchor = await db.tx(async (q) => {
+    const id = randomUUID();
+    const ins = await q.query<{ id: string }>(
+      `INSERT INTO gacha_pack_opens(id, user_id, idempotency_key, machine_code, price_e6, custody_pubkey, status)
+       VALUES($1,$2,$3,$4,$5,$6,'pending') ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id`,
+      [id, userId, opts.idempotencyKey, opts.machineCode, price.toString(), custodyPubkey],
+    );
+    if (!ins.rows[0]) {
+      const ex = await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE user_id = $1 AND idempotency_key = $2`, [userId, opts.idempotencyKey]);
+      if (!ex.rows[0]) throw new HttpError(409, 'that idempotency key was already used');
+      return { duplicate: true as const, row: ex.rows[0] };
+    }
+    const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
+    const lock = await q.query<{ amount_uusdc: string }>(`SELECT amount_uusdc FROM balances WHERE account_id = $1 FOR UPDATE`, [coll]);
+    const avail = lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n;
+    if (avail < price) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
+    const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
+    await postTxn(q, {
+      reason: 'GACHA_PACK_BUY', refType: 'gacha_open', refId: id,
+      entries: [{ accountId: coll, amount: -price }, { accountId: treasury, amount: price }],
+    });
+    await q.query(`UPDATE gacha_pack_opens SET status = 'paid' WHERE id = $1`, [id]);
+    return { duplicate: false as const, id };
+  });
+  if (anchor.duplicate) return rowToResult(anchor.row);
+  const openId = anchor.id;
+
+  // Pay CC (off the tx). Never throw past the receipt — money safety is the reconciler's job.
+  try {
+    // generatePack has no on-chain effect, so build it FIRST: a CC failure (sold out / network — the common
+    // case) then leaves a no-memo row with no funds moved, which the reconciler refunds cleanly. Only after
+    // the memo is stored do we move money (fund → sign → submit).
+    const gen = await cc.generatePack({ playerAddress: custodyPubkey, packType: opts.machineCode, turbo: false });
+    await db.query(`UPDATE gacha_pack_opens SET cc_memo = $2 WHERE id = $1`, [openId, gen.memo]);
+    await chain.fundCustody(custodyPubkey, price);
+    const signed = chain.signTx(gen.transaction, custody);
+    const submit = await cc.submitTransaction(signed);
+    if (submit.signature) await db.query(`UPDATE gacha_pack_opens SET payment_sig = $2 WHERE id = $1`, [openId, submit.signature]);
+  } catch {
+    return await reconcileOne(db, openId, deps); // re-checks payment_sig + CC status; refunds a no-memo buy
+  }
+  return await deliverOpen(db, openId, deps);
+}
+
+// Reveal + record (retry for CC's payment webhook lag); hand off to the reconciler if still pending.
+async function deliverOpen(db: Db, openId: string, deps: GachaDeps): Promise<OpenResult> {
+  const cc = deps.cc ?? defaultCcClient;
+  const sleepFn = deps.sleepMs ?? sleep;
+  const row = await getOpenRow(db, openId);
+  if (!row) throw new HttpError(404, 'open not found');
+  if (row.status !== 'paid') return rowToResult(row);
+  if (!row.cc_memo) return rowToResult(row); // no memo → reconciler handles
+  for (let attempt = 0; attempt < MAX_REVEAL_ATTEMPTS; attempt++) {
+    const reveal = await cc.openPackReveal(row.cc_memo);
+    if (reveal.nft_address) return await recordReveal(db, openId, reveal);
+    if (reveal.code === 'WAITING_FOR_WEBHOOK' && attempt < MAX_REVEAL_ATTEMPTS - 1) {
+      await sleepFn(REVEAL_RETRY_MS);
+      continue;
+    }
+    break;
+  }
+  return rowToResult((await getOpenRow(db, openId))!); // still 'paid' → reconciler finishes it
+}
+
+async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promise<OpenResult> {
+  const card = extractCard(reveal);
+  return await db.tx(async (q) => {
+    const cur = (await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE id = $1 FOR UPDATE`, [openId])).rows[0];
+    if (!cur) throw new HttpError(404, 'open not found');
+    if (cur.status !== 'paid') return rowToResult(cur); // already delivered (idempotent)
+    await q.query(
+      `INSERT INTO gacha_nft_inventory(id, user_id, open_id, mint, custody_pubkey, name, grade, set_name, year, image_url, insured_value_e6, status)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'held') ON CONFLICT (mint) DO NOTHING`,
+      [randomUUID(), cur.user_id, openId, card.mint, cur.custody_pubkey, card.name, card.grade, card.setName, card.year, card.imageUrl, card.insuredValueE6],
+    );
+    await q.query(
+      `UPDATE gacha_pack_opens SET status='opened', nft_mint=$2, nft_name=$3, nft_image=$4, grade=$5, insured_value_e6=$6, rarity=$7, opened_at=now() WHERE id=$1`,
+      [openId, card.mint, card.name, card.imageUrl, card.grade, card.insuredValueE6, card.rarity],
+    );
+    return { openId, status: 'opened', card: { mint: card.mint, name: card.name, grade: card.grade, imageUrl: card.imageUrl, valueE6: card.insuredValueE6, rarity: card.rarity } };
+  });
+}
+
+// ─────────────────────────────── reconcile / refund ───────────────────────────────
+async function reconcileOne(db: Db, openId: string, deps: GachaDeps): Promise<OpenResult> {
+  const cc = deps.cc ?? defaultCcClient;
+  const nowMs = (deps.now ?? Date.now)();
+  const row = await getOpenRow(db, openId);
+  if (!row) throw new HttpError(404, 'open not found');
+  if (row.status !== 'paid') return rowToResult(row);
+  const aged = nowMs - new Date(row.created_at).getTime() >= RECONCILE_GRACE_MS;
+
+  if (row.cc_memo) {
+    const delivered = await deliverOpen(db, openId, deps).catch(() => null);
+    if (delivered && delivered.status !== 'paid') return delivered;
+    if (!aged) return rowToResult((await getOpenRow(db, openId)) ?? row);
+    try {
+      const st = await cc.getPackStatus(row.cc_memo);
+      if (st.pack?.refunded) return await settleRefund(db, openId, 'refunded');
+    } catch {
+      /* CC unreachable — leave 'paid', try again later */
+    }
+    return rowToResult((await getOpenRow(db, openId)) ?? row);
+  }
+
+  // No memo → generatePack never ran. With no payment_sig, nothing reached CC → refund the buy.
+  if (!row.payment_sig && aged) return await settleRefund(db, openId, 'failed');
+  return rowToResult(row);
+}
+
+async function settleRefund(db: Db, openId: string, finalStatus: 'refunded' | 'failed'): Promise<OpenResult> {
+  return await db.tx(async (q) => {
+    const row = (await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE id = $1 FOR UPDATE`, [openId])).rows[0];
+    if (!row) throw new HttpError(404, 'open not found');
+    if (row.status !== 'paid') return rowToResult(row); // refund only ONCE, from 'paid' (idempotent)
+    const coll = await getOrCreateUserAccount(q, row.user_id, 'USER_COLLATERAL');
+    const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
+    const price = BigInt(row.price_e6);
+    await postTxn(q, {
+      reason: 'GACHA_REFUND', refType: 'gacha_open', refId: openId,
+      entries: [{ accountId: coll, amount: price }, { accountId: treasury, amount: -price }],
+    });
+    await q.query(`UPDATE gacha_pack_opens SET status = $2, settled_at = now() WHERE id = $1`, [openId, finalStatus]);
+    return { openId, status: finalStatus, card: null };
+  });
+}
+
+/** Sweep the caller's stranded 'paid' opens (fire-and-forget on lobby load + after an open). */
+export async function reconcilePending(db: Db, userId: string, deps: GachaDeps): Promise<{ recovered: number }> {
+  const rows = (await db.query<{ id: string }>(
+    `SELECT id FROM gacha_pack_opens WHERE user_id = $1 AND status = 'paid' ORDER BY created_at ASC LIMIT 25`,
+    [userId],
+  )).rows;
+  let recovered = 0;
+  for (const r of rows) {
+    const res = await reconcileOne(db, r.id, deps).catch(() => null);
+    if (res && res.status !== 'paid') recovered++;
+  }
+  return { recovered };
+}
+
+/** Poll a single open (the web polls this until the reveal lands). */
+export async function getOpen(db: Db, userId: string, openId: string): Promise<OpenResult> {
+  const row = await getOpenRow(db, openId);
+  if (!row || row.user_id !== userId) throw new HttpError(404, 'open not found');
+  return rowToResult(row);
+}
+
+// ─────────────────────────────── sell-back ───────────────────────────────
+export interface InventoryItem { id: string; mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; status: string }
+
+export async function listInventory(db: Db, userId: string): Promise<InventoryItem[]> {
+  const r = await db.query<{ id: string; mint: string; name: string | null; grade: string | null; image_url: string | null; insured_value_e6: string | null; status: string }>(
+    `SELECT id, mint, name, grade, image_url, insured_value_e6::text AS insured_value_e6, status
+       FROM gacha_nft_inventory WHERE user_id = $1 AND status IN ('held','withdrawing') ORDER BY acquired_at DESC`,
+    [userId],
+  );
+  return r.rows.map((x) => ({ id: x.id, mint: x.mint, name: x.name, grade: x.grade, imageUrl: x.image_url, valueE6: x.insured_value_e6 ?? '0', status: x.status }));
+}
+
+export interface SellBackResult { prizeId: string; payoutE6: string; cutE6: string }
+
+export async function sellBack(db: Db, userId: string, prizeId: string, deps: GachaDeps): Promise<SellBackResult> {
+  if (!config.classicGachaEnabled) throw GACHA_OFF();
+  const cc = deps.cc ?? defaultCcClient;
+  const { chain } = deps;
+  const cutBps = BigInt(config.gachaBuybackCutBps);
+
+  // Claim the prize (held → selling) under a row lock BEFORE the irreversible on-chain buyback, so two
+  // concurrent sell-backs can't both submit it (the second sees 'selling', not 'held').
+  const claimed = await db.tx(async (q) => {
+    const row = (await q.query<{ mint: string; custody_pubkey: string; status: string }>(
+      `SELECT mint, custody_pubkey, status FROM gacha_nft_inventory WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+      [prizeId, userId],
+    )).rows[0];
+    if (!row) throw new HttpError(404, 'prize not found');
+    if (row.status !== 'held') throw new HttpError(409, 'prize already settled');
+    await q.query(`UPDATE gacha_nft_inventory SET status = 'selling' WHERE id = $1`, [prizeId]);
+    return { mint: row.mint, custodyPubkey: row.custody_pubkey };
+  });
+
+  let gross: bigint;
+  try {
+    // On-chain buyback (NFT → CC, USDC → hot via altRecipient), signed by the NFT owner's custody keypair.
+    const custody = await getNftCustodyKeypair(db, userId);
+    const quote = await cc.buyback({ playerAddress: claimed.custodyPubkey, nftAddress: claimed.mint, altRecipient: chain.hotPubkey() });
+    if (!quote.serializedTransaction) throw new HttpError(503, 'buyback unavailable for this card');
+    const signed = chain.signTx(quote.serializedTransaction, custody);
+    const submit = await cc.submitTransaction(signed);
+    if (!submit.success && !submit.signature) throw new HttpError(502, 'buyback submission failed');
+    gross = BigInt(Math.trunc(quote.refundAmount)); // base units CC commits to pay the hot wallet
+  } catch (e) {
+    await db.query(`UPDATE gacha_nft_inventory SET status = 'held' WHERE id = $1 AND status = 'selling'`, [prizeId]).catch(() => {}); // release the claim → retryable
+    throw e;
+  }
+
+  // Settle the ledger from the committed refund amount.
+  return await db.tx(async (q) => {
+    const cur = (await q.query<{ status: string }>(`SELECT status FROM gacha_nft_inventory WHERE id = $1 FOR UPDATE`, [prizeId])).rows[0];
+    if (!cur || cur.status !== 'selling') throw new HttpError(409, 'prize already settled'); // settle exactly once
+    const payout = (gross * (10_000n - cutBps)) / 10_000n; // floor; user gets (1 − cut)
+    const cut = gross - payout; // GDEX keeps the remainder
+    const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
+    const fee = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
+    const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
+    const txnId = await postTxn(q, {
+      reason: 'GACHA_SELLBACK', refType: 'gacha_prize', refId: prizeId,
+      entries: [
+        { accountId: coll, amount: payout },
+        { accountId: fee, amount: cut },
+        { accountId: treasury, amount: -gross }, // liability up by the USDC that landed in the hot wallet
+      ],
+    });
+    await q.query(`UPDATE gacha_nft_inventory SET status='sold', sell_value_e6=$2, sell_cut_e6=$3, txn_id=$4, settled_at=now() WHERE id=$1`, [prizeId, payout.toString(), cut.toString(), txnId]);
+    return { prizeId, payoutE6: payout.toString(), cutE6: cut.toString() };
+  });
+}

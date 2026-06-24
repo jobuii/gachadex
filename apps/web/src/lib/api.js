@@ -210,6 +210,12 @@ export const arenaJoin = (wishlist, idempotencyKey) => req('/games/arena/join', 
 export const getCcMachines = () => req('/gacha/machines'); // { machines: [{ code, name, game, priceE6, buybackPct, tiers, stock, image }] }
 export const getCcMachineCards = (code) => req(`/gacha/machines/${encodeURIComponent(code)}/cards`); // { cards: [{ mint, name, imageUrl, valueE6, rarity }] }
 export const getCcWinners = (count = 50) => req(`/gacha/winners?count=${count}`); // { winners: [{ winner, mint, name, imageUrl, valueE6, tier, packType }] }
+// P1 — buy → open → sell-back (real-funds; trade-scoped). open returns {openId, status, card}; poll opens/:id until status='opened'.
+export const openGachaPack = (machineCode, idempotencyKey, expectedPriceE6) => req('/gacha/open', { method: 'POST', auth: true, body: { machineCode, idempotencyKey, expectedPriceE6 } });
+export const getGachaOpen = (id) => req(`/gacha/opens/${id}`, { auth: true });
+export const gachaReconcile = () => req('/gacha/reconcile', { method: 'POST', auth: true });
+export const getGachaInventory = () => req('/gacha/inventory', { auth: true }); // { inventory: [{ id, mint, name, grade, imageUrl, valueE6, status }] }
+export const sellGachaPrize = (id) => req(`/gacha/prizes/${id}/sell-back`, { method: 'POST', auth: true }); // GDEX keeps 5%
 
 // --- LP ---
 export const getPool = () => req('/lp/pool');

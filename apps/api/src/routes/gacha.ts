@@ -2,7 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { config } from '../config.ts';
 import { HttpError } from '../errors.ts';
 import { rl } from './_ratelimit.ts';
-import { getMachines, getNfts, getAllWinners, toLobbyMachine, toLobbyCard, toLobbyWinner } from '../services/providers/collectorcrypt.ts';
+import { authenticate } from '../plugins/auth.ts';
+import { getDb } from '../db/client.ts';
+import { getMachines, getNfts, getAllWinners, toLobbyMachine, toLobbyCard, toLobbyWinner, defaultCcClient } from '../services/providers/collectorcrypt.ts';
+import type { GachaChain } from '../services/custody/gacha-chain.ts';
 
 /**
  * Classic Gacha lobby (docs/classic-gacha-cc-packs-spec.md, P0 — read-only). A public proxy of Collector
@@ -12,6 +15,16 @@ import { getMachines, getNfts, getAllWinners, toLobbyMachine, toLobbyCard, toLob
  */
 const MACHINE_CODE_RE = /^[a-z0-9_-]{1,64}$/i; // CC codes look like "pokemon_50" — a cheap guard before we proxy to CC
 const RARITIES = new Set(['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic']);
+const TRADE = { preHandler: authenticate, config: { scope: 'trade' as const } };
+
+// The Solana chain + the gacha service are lazy-loaded so @solana/web3.js never loads on the read-only /
+// play-money boot path (mirrors how server.ts lazy-loads the custody chain).
+let gachaChain: GachaChain | null = null;
+async function realChain(): Promise<GachaChain> {
+  if (!gachaChain) gachaChain = (await import('../services/custody/gacha-chain.ts')).solanaGachaChain();
+  return gachaChain;
+}
+const gachaSvc = () => import('../services/gacha.ts'); // import() is module-cached
 
 export async function gachaRoutes(app: FastifyInstance): Promise<void> {
   const gate = () => {
@@ -44,5 +57,49 @@ export async function gachaRoutes(app: FastifyInstance): Promise<void> {
     const count = Math.min(Number(q.count) || 50, 200);
     const { data } = await getAllWinners({ count, packType: q.packType });
     return { winners: (data ?? []).map(toLobbyWinner) };
+  });
+
+  // ── P1: buy → open → sell-back. Real-funds only (CC takes real on-chain USDC). Trade-scoped + auth'd. ──
+  const realGate = () => {
+    gate();
+    if (!config.realFunds) throw new HttpError(403, 'classic gacha needs real-funds mode');
+  };
+
+  app.post('/gacha/open', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
+    realGate();
+    const b = (req.body ?? {}) as { machineCode?: string; idempotencyKey?: string; expectedPriceE6?: string };
+    if (!b.machineCode || !MACHINE_CODE_RE.test(b.machineCode)) throw new HttpError(400, 'bad machine code');
+    if (typeof b.idempotencyKey !== 'string' || b.idempotencyKey.length < 1 || b.idempotencyKey.length > 100) throw new HttpError(400, 'bad idempotency key');
+    const expectedPriceE6 = typeof b.expectedPriceE6 === 'string' && /^\d{1,20}$/.test(b.expectedPriceE6) ? b.expectedPriceE6 : undefined;
+    const { openPack } = await gachaSvc();
+    return openPack(await getDb(), req.userId!, { machineCode: b.machineCode, idempotencyKey: b.idempotencyKey, expectedPriceE6 }, { chain: await realChain(), cc: defaultCcClient });
+  });
+
+  // Poll a single open (the web polls until the reveal lands).
+  app.get('/gacha/opens/:id', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => {
+    realGate();
+    const { getOpen } = await gachaSvc();
+    return getOpen(await getDb(), req.userId!, (req.params as { id: string }).id);
+  });
+
+  // Sweep the caller's stranded paid opens (fire-and-forget on lobby load + after an open).
+  app.post('/gacha/reconcile', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => {
+    realGate();
+    const { reconcilePending } = await gachaSvc();
+    return reconcilePending(await getDb(), req.userId!, { chain: await realChain(), cc: defaultCcClient });
+  });
+
+  // The caller's held NFTs (Portfolio → Inventory).
+  app.get('/gacha/inventory', rl(config.routeRateLimits.gameFairness, TRADE), async (req) => {
+    gate();
+    const { listInventory } = await gachaSvc();
+    return { inventory: await listInventory(await getDb(), req.userId!) };
+  });
+
+  // Sell a held NFT back to CC for USDC (GDEX keeps 5%).
+  app.post('/gacha/prizes/:id/sell-back', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
+    realGate();
+    const { sellBack } = await gachaSvc();
+    return sellBack(await getDb(), req.userId!, (req.params as { id: string }).id, { chain: await realChain(), cc: defaultCcClient });
   });
 }
