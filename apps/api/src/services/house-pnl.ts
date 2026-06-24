@@ -19,7 +19,7 @@ export interface HousePnlBreakdown {
   fundingNetE6: string; // net funding the house kept (FUNDING legs on LP_POOL)
   fundingGrossE6: string; // gross funding customers paid in (positive FUNDING legs on LP_POOL)
   traderPnlE6: string; // net trader P/L the house absorbed (REALIZED_PNL legs on LP_POOL; +ve = house gained)
-  liqPenaltiesE6: string; // liquidation penalties (LIQUIDATION_FEE legs; sit inside INSURANCE_FUND)
+  liqPenaltiesE6: string; // total liquidation penalties collected (LIQUIDATION_FEE; split LP_POOL + FEE_REVENUE). A memo — the shares are already counted inside feesHouse + lpOther.
   insuranceE6: string; // INSURANCE_FUND balance (incl. liq penalties + insurance transfers)
   lpOtherE6: string; // LP_POOL remainder (LP capital in/out + insurance draws) so the LP lines reconcile
   totalE6: string; // = feesHouse + LP balance + insurance = the house's ledger equity (≈ the P/L box)
@@ -45,10 +45,12 @@ export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
        FROM ledger_entries WHERE account_id = $1`,
       [lp],
     ),
+    // Liquidation penalties now split LP_POOL + FEE_REVENUE (no longer routed to insurance). Sum the
+    // positive (credit) legs across BOTH for the memo total; the shares already sit inside feesHouse + lpOther.
     db.query<{ liq: string }>(
-      `SELECT COALESCE(SUM(CASE WHEN reason = 'LIQUIDATION_FEE' THEN amount_uusdc ELSE 0 END), 0)::text AS liq
-       FROM ledger_entries WHERE account_id = $1`,
-      [ins],
+      `SELECT COALESCE(SUM(CASE WHEN reason = 'LIQUIDATION_FEE' AND amount_uusdc > 0 THEN amount_uusdc ELSE 0 END), 0)::text AS liq
+       FROM ledger_entries WHERE account_id IN ($1, $2)`,
+      [lp, fee],
     ),
   ]);
 

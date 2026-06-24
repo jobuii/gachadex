@@ -24,6 +24,7 @@ export function PoolView() {
   }, [refresh]);
 
   const sharePrice = pool ? Number(pool.sharePriceE6) / 1e6 : 1;
+  const d = pool?.display; // operator-published display snapshot (fee shares, NAV gain, APY)
   const act = async (fn) => {
     setErr(null);
     setBusy(true);
@@ -48,6 +49,10 @@ export function PoolView() {
         <div className="stat-card"><span className="sc-label">Share Price</span><span className="sc-val">${sharePrice.toFixed(4)}</span></div>
         <div className="stat-card"><span className="sc-label">Reserved (open OI)</span><span className="sc-val">{pool ? formatUsd(BigInt(pool.reservedUusdc)) : '—'}</span></div>
         <div className="stat-card"><span className="sc-label">Your Stake</span><span className="sc-val">{lp ? formatUsd(BigInt(lp.valueUusdc)) : '—'}</span></div>
+      </div>
+      <div className="stat-cards">
+        <div className="stat-card"><span className="sc-label">Total Fees Earned</span><span className="sc-val">{d ? formatUsd(BigInt(d.totalFeesEarnedE6)) : '—'}</span></div>
+        <div className="stat-card"><span className="sc-label">APY (7d)</span><span className="sc-val">{d ? `${d.apyPct.toLocaleString()}%` : '—'}</span></div>
       </div>
 
       {!user ? (
@@ -76,6 +81,18 @@ export function PoolView() {
             <button className="btn-ghost" disabled={busy || !shares} onClick={() => act(() => api.lpWithdraw(shares))}>
               Withdraw
             </button>
+          </div>
+        </div>
+      )}
+
+      {d && (
+        <div className="lp-fee-sources">
+          <h3 className="lp-fee-sources-title">LP Fee Sources</h3>
+          <p className="muted lp-fee-sources-sub">The share of each revenue stream that flows to liquidity providers.</p>
+          <div className="stat-cards">
+            <div className="stat-card"><span className="sc-label">Trading Fees</span><span className="sc-val">{d.lpTradingPct}%</span><span className="sc-sub">of Trading Fees</span></div>
+            <div className="stat-card"><span className="sc-label">Funding Fees</span><span className="sc-val">{d.lpFundingPct}%</span><span className="sc-sub">of current Funding Fees</span></div>
+            <div className="stat-card"><span className="sc-label">Liquidations</span><span className="sc-val">{d.lpLiquidationPct}%</span><span className="sc-sub">of Liquidation Fees</span></div>
           </div>
         </div>
       )}

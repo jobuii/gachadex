@@ -1,13 +1,14 @@
 import type { FastifyInstance } from 'fastify';
-import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, WithdrawalAutoProcessRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest, GameConfigRequest, GamePoolSeedRequest, BreakCancelRequest, ArenaCancelRequest } from '@pokex/shared-types';
+import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, LpSharePctRequest, WithdrawalAutoProcessRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest, GameConfigRequest, GamePoolSeedRequest, BreakCancelRequest, ArenaCancelRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { getDb } from '../db/client.ts';
 import { rl } from './_ratelimit.ts';
 import { requireAdminKey } from './admin.ts';
 import { setManualPrice, setPricePin } from '../services/admin-pricing.ts';
 import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from '../services/insurance.ts';
-import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFactor } from '../services/fees.ts';
+import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFactor, lpTradingPctView, setLpTradingPct, lpFundingPctView, setLpFundingPct, lpLiquidationPctView, setLpLiquidationPct } from '../services/fees.ts';
 import { markClampView, setMarkClampBps } from '../services/marks.ts';
+import { computePoolSnapshot, getPoolSnapshot, setPoolSnapshot } from '../services/pool-snapshot.ts';
 import { listCustomers } from '../services/customers.ts';
 import { marketStats } from '../services/admin-stats.ts';
 import { houseEconomics } from '../services/house-pnl.ts';
@@ -130,6 +131,38 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     await setMarkClampBps(await getDb(), bps);
     return markClampView();
   });
+
+  // Live-tunable LP revenue shares — the % of each source routed to the LP pool (the house keeps the rest).
+  // These drive the LIVE split mechanics immediately; the customer pool page shows a SEPARATELY-published
+  // snapshot (see /admin/pool-snapshot below), so tuning here doesn't flicker the public page. GET ->
+  // { pct, default }; POST a whole percent (0–100) -> the new one.
+  app.get('/admin/lp-trading-pct', rl(config.routeRateLimits.admin), async () => lpTradingPctView());
+  app.post('/admin/lp-trading-pct', rl(config.routeRateLimits.admin), async (req) => {
+    const { pct } = LpSharePctRequest.parse(req.body);
+    await setLpTradingPct(await getDb(), pct);
+    return lpTradingPctView();
+  });
+  app.get('/admin/lp-funding-pct', rl(config.routeRateLimits.admin), async () => lpFundingPctView());
+  app.post('/admin/lp-funding-pct', rl(config.routeRateLimits.admin), async (req) => {
+    const { pct } = LpSharePctRequest.parse(req.body);
+    await setLpFundingPct(await getDb(), pct);
+    return lpFundingPctView();
+  });
+  app.get('/admin/lp-liquidation-pct', rl(config.routeRateLimits.admin), async () => lpLiquidationPctView());
+  app.post('/admin/lp-liquidation-pct', rl(config.routeRateLimits.admin), async (req) => {
+    const { pct } = LpSharePctRequest.parse(req.body);
+    await setLpLiquidationPct(await getDb(), pct);
+    return lpLiquidationPctView();
+  });
+
+  // Pool-page display snapshot. GET -> { published, live } (what the page currently shows vs what a refresh
+  // would publish). POST refresh -> recompute + republish (the "Refresh pool numbers" button) so a fee-share
+  // change (and the NAV-gain / APY figures) propagate to the customer page only when the operator decides.
+  app.get('/admin/pool-snapshot', rl(config.routeRateLimits.admin), async () => {
+    const db = await getDb();
+    return { published: await getPoolSnapshot(db), live: await computePoolSnapshot(db) };
+  });
+  app.post('/admin/pool-snapshot/refresh', rl(config.routeRateLimits.admin), async () => setPoolSnapshot(await getDb()));
 
   // Live toggle: automatic withdrawal approval on/off. OFF => every withdrawal waits for manual approval.
   app.get('/admin/withdrawal-auto-process', rl(config.routeRateLimits.admin), async () => withdrawalAutoProcessView());

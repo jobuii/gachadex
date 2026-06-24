@@ -209,6 +209,9 @@ export const FundingFactorRequest = z.object({ bps: z.coerce.number().int().min(
 // (price creeps), higher = more pool protection (adopts moves faster).
 export const MarkClampRequest = z.object({ bps: z.coerce.number().int().min(100).max(9000) }).strict();
 
+// LP revenue-share knobs — the whole-percent (0–100) of a fee/funding/liquidation source routed to the pool.
+export const LpSharePctRequest = z.object({ pct: z.coerce.number().int().min(0).max(100) }).strict();
+
 // Admin toggle for automatic withdrawal approval. When false, all withdrawals require manual approval.
 export const WithdrawalAutoProcessRequest = z.object({ enabled: z.boolean() }).strict();
 

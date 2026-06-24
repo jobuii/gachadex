@@ -6,7 +6,7 @@ import { advisoryXactLock, type Db, type Queryer } from '../db/client.ts';
 import { getMarketById, type MarketRow } from './markets.ts';
 import { recomputeMark } from './marks.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, getBalance, postTxn } from './ledger.ts';
-import { getFeeBps, getLiqFeeBps } from './fees.ts';
+import { getFeeBps, getLiqFeeBps, getLpTradingPct, getLpLiquidationPct } from './fees.ts';
 import { getBigBetUsd, getBigWinUsd } from './chat-config.ts';
 import { emitChatEvent, type ChatEventInput } from './chat.ts';
 import { refreshReserved } from './lp.ts';
@@ -31,7 +31,7 @@ async function chargeFee(
   const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
   const lp = await getOrCreateSystemAccount(q, 'LP_POOL');
   const rev = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
-  const lpPart = (feeAmt * BigInt(config.feeLpSharePct)) / 100n;
+  const lpPart = (feeAmt * BigInt(getLpTradingPct())) / 100n;
   const revPart = feeAmt - lpPart;
   await postTxn(q, {
     reason,
@@ -955,7 +955,8 @@ function isLiquidatable(pos: PositionRow, market: MarketRow, markE6: bigint): bo
  * Force-close a position at the mark. The user's loss is capped at their margin; any shortfall
  * (bad debt, e.g. a gap through the liq price) is drawn from the insurance fund, and whatever
  * the insurance can't cover is socialized to the LP pool. A liquidation penalty (from any
- * remaining equity) tops up the insurance fund. Every leg is a balanced ledger txn.
+ * remaining equity) is split between the LP pool and house revenue per getLpLiquidationPct().
+ * Every leg is a balanced ledger txn.
  */
 async function liquidatePositionInTx(q: Queryer, pos: PositionRow, market: MarketRow, markE6: bigint, indexE6: bigint): Promise<void> {
   await settlePositionFunding(q, pos, market.id);
@@ -1014,9 +1015,12 @@ async function liquidatePositionInTx(q: Queryer, pos: PositionRow, market: Marke
   if (remaining > 0n) {
     liqFeeTaken = liqFee < remaining ? liqFee : remaining;
     if (liqFeeTaken > 0n) {
+      const rev = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
+      const lpLiqPart = (liqFeeTaken * BigInt(getLpLiquidationPct())) / 100n; // LP's configured share; house keeps the rest
       await postTxn(q, { reason: 'LIQUIDATION_FEE', refType: 'liquidation', refId: pos.id, entries: [
         { accountId: coll, amount: -liqFeeTaken },
-        { accountId: insurance, amount: liqFeeTaken },
+        { accountId: lp, amount: lpLiqPart },
+        { accountId: rev, amount: liqFeeTaken - lpLiqPart },
       ] });
     }
   }

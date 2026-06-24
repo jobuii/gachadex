@@ -1,7 +1,7 @@
 import { notional } from '@pokex/pricing';
 import { advisoryXactLock, type Db, type Queryer } from '../db/client.ts';
 import { openNotionalBySide } from './oi.ts';
-import { getFundingFactorBps } from './fees.ts';
+import { getFundingFactorBps, getLpFundingPct } from './fees.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './ledger.ts';
 
 /**
@@ -9,7 +9,8 @@ import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './led
  * A cumulative funding index advances each interval by a skew-proportional rate; positions
  * settle LAZILY (their snapshot vs the current cumulative) on their next interaction.
  * Convention: cumulative rises when longs are heavy -> longs pay, shorts receive.
- * The LP pool intermediates (it is the counterparty), so funding flows position <-> LP_POOL.
+ * The LP pool intermediates (it is the counterparty); funding flows position <-> LP_POOL, with the house
+ * keeping a configurable cut — getLpFundingPct() of each settlement goes to the pool, the rest to FEE_REVENUE.
  */
 
 export async function getCumulativeFundingE6(q: Queryer, marketId: string): Promise<bigint> {
@@ -62,17 +63,17 @@ export async function settlePositionFunding(q: Queryer, position: FundablePositi
     const notion = notional(BigInt(position.qty_e6), BigInt(position.avg_entry_e6));
     const base = (notion * delta) / 1_000_000n;
     signed = position.side === 'long' ? base : -base; // long pays when delta>0
-    const coll = await getOrCreateUserAccount(q, position.user_id, 'USER_COLLATERAL');
-    const lp = await getOrCreateSystemAccount(q, 'LP_POOL');
-    if (signed > 0n) {
+    if (signed !== 0n) {
+      const coll = await getOrCreateUserAccount(q, position.user_id, 'USER_COLLATERAL');
+      const lp = await getOrCreateSystemAccount(q, 'LP_POOL');
+      const rev = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
+      const lpPart = (signed * BigInt(getLpFundingPct())) / 100n; // LP's configured share; the house keeps the rest
+      // One balanced txn in either direction: payer's collateral <-> (LP share + house share). postTxn drops
+      // any zero leg, so a 100% LP share still nets clean, and the house shares both inflows and outflows.
       await postTxn(q, { reason: 'FUNDING', refType: 'position', refId: position.id, entries: [
         { accountId: coll, amount: -signed },
-        { accountId: lp, amount: signed },
-      ] });
-    } else if (signed < 0n) {
-      await postTxn(q, { reason: 'FUNDING', refType: 'position', refId: position.id, entries: [
-        { accountId: lp, amount: signed },
-        { accountId: coll, amount: -signed },
+        { accountId: lp, amount: lpPart },
+        { accountId: rev, amount: signed - lpPart },
       ] });
     }
   }

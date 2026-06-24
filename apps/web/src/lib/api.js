@@ -291,6 +291,17 @@ export const adminSetFundingFactor = (bps, adminKey) => adminReq('/admin/funding
 // GET -> { bps, default }; POST { bps } (100-9000).
 export const adminGetMarkClamp = (adminKey) => adminGet('/admin/mark-clamp', adminKey);
 export const adminSetMarkClamp = (bps, adminKey) => adminReq('/admin/mark-clamp', adminKey, { bps });
+
+// LP revenue-share knobs (whole percent). GET -> { pct, default }; POST { pct }.
+export const adminGetLpTradingPct = (adminKey) => adminGet('/admin/lp-trading-pct', adminKey);
+export const adminSetLpTradingPct = (pct, adminKey) => adminReq('/admin/lp-trading-pct', adminKey, { pct });
+export const adminGetLpFundingPct = (adminKey) => adminGet('/admin/lp-funding-pct', adminKey);
+export const adminSetLpFundingPct = (pct, adminKey) => adminReq('/admin/lp-funding-pct', adminKey, { pct });
+export const adminGetLpLiquidationPct = (adminKey) => adminGet('/admin/lp-liquidation-pct', adminKey);
+export const adminSetLpLiquidationPct = (pct, adminKey) => adminReq('/admin/lp-liquidation-pct', adminKey, { pct });
+// Pool-page display snapshot — GET { published, live }; POST refresh republishes.
+export const adminGetPoolSnapshot = (adminKey) => adminGet('/admin/pool-snapshot', adminKey);
+export const adminRefreshPoolSnapshot = (adminKey) => adminReq('/admin/pool-snapshot/refresh', adminKey, {});
 // Automatic withdrawal-approval toggle -> { enabled, default }.
 export const adminGetWithdrawalAutoProcess = (adminKey) => adminGet('/admin/withdrawal-auto-process', adminKey);
 export const adminSetWithdrawalAutoProcess = (enabled, adminKey) => adminReq('/admin/withdrawal-auto-process', adminKey, { enabled });

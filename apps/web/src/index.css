@@ -1416,6 +1416,10 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 .stat-card { background: var(--bg-2); border: 1px solid var(--border); padding: 0.85rem; display: flex; flex-direction: column; gap: 0.5rem; }
 .sc-label { font-size: 0.6rem; color: var(--text-muted); }
 .sc-val { font-size: 0.82rem; color: var(--text); }
+.sc-sub { font-size: 0.6rem; color: var(--text-muted); margin-top: -0.25rem; }
+.lp-fee-sources { margin-top: 1.5rem; }
+.lp-fee-sources-title { margin: 0 0 0.15rem; font-size: 0.95rem; letter-spacing: 0.02em; }
+.lp-fee-sources-sub { margin: 0 0 0.6rem; font-size: 0.72rem; }
 
 .lp-forms { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-top: 1rem; }
 .lp-form { display: flex; flex-direction: column; gap: 0.6rem; }

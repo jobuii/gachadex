@@ -128,7 +128,9 @@ export const config = {
   // Default 0 = no fee. This is the env-set DEFAULT; it's live-editable from the admin panel —
   // services/fees.ts overlays an operator override on top (shown as "Commission" in tx history).
   feeBps: num('FEE_BPS', 0),
-  feeLpSharePct: num('FEE_LP_SHARE_PCT', 50), // % of fees that go to LPs (rest to platform revenue)
+  feeLpSharePct: num('FEE_LP_SHARE_PCT', 50), // % of trading fees that go to LPs (rest to platform revenue)
+  lpFundingSharePct: num('LP_FUNDING_SHARE_PCT', 80), // % of funding that goes to LPs (rest to platform revenue)
+  lpLiquidationSharePct: num('LP_LIQ_SHARE_PCT', 60), // % of the liquidation penalty to LPs (rest to platform revenue)
 
   // Chat action bars: broadcast a BIG BET when an open's notional >= this (USD) and a BIG WIN when a
   // close's realized profit >= this (USD). Live-tunable via settings (see chat-config.ts).
