@@ -13,6 +13,10 @@ import type { Queryer } from '../db/client.ts';
 export type AccountType =
   | 'USER_COLLATERAL'
   | 'USER_POSITION_MARGIN'
+  // Per-user reserve held against a resting limit-OPEN order (docs/limit-stop-orders-spec.md). Lazily
+  // created via getOrCreateUserAccount on first reserve; released to collateral on fill/cancel. NOT a
+  // system account. Always 0 until resting orders ship (P1).
+  | 'RESTING_ORDER_MARGIN'
   | 'LP_POOL'
   | 'INSURANCE_FUND'
   | 'FEE_REVENUE'

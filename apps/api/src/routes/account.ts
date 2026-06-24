@@ -19,8 +19,9 @@ export async function accountRoutes(app: FastifyInstance): Promise<void> {
     return {
       availableUusdc: b.availableUusdc.toString(),
       lockedMarginUusdc: b.lockedMarginUusdc.toString(),
+      reservedUusdc: b.reservedUusdc.toString(), // margin earmarked against resting limit orders
       unrealizedPnlUusdc: uPnl.toString(),
-      equityUusdc: (b.availableUusdc + b.lockedMarginUusdc + uPnl).toString(),
+      equityUusdc: (b.availableUusdc + b.lockedMarginUusdc + b.reservedUusdc + uPnl).toString(),
       cashbackTotalUusdc: cashback.toString(),
     };
   });

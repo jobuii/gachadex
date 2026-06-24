@@ -769,3 +769,31 @@ ALTER TABLE game_prizes ADD COLUMN IF NOT EXISTS max_prize_e6 BIGINT;
 -- (Pack Rip / Set Poker prizes leave it at the default, so they sell at the plain mark).
 ALTER TABLE game_prizes ADD COLUMN IF NOT EXISTS multiplier_bps INT NOT NULL DEFAULT 10000;
 CREATE INDEX IF NOT EXISTS idx_game_prizes_user ON game_prizes(user_id, status);
+
+-- Resting orders: limit / stop-loss / take-profit (docs/limit-stop-orders-spec.md). A trigger that, when
+-- the mark crosses trigger_price_e6, market-fills at the mark via the engine's *InTx primitives in ONE tx.
+-- P1 wires 'limit' (open); SL/TP (reduce-only, position-attached) land in P2. All additive + idempotent.
+CREATE TABLE IF NOT EXISTS resting_orders (
+  id                    TEXT PRIMARY KEY,
+  user_id               TEXT NOT NULL REFERENCES users(id),
+  market_id             TEXT NOT NULL REFERENCES markets(id),
+  position_id           TEXT REFERENCES positions(id),     -- stop_loss / take_profit only
+  kind                  TEXT NOT NULL,                     -- limit | stop_loss | take_profit
+  reduce_only           BOOLEAN NOT NULL DEFAULT false,
+  side                  TEXT,                              -- limit-open only; NULL for reduce-only (derived)
+  qty_e6                BIGINT,                            -- limit only; SL/TP store full-close intent
+  leverage_e2           INT,                               -- limit-open only
+  trigger_price_e6      BIGINT NOT NULL,                   -- the price the mark must cross
+  slippage_e6           BIGINT,                            -- worst acceptable fill; for a limit = trigger price
+  reserved_margin_uusdc BIGINT NOT NULL DEFAULT 0,         -- limit-open reservation (a floor)
+  status                TEXT NOT NULL DEFAULT 'active',    -- active | filled | cancelled
+  reject_reason         TEXT,
+  idempotency_key       TEXT NOT NULL,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at           TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_resting_user_idem ON resting_orders(user_id, idempotency_key);
+-- one active SL + one active TP per position (P2)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_resting_pos_kind ON resting_orders(position_id, kind) WHERE status='active' AND reduce_only;
+-- the trigger sweep range-scans active orders per market
+CREATE INDEX IF NOT EXISTS idx_resting_active ON resting_orders(market_id, kind, trigger_price_e6) WHERE status='active';

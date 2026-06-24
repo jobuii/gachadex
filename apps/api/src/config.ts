@@ -161,6 +161,15 @@ export const config = {
   liquidationSweepMs: num('LIQUIDATION_SWEEP_MS', 5_000),
   oracleStaleMs: num('ORACLE_STALE_MS', 36 * 60 * 60 * 1000), // halt a market if no fresh print
 
+  // Resting orders (limit / SL / TP — docs/limit-stop-orders-spec.md). OFF by default: ships dark, the
+  // routes + the trigger loop both no-op until RESTING_ORDERS_ENABLED=true. The sweep runs on its OWN
+  // chained loop (separate from liquidations so a trigger backlog can't starve the risk engine); the
+  // per-sweep + per-user caps bound the work and stop resting-order spam.
+  restingOrdersEnabled: process.env.RESTING_ORDERS_ENABLED === 'true',
+  restingSweepMs: num('RESTING_SWEEP_MS', 5_000),
+  restingMaxPerSweep: num('RESTING_MAX_PER_SWEEP', 200),
+  restingMaxPerUserMarket: num('RESTING_MAX_PER_USER_MARKET', 50),
+
   // Pool risk cap (GMX-style MAX_PNL_FACTOR). Pause NEW opens once the pool's net liability to
   // traders (winners' unrealized profit, losers' losses capped at their margin) exceeds this
   // fraction of LP NAV — the "stop digging" guard that keeps a thin/underfunded pool from being
