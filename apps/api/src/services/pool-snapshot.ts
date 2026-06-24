@@ -16,7 +16,7 @@ export interface PoolSnapshot {
   lpFundingPct: number;
   lpLiquidationPct: number;
   totalFeesEarnedE6: string; // NAV gained over net LP capital contributed (what LPs have earned, mark-to-market)
-  apyPct: number; // since-inception APY from share-price growth (operator-published; see note in the UI)
+  apyPct: number; // trailing-7d earnings run-rate on the current NAV, annualized — the "APY (7d)" figure
   sharePriceE6: string;
   navUusdc: string;
   ageDays: number;
@@ -28,11 +28,11 @@ export async function computePoolSnapshot(db: Db): Promise<PoolSnapshot> {
   const { lp, nav, totalShares } = await poolState(db);
   const sharePriceE6 = poolSharePriceE6(nav, totalShares);
 
-  // Both reads scan the LP_POOL ledger and don't depend on each other — run them together:
-  //  - NAV gained = current NAV minus net capital LPs contributed (deposits − withdrawals) — what the pool
-  //    has earned for LPs (fees + funding + trader P/L), marked to market.
-  //  - pool age (days) from the first LP_POOL ledger entry, for the annualization.
-  const [dep, age] = await Promise.all([
+  // Three independent LP_POOL ledger scans — run them together:
+  //  - net LP capital in (deposits − withdrawals), for the all-time "NAV gained" figure.
+  //  - pool age (days), to bound the annualization window for a young pool.
+  //  - trailing-7d earnings (fees + funding + trader P/L) for the APY run-rate.
+  const [dep, age, earn] = await Promise.all([
     db.query<{ net: string }>(
       `SELECT COALESCE(SUM(amount_uusdc), 0)::text AS net FROM ledger_entries
        WHERE account_id = $1 AND reason IN ('LP_DEPOSIT', 'LP_WITHDRAW')`,
@@ -42,15 +42,28 @@ export async function computePoolSnapshot(db: Db): Promise<PoolSnapshot> {
       `SELECT EXTRACT(EPOCH FROM (now() - MIN(created_at)))::float8 AS secs FROM ledger_entries WHERE account_id = $1`,
       [lp],
     ),
+    db.query<{ e: string }>(
+      `SELECT COALESCE(SUM(amount_uusdc), 0)::text AS e FROM ledger_entries
+       WHERE account_id = $1 AND reason IN ('OPEN_FEE', 'CLOSE_FEE', 'FUNDING', 'REALIZED_PNL')
+         AND created_at > now() - interval '7 days'`,
+      [lp],
+    ),
   ]);
-  const totalFeesEarnedE6 = nav - BigInt(dep.rows[0].net);
+  const totalFeesEarnedE6 = nav - BigInt(dep.rows[0].net); // all-time earnings (NAV over net capital in)
   const days = Number(age.rows[0]?.secs ?? 0) / 86_400;
 
-  // APY from share-price growth since inception (the share price starts at $1.00 = 1e6). Annualizing a young
-  // pool is noisy — the operator controls when this is republished, hence the snapshot.
-  const priceRatio = Number(sharePriceE6) / 1_000_000;
+  // APY (7d): the trailing-7-day earnings as a run-rate on the CURRENT NAV, annualized (compounded) — the
+  // standard "7d APY". Unlike a since-inception share-price figure (which stays stuck on the pool's early
+  // high return and is hyper-sensitive — a 6% price move 5×'d it), this reflects the CURRENT earning rate on
+  // the CURRENT pool size, so it correctly FALLS when fresh capital dilutes the same earnings. A pool younger
+  // than 7d annualizes over its actual age; under ~12h old it's left at 0 (too little history to annualize).
+  const navNum = Number(nav);
+  const earn7d = Number(BigInt(earn.rows[0].e));
   let apyPct = 0;
-  if (days >= 0.5 && priceRatio > 0) apyPct = (Math.pow(priceRatio, 365 / days) - 1) * 100;
+  if (navNum > 0 && days >= 0.5) {
+    const windowDays = Math.min(7, days);
+    apyPct = (Math.pow(1 + earn7d / navNum, 365 / windowDays) - 1) * 100;
+  }
   if (!Number.isFinite(apyPct)) apyPct = 0;
 
   return {

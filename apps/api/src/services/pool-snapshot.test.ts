@@ -51,6 +51,36 @@ test('snapshot: default shares 50/80/60, NAV gain = NAV − net deposits, publis
   assert.equal(got!.lpFundingPct, 80);
 });
 
+test('APY (7d): trailing earnings run-rate that DROPS when fresh capital dilutes the pool', async () => {
+  const u = randomUUID();
+  await db.query(`INSERT INTO users(id, solana_pubkey) VALUES($1,$2)`, [u, 'pk-' + u.slice(0, 8)]);
+  await creditFaucet(db, u, 50_000);
+  await lpDeposit(db, u, usdc(1_000));
+  // recent earnings: $100 of trader losses into the pool
+  await db.tx(async (q) => {
+    const lp = await getOrCreateSystemAccount(q, 'LP_POOL');
+    const coll = await getOrCreateUserAccount(q, u, 'USER_COLLATERAL');
+    await postTxn(q, {
+      reason: 'REALIZED_PNL',
+      entries: [
+        { accountId: coll, amount: -usdc(100) },
+        { accountId: lp, amount: usdc(100) },
+      ],
+    });
+  });
+  // age the pool past 7d (backdate the deposits) so the trailing window annualizes; the earnings stay recent
+  const lpAcct = (await db.query<{ id: string }>(`SELECT id FROM accounts WHERE type='LP_POOL' AND user_id IS NULL`)).rows[0].id;
+  await db.query(`UPDATE ledger_entries SET created_at = now() - interval '8 days' WHERE account_id=$1 AND reason='LP_DEPOSIT'`, [lpAcct]);
+
+  const before = await computePoolSnapshot(db);
+  assert.ok(before.apyPct > 0, 'trailing APY is positive with recent earnings');
+
+  // a whale deposits 9× the pool — same recent earnings spread over a much bigger NAV ⇒ APY must FALL
+  await lpDeposit(db, u, usdc(9_000));
+  const after = await computePoolSnapshot(db);
+  assert.ok(after.apyPct < before.apyPct, `APY falls when capital dilutes it (${before.apyPct}% -> ${after.apyPct}%)`);
+});
+
 after(async () => {
   await closeDb();
 });
