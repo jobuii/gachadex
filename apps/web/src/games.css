@@ -394,3 +394,8 @@
   .gacha-card3d.done, .gacha-card3d-back, .gacha-card3d-conic { animation: none; }
   .gr-pop-epic, .gr-pop-epic::before, .gacha-reveal-banner { animation: none; }
 }
+
+/* dev-only reveal preview bar (import.meta.env.DEV → never in a production build) */
+.gacha-devbar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0 0 0.8rem; padding: 0.45rem 0.7rem; border: 1px dashed rgba(245,158,11,0.5); border-radius: 8px; background: rgba(245,158,11,0.05); font-size: 0.72rem; color: var(--muted, #8b8b9a); }
+.gacha-devbar button { padding: 0.25rem 0.7rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-2, #15151f); color: var(--text); font-size: 0.72rem; cursor: pointer; }
+.gacha-devbar button:hover { border-color: var(--cg, #f59e0b); color: var(--cg, #f59e0b); }

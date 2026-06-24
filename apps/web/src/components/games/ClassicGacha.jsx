@@ -103,6 +103,19 @@ export function ClassicGacha({ onTradeMarket }) {
 
   const closeReveal = () => { setRevealOpen(false); setRevealResult(null); };
 
+  // Dev-only: fire the reveal with a mock pull so the animation/sound can be tuned without a real (paid) open.
+  // Borrows a real card image from the current pool when available. Gated by import.meta.env.DEV → never ships.
+  const previewReveal = (rarity) => {
+    const c = cards?.[0];
+    const valueByTier = { common: '12000000', uncommon: '28000000', rare: '85000000', epic: '4475000000', legendary: '12000000000' };
+    setRevealSpentE6('50000000');
+    setRevealResult({
+      openId: 'preview', status: 'opened', verifyUrl: null,
+      card: { mint: 'preview', name: c?.name ?? 'Charizard VMAX', grade: 'PSA 10', imageUrl: c?.imageUrl ?? null, valueE6: valueByTier[rarity] ?? '12000000', rarity, marketId: null },
+    });
+    setRevealOpen(true);
+  };
+
   const sellBack = async (item, instant = false) => {
     setRipErr(null);
     try {
@@ -153,6 +166,16 @@ export function ClassicGacha({ onTradeMarket }) {
           </div>
         )}
       </div>
+
+      {import.meta.env.DEV && (
+        <div className="gacha-devbar">
+          <span>⚡ Preview reveal (dev only):</span>
+          <button onClick={() => previewReveal('common')}>Common</button>
+          <button onClick={() => previewReveal('rare')}>Rare</button>
+          <button onClick={() => previewReveal('epic')}>Epic</button>
+          <button onClick={() => previewReveal('legendary')}>Legendary</button>
+        </div>
+      )}
 
       <div className="gacha-tabs">
         {games.map((g) => (
