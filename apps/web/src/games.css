@@ -427,3 +427,43 @@
 /* card-in-pack meta (insured value + grade), collectorroll layout */
 .gacha-card-meta { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; width: 100%; margin-top: 0.3rem; }
 .gacha-card-grade { font-size: 0.64rem; color: var(--muted, #8b8b9a); white-space: nowrap; }
+
+/* smaller Contains/Buyback (less in-your-face) */
+.gacha-machine-grid .gacha-eyebrow { font-size: 0.52rem; }
+.gacha-machine-grid strong { font-size: 0.82rem; }
+/* qty stepper */
+.gacha-qty { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin: 0.8rem 0 0.5rem; }
+.gacha-qty-stepper { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.gacha-qty-stepper button { width: 34px; height: 32px; background: var(--bg-3, rgba(255,255,255,0.03)); color: var(--text); border: none; font-size: 1.1rem; cursor: pointer; }
+.gacha-qty-stepper button:disabled { opacity: 0.35; cursor: not-allowed; }
+.gacha-qty-stepper button:hover:not(:disabled) { background: var(--bg-2); color: var(--cg, #f59e0b); }
+.gacha-qty-stepper > span { min-width: 38px; text-align: center; font-weight: 800; font-variant-numeric: tabular-nums; }
+/* rare.win Open button: icon+label left, price right */
+.gacha-open-btn { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; width: 100%; }
+.gacha-open-left { display: inline-flex; align-items: center; gap: 0.45rem; }
+.gacha-open-price { font-variant-numeric: tabular-nums; }
+/* YOLO toggle */
+.gacha-yolo { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 0.6rem; padding: 0.5rem 0.7rem; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-3, rgba(255,255,255,0.02)); cursor: pointer; }
+.gacha-yolo.on { border-color: rgba(245,158,11,0.55); }
+.gacha-yolo-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text); }
+.gacha-toggle { position: relative; width: 38px; height: 20px; border-radius: 999px; background: var(--bg-2, #2a2a35); transition: background 0.15s; flex-shrink: 0; }
+.gacha-yolo.on .gacha-toggle { background: var(--cg, #f59e0b); }
+.gacha-toggle-knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left 0.15s; }
+.gacha-yolo.on .gacha-toggle-knob { left: 20px; }
+.gacha-yolo-note { font-size: 0.62rem; color: var(--muted, #8b8b9a); margin: 0.35rem 0 0; line-height: 1.35; }
+/* multi-open summary */
+.gacha-summary { max-width: min(94vw, 560px); width: 100%; background: var(--bg-2, #15151f); border: 1px solid var(--border); border-radius: 16px; padding: 1.2rem; }
+.gacha-summary h3 { margin: 0 0 0.6rem; text-align: center; }
+.gacha-summary-net { display: flex; flex-direction: column; align-items: center; gap: 0.2rem; margin-bottom: 0.9rem; }
+.gacha-summary-net strong { font-size: 2rem; font-weight: 900; font-variant-numeric: tabular-nums; }
+.gacha-summary-net strong.up { color: #22c55e; }
+.gacha-summary-net strong.down { color: #ef4444; }
+.gacha-summary-net .muted { font-size: 0.74rem; }
+.gacha-summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 0.6rem; max-height: 52vh; overflow-y: auto; margin-bottom: 1rem; }
+.gacha-summary-card { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; padding: 0.5rem; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-3, rgba(255,255,255,0.02)); }
+.gacha-summary-card img { width: 100%; height: auto; max-height: 110px; object-fit: contain; }
+.gacha-summary-name { font-size: 0.64rem; text-align: center; line-height: 1.2; max-height: 2.4em; overflow: hidden; }
+.gacha-summary-val { font-size: 0.78rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.gacha-summary-msg { display: flex; flex-direction: column; align-items: center; gap: 0.2rem; padding: 1.2rem 0; font-size: 0.72rem; }
+.gacha-summary-msg .up { color: #22c55e; }
+.gacha-summary .btn-primary { width: 100%; }

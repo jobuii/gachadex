@@ -4,6 +4,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import * as api from '../../lib/api.js';
 import { signAndSubmitNftWithdrawal } from '../../lib/withdraw.js';
 import { GachaReveal } from './GachaReveal.jsx';
+import { GachaSummary } from './GachaSummary.jsx';
 
 // Classic Gacha (docs/classic-gacha-cc-packs-spec.md, P0–P4). Browses the live Collector Crypt machines (a
 // game-filter, a machine strip, the selected machine's detail = price + tier legend + buyback %, the real
@@ -15,8 +16,8 @@ const tokenPrice = (e6) => Math.floor(Number(e6 || 0) / 1000).toLocaleString(); 
 const fmtTokens = (n) => Number(n || 0).toLocaleString();
 const TIER_COLOR = { common: '#ef4444', uncommon: '#22c55e', rare: '#a855f7', epic: '#f59e0b' }; // red · green · violet · gold
 const tierColor = (label, i) => TIER_COLOR[(label ?? '').toLowerCase()] ?? ['#ef4444', '#22c55e', '#a855f7', '#f59e0b'][i] ?? '#ef4444';
-const GAMES = [['all', 'All'], ['pokemon', 'Pokémon'], ['onepiece', 'One Piece'], ['mtg', 'MTG']];
-const ALLOWED_GAMES = new Set(['pokemon', 'onepiece', 'mtg']);
+const GAMES = [['all', 'All'], ['pokemon', 'Pokémon'], ['onepiece', 'One Piece']];
+const ALLOWED_GAMES = new Set(['pokemon', 'onepiece']);
 const HIDDEN_MACHINES = new Set(['pokemon_2500', 'pokemon_5000', 'pokemon_151']); // hidden per operator
 const titleCase = (s) => (s ?? '').replace(/\b\w/g, (c) => c.toUpperCase());
 const hideBrokenImg = (e) => { e.currentTarget.style.visibility = 'hidden'; }; // CC image 404 → hide, keep the card
@@ -36,6 +37,9 @@ export function ClassicGacha({ onTradeMarket }) {
   const [ripErr, setRipErr] = useState(null);
   const [inventory, setInventory] = useState([]);
   const [payWith, setPayWith] = useState('usdc');
+  const [yolo, setYolo] = useState(false); // YOLO/turbo: auto-sell commons
+  const [qty, setQty] = useState(1);
+  const [summaryResults, setSummaryResults] = useState(null); // multi-open results → GachaSummary
   const [tokens, setTokens] = useState(null); // { balance, untilFreePackTokens }
   const [tokensEnabled, setTokensEnabled] = useState(false);
   const { signMessage } = useWallet();
@@ -70,24 +74,38 @@ export function ClassicGacha({ onTradeMarket }) {
 
   const requestRip = (m) => { setRipErr(null); setConfirmMachine(m); }; // → buy-confirm modal
 
-  // Confirmed: charge + open, then poll for CC's reveal. The overlay opens immediately in its charging state
-  // (the poll latency IS the suspense), then receives the result and runs the beat sequence + payoff.
+  // Open one pack: charge, then poll until CC's reveal lands (the payment webhook can lag a few seconds).
+  const openOne = async (m) => {
+    const key = crypto.randomUUID();
+    let r = await api.openGachaPack(m.code, key, m.priceE6, payWith, yolo);
+    for (let i = 0; i < 12 && r.status === 'paid'; i++) {
+      await new Promise((res) => setTimeout(res, 2000));
+      r = await api.getGachaOpen(r.openId);
+    }
+    return r;
+  };
+
+  // Confirmed: open `qty` packs. The overlay opens immediately charging (latency = suspense); a single pack
+  // runs the beat reveal, multiple packs collect into a summary.
   const confirmRip = async () => {
     const m = confirmMachine;
+    const n = qty;
     setConfirmMachine(null);
     if (!m) return;
     setRipErr(null);
     setRipping(true);
+    setRevealSpentE6(m.priceE6); setRevealResult(null); setSummaryResults(null); setRevealOpen(true); // charging
     try {
-      const key = crypto.randomUUID();
-      let r = await api.openGachaPack(m.code, key, m.priceE6, payWith);
-      setRevealSpentE6(m.priceE6); setRevealResult(null); setRevealOpen(true); // charging
-      for (let i = 0; i < 12 && r.status === 'paid'; i++) {
-        await new Promise((res) => setTimeout(res, 2000));
-        r = await api.getGachaOpen(r.openId);
+      if (n === 1) {
+        const r = await openOne(m);
+        await loadInventory(); // so the reveal's Sell-now can resolve the held row
+        setRevealResult(r);
+      } else {
+        const results = [];
+        for (let i = 0; i < n; i++) results.push(await openOne(m)); // sequential = qty separate charges
+        await loadInventory();
+        setSummaryResults(results);
       }
-      await loadInventory(); // so the reveal's Sell-now can resolve the held row
-      setRevealResult(r); // → the overlay runs the beats (card payoff, or 'failed' if no card)
     } catch (e) {
       setRevealOpen(false);
       setRipErr(e?.status === 401 ? 'Sign in to rip a pack.' : e.message);
@@ -97,7 +115,7 @@ export function ClassicGacha({ onTradeMarket }) {
     }
   };
 
-  const closeReveal = () => { setRevealOpen(false); setRevealResult(null); };
+  const closeReveal = () => { setRevealOpen(false); setRevealResult(null); setSummaryResults(null); };
 
   // Dev-only: fire the reveal with a mock pull so the animation/sound can be tuned without a real (paid) open.
   // Borrows a real card image from the current pool when available. Gated by import.meta.env.DEV → never ships.
@@ -144,9 +162,10 @@ export function ClassicGacha({ onTradeMarket }) {
   if (machines.length === 0) return <div className="empty-state">No packs available right now.</div>;
 
   const base = machines.filter((m) => ALLOWED_GAMES.has(m.game) && !HIDDEN_MACHINES.has(m.code)); // Pokémon / One Piece / MTG, minus hidden
-  const shown = game === 'all' ? base : base.filter((m) => m.game === game);
+  const shown = (game === 'all' ? base : base.filter((m) => m.game === game)).slice().sort((a, b) => Number(a.priceE6) - Number(b.priceE6)); // ascending price
   const machine = machines.find((m) => m.code === selected) ?? shown[0] ?? base[0] ?? machines[0];
   const topCards = cards ? [...cards].sort((a, b) => Number(b.valueE6) - Number(a.valueE6)).slice(0, 25) : null; // top 25 by value
+  const totalE6 = String(Number(machine.priceE6 || 0) * qty);
   const revealCard = revealResult?.card ?? null;
   const revealItem = revealCard ? inventory.find((i) => i.mint === revealCard.mint) : null; // held row backing the reveal
 
@@ -211,6 +230,14 @@ export function ClassicGacha({ onTradeMarket }) {
               <div className="gacha-machine-ev"><span className="gacha-eyebrow">Expected</span><strong className="up">{usd(machine.evE6)}</strong></div>
             )}
           </div>
+          <div className="gacha-qty">
+            <span className="gacha-eyebrow">Quantity</span>
+            <div className="gacha-qty-stepper">
+              <button type="button" onClick={() => setQty((q) => Math.max(1, q - 1))} disabled={qty <= 1} aria-label="Fewer packs">−</button>
+              <span>{qty}</span>
+              <button type="button" onClick={() => setQty((q) => Math.min(10, q + 1))} disabled={qty >= 10} aria-label="More packs">+</button>
+            </div>
+          </div>
           {tokensEnabled && (
             <div className="gacha-paywith" role="group" aria-label="Pay with">
               <button className={`gacha-pay ${payWith === 'usdc' ? 'active' : ''}`} onClick={() => setPayWith('usdc')}>USDC</button>
@@ -218,8 +245,17 @@ export function ClassicGacha({ onTradeMarket }) {
             </div>
           )}
           <button className="btn-primary gacha-open-btn" disabled={ripping} onClick={() => requestRip(machine)}>
-            {ripping ? 'Opening…' : payWith === 'tokens' ? `Open — ${tokenPrice(machine.priceE6)} 🪙` : `Open — ${usd(machine.priceE6)}`}
+            <span className="gacha-open-left">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" /></svg>
+              {ripping ? 'Opening…' : 'Open Now'}
+            </span>
+            <span className="gacha-open-price">{payWith === 'tokens' ? `${tokenPrice(totalE6)} 🪙` : usd(totalE6)}</span>
           </button>
+          <button className={`gacha-yolo ${yolo ? 'on' : ''}`} type="button" aria-pressed={yolo} onClick={() => setYolo((v) => !v)}>
+            <span className="gacha-yolo-label">⚡ YOLO Mode</span>
+            <span className="gacha-toggle"><span className="gacha-toggle-knob" /></span>
+          </button>
+          <p className="gacha-yolo-note">Auto-sells commons for instant USDC — only reveals rares &amp; epics.</p>
           {ripErr && <div className="order-error" style={{ marginTop: '0.5rem' }}>{ripErr}</div>}
           <div className="gacha-machine-grid">
             <div><span className="gacha-eyebrow">Contains</span><strong>1 Card</strong></div>
@@ -292,12 +328,12 @@ export function ClassicGacha({ onTradeMarket }) {
       {confirmMachine && (
         <div className="gacha-modal-overlay" onClick={() => setConfirmMachine(null)}>
           <div className="gacha-confirm" onClick={(e) => e.stopPropagation()}>
-            <div className="gacha-confirm-art">{confirmMachine.image ? <img src={confirmMachine.image} alt="" onError={hideBrokenImg} /> : <span aria-hidden="true">📦</span>}</div>
-            <h3>Open this pack?</h3>
-            <p className="muted">{confirmMachine.name}</p>
+            <div className="gacha-confirm-art">{confirmMachine.image ? <img src={confirmMachine.image} alt="" referrerPolicy="no-referrer" onError={hideBrokenImg} /> : <span aria-hidden="true">📦</span>}</div>
+            <h3>Open {qty > 1 ? `${qty} packs` : 'this pack'}?</h3>
+            <p className="muted">{confirmMachine.name}{qty > 1 ? ` × ${qty}` : ''}{yolo ? ' · ⚡ YOLO' : ''}</p>
             <div className="gacha-confirm-total">
               <span>Total</span>
-              <strong>{payWith === 'tokens' ? `${tokenPrice(confirmMachine.priceE6)} 🪙 Tokens` : usd(confirmMachine.priceE6)}</strong>
+              <strong>{payWith === 'tokens' ? `${tokenPrice(String(Number(confirmMachine.priceE6) * qty))} 🪙 Tokens` : usd(String(Number(confirmMachine.priceE6) * qty))}</strong>
             </div>
             <p className="gacha-confirm-final">This action is final</p>
             <div className="gacha-modal-actions">
@@ -308,7 +344,9 @@ export function ClassicGacha({ onTradeMarket }) {
         </div>
       )}
 
-      {revealOpen && (
+      {revealOpen && (summaryResults ? (
+        <GachaSummary results={summaryResults} spentE6={revealSpentE6} onClose={closeReveal} />
+      ) : (
         <GachaReveal
           result={revealResult}
           spentE6={revealSpentE6}
@@ -318,7 +356,7 @@ export function ClassicGacha({ onTradeMarket }) {
           onTrade={() => { if (revealCard) trade(revealCard); closeReveal(); }}
           onClose={closeReveal}
         />
-      )}
+      ))}
     </div>
   );
 }

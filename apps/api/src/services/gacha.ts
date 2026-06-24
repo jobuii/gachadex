@@ -41,18 +41,18 @@ export interface GachaDeps {
 }
 
 export interface GachaCard { mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; rarity: string | null; marketId: string | null; year: string | null }
-export interface OpenResult { openId: string; status: string; card: GachaCard | null; verifyUrl: string | null; duplicate?: boolean }
+export interface OpenResult { openId: string; status: string; card: GachaCard | null; verifyUrl: string | null; turboRefundE6?: string | null; duplicate?: boolean }
 
 interface OpenRow {
   id: string; user_id: string; machine_code: string; price_e6: string; paid_with: string; cc_memo: string | null;
   payment_sig: string | null; custody_pubkey: string | null; status: string;
   nft_mint: string | null; nft_name: string | null; nft_image: string | null; grade: string | null;
-  insured_value_e6: string | null; rarity: string | null; nft_market_id: string | null; nft_year: string | null; created_at: string;
+  insured_value_e6: string | null; rarity: string | null; nft_market_id: string | null; nft_year: string | null; turbo_refund_e6: string | null; created_at: string;
 }
 
 const OPEN_COLS =
   `id, user_id, machine_code, price_e6::text AS price_e6, paid_with, cc_memo, payment_sig, custody_pubkey, status,
-   nft_mint, nft_name, nft_image, grade, insured_value_e6::text AS insured_value_e6, rarity, nft_market_id, nft_year, created_at::text AS created_at`;
+   nft_mint, nft_name, nft_image, grade, insured_value_e6::text AS insured_value_e6, rarity, nft_market_id, nft_year, turbo_refund_e6::text AS turbo_refund_e6, created_at::text AS created_at`;
 
 /** CC's provably-fair verify link for an open, or null before a memo exists. */
 const verifyUrlFor = (memo: string | null): string | null => (memo ? ccVerifyUrl(memo) : null);
@@ -64,6 +64,7 @@ const rowToResult = (r: OpenRow): OpenResult => ({
     ? { mint: r.nft_mint, name: r.nft_name, grade: r.grade, imageUrl: r.nft_image, valueE6: r.insured_value_e6 ?? '0', rarity: r.rarity, marketId: r.nft_market_id, year: r.nft_year }
     : null,
   verifyUrl: verifyUrlFor(r.cc_memo),
+  turboRefundE6: r.turbo_refund_e6,
 });
 
 /** Best-effort match of a won CC card to a tradeable GDEX market (P3 trade tie-in). CC names carry year/#/grade,
@@ -109,10 +110,11 @@ async function getOpenRow(db: Db, openId: string): Promise<OpenRow | null> {
 }
 
 // ─────────────────────────────── open ───────────────────────────────
-export async function openPack(db: Db, userId: string, opts: { machineCode: string; idempotencyKey: string; expectedPriceE6?: string; payWith?: 'usdc' | 'tokens' }, deps: GachaDeps): Promise<OpenResult> {
+export async function openPack(db: Db, userId: string, opts: { machineCode: string; idempotencyKey: string; expectedPriceE6?: string; payWith?: 'usdc' | 'tokens'; turbo?: boolean }, deps: GachaDeps): Promise<OpenResult> {
   if (!config.classicGachaEnabled) throw GACHA_OFF();
   const payWith = opts.payWith === 'tokens' ? 'tokens' : 'usdc';
   if (payWith === 'tokens' && !config.tokensEnabled) throw new HttpError(403, 'paying with Tokens is not available');
+  const turbo = opts.turbo === true; // YOLO: CC auto-sells a Common for instant USDC instead of delivering the slab
   const cc = deps.cc ?? defaultCcClient;
   const { chain } = deps;
 
@@ -130,9 +132,9 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
   const anchor = await db.tx(async (q) => {
     const id = randomUUID();
     const ins = await q.query<{ id: string }>(
-      `INSERT INTO gacha_pack_opens(id, user_id, idempotency_key, machine_code, price_e6, custody_pubkey, paid_with, status)
-       VALUES($1,$2,$3,$4,$5,$6,$7,'pending') ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id`,
-      [id, userId, opts.idempotencyKey, opts.machineCode, price.toString(), custodyPubkey, payWith],
+      `INSERT INTO gacha_pack_opens(id, user_id, idempotency_key, machine_code, price_e6, custody_pubkey, paid_with, turbo, status)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,'pending') ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id`,
+      [id, userId, opts.idempotencyKey, opts.machineCode, price.toString(), custodyPubkey, payWith, turbo],
     );
     if (!ins.rows[0]) {
       const ex = await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE user_id = $1 AND idempotency_key = $2`, [userId, opts.idempotencyKey]);
@@ -172,7 +174,7 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
     // generatePack has no on-chain effect, so build it FIRST: a CC failure (sold out / network — the common
     // case) then leaves a no-memo row with no funds moved, which the reconciler refunds cleanly. Only after
     // the memo is stored do we move money (fund → sign → submit).
-    const gen = await cc.generatePack({ playerAddress: custodyPubkey, packType: opts.machineCode, turbo: false });
+    const gen = await cc.generatePack({ playerAddress: custodyPubkey, packType: opts.machineCode, turbo });
     await db.query(`UPDATE gacha_pack_opens SET cc_memo = $2 WHERE id = $1`, [openId, gen.memo]);
     await chain.fundCustody(custodyPubkey, price);
     const signed = chain.signTx(gen.transaction, custody);
@@ -199,13 +201,39 @@ async function deliverOpen(db: Db, openId: string, deps: GachaDeps): Promise<Ope
       if (attempt < MAX_REVEAL_ATTEMPTS - 1) { await sleepFn(REVEAL_RETRY_MS); continue; }
       break; // still waiting after retries → leave 'paid' for the reconciler
     }
-    // Terminal reveal with NO nft_address and not waiting — e.g. CC auto-sold a Common (TURBO_MODE_BUYBACK /
-    // buybackAmount). We never request turbo, so this shouldn't happen; refund rather than strand the user's money
-    // forever (the spec's turbo_sold credit path is deferred). Log loudly — it means CC behaved unexpectedly.
+    // No NFT, not waiting → CC auto-sold a Common (YOLO/turbo): code=TURBO_MODE_BUYBACK with a buybackAmount.
+    // Credit the buyback minus the turbo cut → turbo_sold. A buyback signal with no usable amount can't be
+    // settled, so refund rather than strand.
+    if ((reveal.code === 'TURBO_MODE_BUYBACK' || reveal.buybackAmount != null) && Number(reveal.buybackAmount) > 0) {
+      return await settleTurboSold(db, openId, reveal.buybackAmount as number);
+    }
     console.error('[gacha] non-deliverable reveal — refunding open', openId, { code: reveal.code ?? null, buybackAmount: reveal.buybackAmount ?? null });
     return await settleRefund(db, openId, 'failed');
   }
   return rowToResult((await getOpenRow(db, openId))!); // still 'paid' (waiting) → reconciler finishes it
+}
+
+/** YOLO/turbo: CC auto-sold the Common for `buybackAmount` (base units == micro-USDC). Credit the user the
+ *  payout (minus the turbo cut), book the cut to FEE_REVENUE, debit TREASURY; status → turbo_sold. No NFT,
+ *  idempotent from 'paid'. (The on-chain buyback USDC lands in the custody wallet — operator sweep, like sell-back.) */
+async function settleTurboSold(db: Db, openId: string, buybackAmount: number): Promise<OpenResult> {
+  const gross = BigInt(Math.trunc(buybackAmount));
+  return await db.tx(async (q) => {
+    const row = (await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE id = $1 FOR UPDATE`, [openId])).rows[0];
+    if (!row) throw new HttpError(404, 'open not found');
+    if (row.status !== 'paid') return rowToResult(row); // settle once
+    const cut = (gross * BigInt(config.gachaTurboCutBps)) / 10000n; // 10% turbo cut → FEE_REVENUE
+    const payout = gross - cut;
+    const coll = await getOrCreateUserAccount(q, row.user_id, 'USER_COLLATERAL');
+    const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
+    const fee = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
+    await postTxn(q, {
+      reason: 'GACHA_TURBO_SELL', refType: 'gacha_open', refId: openId,
+      entries: [{ accountId: coll, amount: payout }, { accountId: fee, amount: cut }, { accountId: treasury, amount: -gross }],
+    });
+    await q.query(`UPDATE gacha_pack_opens SET status = 'turbo_sold', turbo_refund_e6 = $2, settled_at = now() WHERE id = $1`, [openId, payout.toString()]);
+    return { openId, status: 'turbo_sold', verifyUrl: verifyUrlFor(row.cc_memo), card: null, turboRefundE6: payout.toString() };
+  });
 }
 
 async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promise<OpenResult> {

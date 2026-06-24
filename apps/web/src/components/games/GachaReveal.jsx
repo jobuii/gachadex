@@ -49,7 +49,11 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   useEffect(() => {
     if (!result || started.current) return;
     started.current = true;
-    if (!card) { setPhase('failed'); return; }
+    if (!card) {
+      if (result.status === 'turbo_sold') { setPhase('turbo'); playSound('winRare'); playSound('confetti', { volume: 0.5 }); }
+      else setPhase('failed');
+      return;
+    }
     const seq = big === 'epic' ? BEATS.epic : big === 'rare' ? BEATS.rare : BEATS.base;
     const at = (ms, fn) => timers.current.push(setTimeout(fn, ms));
     at(seq.year, () => { setPhase('year'); playSound('beat', { volume: 0.7 }); });
@@ -103,6 +107,13 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
           <div className="gacha-reveal-failed">
             <h3>The pack didn’t open</h3>
             <p className="muted">Your payment was refunded. Try again in a moment.</p>
+            <button className="btn-primary" onClick={close}>Done</button>
+          </div>
+        ) : phase === 'turbo' ? (
+          <div className="gacha-reveal-failed">
+            <div className="gacha-reveal-banner" style={{ color: '#f59e0b' }}>⚡ YOLO</div>
+            <div className="gacha-reveal-val" style={{ color: '#22c55e' }}>+{usd(result.turboRefundE6)}</div>
+            <p className="muted">Your common was instantly auto-sold for USDC.</p>
             <button className="btn-primary" onClick={close}>Done</button>
           </div>
         ) : (
