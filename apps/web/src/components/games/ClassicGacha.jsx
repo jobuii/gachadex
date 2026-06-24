@@ -152,6 +152,14 @@ export function ClassicGacha({ onTradeMarket }) {
     }
   };
 
+  // Summary "Sell" — resolve the held inventory row by mint and instant-sell it (−10%).
+  const sellByMint = async (mint) => {
+    const it = inventory.find((i) => i.mint === mint && i.status === 'held');
+    if (!it) return false;
+    try { await api.sellGachaPrize(it.id, true); await loadInventory(); return true; }
+    catch (e) { setRipErr(e.message); return false; }
+  };
+
   // Trade tie-in: jump to the card's GDEX perp market (only shown when the won card matched one).
   const trade = (item) => { if (onTradeMarket && item?.marketId) onTradeMarket({ id: item.marketId }); };
 
@@ -359,7 +367,7 @@ export function ClassicGacha({ onTradeMarket }) {
       )}
 
       {revealOpen && (summaryResults ? (
-        <GachaSummary results={summaryResults} spentE6={revealSpentE6} onClose={closeReveal} />
+        <GachaSummary results={summaryResults} spentE6={revealSpentE6} onSell={sellByMint} onClose={closeReveal} />
       ) : (
         <GachaReveal
           result={revealResult}
