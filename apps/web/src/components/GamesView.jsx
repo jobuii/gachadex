@@ -8,13 +8,15 @@ import { TheBreak } from './games/TheBreak.jsx';
 import { PriceDuel } from './games/PriceDuel.jsx';
 import { CardFantasy } from './games/CardFantasy.jsx';
 import { DraftArena } from './games/DraftArena.jsx';
+import { ClassicGacha } from './games/ClassicGacha.jsx';
 
 // The playable game panels, keyed by the lobby/server id.
-const PANELS = { 'pack-rip': PackRip, 'set-poker': SetPoker, 'grade-gamble': GradeGamble, 'the-break': TheBreak, 'price-duel': PriceDuel, fantasy: CardFantasy, 'draft-arena': DraftArena };
+const PANELS = { 'classic-gacha': ClassicGacha, 'pack-rip': PackRip, 'set-poker': SetPoker, 'grade-gamble': GradeGamble, 'the-break': TheBreak, 'price-duel': PriceDuel, fantasy: CardFantasy, 'draft-arena': DraftArena };
 
 // The full 7-game lineup (docs/games-spec.md) — all live. id matches the server's games list; cat groups
 // the lobby into sections (like flip.gg's "Originals" rows).
 const LINEUP = [
+  { id: 'classic-gacha', name: 'Classic Gacha', icon: '💎', blurb: 'Open real graded-card packs from Collector Crypt.', live: true, cat: 'gacha' },
   { id: 'pack-rip', name: 'Pack Rip', icon: '🎴', blurb: 'Open a pack, reveal a card, sell it back for USDC.', live: true, cat: 'casino' },
   { id: 'set-poker', name: 'Set Poker', icon: '🃏', blurb: 'Five-card draw — your cards’ value beats the house.', live: true, cat: 'casino' },
   { id: 'grade-gamble', name: 'Grade Gamble', icon: '🔍', blurb: 'Gamble a raw card up the grade ladder.', live: true, cat: 'casino' },
@@ -26,11 +28,12 @@ const LINEUP = [
 
 // Lobby sections, in order.
 const SECTIONS = [
+  { cat: 'gacha', label: 'Classic Gacha', icon: '💎' },
   { cat: 'casino', label: 'Casino', icon: '🎰' },
   { cat: 'skill', label: 'Skill & PvP', icon: '🆚' },
 ];
 
-export function GamesView({ onTradeMarket }) {
+export function GamesView({ onTradeMarket, gamesVisible, classicGachaVisible }) {
   const [config, setConfig] = useState(null); // server games list (enabled flags + tiers)
   const [selected, setSelected] = useState(null);
   const startFeed = useGames((s) => s.start);
@@ -61,8 +64,9 @@ export function GamesView({ onTradeMarket }) {
           Provably-fair card games. Win a card, sell it back for USDC at its live oracle price — or keep it and trade the market.
         </p>
       </div>
-      {masterOff && <div className="games-banner">Games are not live yet — check back soon.</div>}
+      {gamesVisible && masterOff && !classicGachaVisible && <div className="games-banner">Games are not live yet — check back soon.</div>}
       {SECTIONS.map((s) => {
+        if (s.cat === 'gacha' ? !classicGachaVisible : !gamesVisible) return null; // each surface gates on its own flag
         const games = LINEUP.filter((g) => g.cat === s.cat);
         if (games.length === 0) return null;
         return (
@@ -70,8 +74,7 @@ export function GamesView({ onTradeMarket }) {
             <h3 className="games-section-head"><span className="games-section-icon" aria-hidden="true">{s.icon}</span>{s.label}</h3>
             <div className="games-grid">
               {games.map((g) => {
-                const sg = serverGame(g.id);
-                const enabled = g.live && sg?.enabled;
+                const enabled = g.cat === 'gacha' ? classicGachaVisible : g.live && serverGame(g.id)?.enabled;
                 return (
                   <button
                     key={g.id}

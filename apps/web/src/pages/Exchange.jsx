@@ -32,6 +32,7 @@ export function Exchange() {
   const [activeView, setActiveView] = useState('trade');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [gamesVisible, setGamesVisible] = useState(false); // Games nav + page stay hidden until GAMES_ENABLED (via /health)
+  const [classicGachaVisible, setClassicGachaVisible] = useState(false); // Classic Gacha entry hidden until CLASSIC_GACHA_ENABLED (via /health)
   const isMobile = useMediaQuery(MOBILE_QUERY);
   // Mobile Trade screen: show the market PICKER (the default, and on re-tapping Trade) vs the selected
   // card's chart. Remembers the last card — leaving Trade and coming back restores it; tapping Trade while
@@ -64,7 +65,7 @@ export function Exchange() {
   // Games are hidden from customers (no nav tab, no page) until the operator flips GAMES_ENABLED on the
   // API — /health surfaces that flag. Default false, so a fresh deploy never exposes games.
   useEffect(() => {
-    api.getHealth().then((h) => setGamesVisible(!!h.gamesEnabled)).catch(() => {});
+    api.getHealth().then((h) => { setGamesVisible(!!h.gamesEnabled); setClassicGachaVisible(!!h.classicGachaEnabled); }).catch(() => {});
   }, []);
 
   const loadMarkets = useCallback(async () => {
@@ -109,7 +110,7 @@ export function Exchange() {
       <div className="skin-cardback" aria-hidden="true"><span className="skin-emblem" /></div>
       <div className={`app-container ${chatOpen ? 'chat-open' : ''}`}>
       <ChatSidebar open={chatOpen} onToggle={toggleChat} />
-      <Navbar activeView={activeView} setActiveView={selectView} chatOpen={chatOpen} onToggleChat={toggleChat} gamesVisible={gamesVisible} />
+      <Navbar activeView={activeView} setActiveView={selectView} chatOpen={chatOpen} onToggleChat={toggleChat} gamesVisible={gamesVisible || classicGachaVisible} />
 
       {activeView === 'trade' && !isMobile && (
         <div className={`main-grid ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
@@ -162,7 +163,7 @@ export function Exchange() {
       {activeView === 'markets' && <MarketsScreener markets={markets} loading={loading} onTradeMarket={handleTradeMarket} />}
       {activeView === 'portfolio' && <Portfolio markets={markets} onSelect={handleTradeMarket} />}
       {activeView === 'pool' && <PoolView />}
-      {activeView === 'games' && gamesVisible && <GamesView onTradeMarket={handleTradeMarket} />}
+      {activeView === 'games' && (gamesVisible || classicGachaVisible) && <GamesView onTradeMarket={handleTradeMarket} gamesVisible={gamesVisible} classicGachaVisible={classicGachaVisible} />}
       {activeView === 'leaderboard' && <Leaderboard />}
       {activeView === 'admin' && <AdminPanel onGoToMarket={(id) => handleTradeMarket({ id })} />}
 

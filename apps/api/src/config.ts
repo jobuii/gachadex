@@ -152,6 +152,15 @@ export const config = {
   // this env flag is the kill switch that hides + disables the whole surface until the operator opts in.
   gamesEnabled: process.env.GAMES_ENABLED === 'true',
 
+  // Classic Gacha (docs/classic-gacha-cc-packs-spec.md) — real Collector Crypt graded-card packs as a Games
+  // surface, coexisting with the synthetic Pack Rip. P0 is a read-only lobby proxying CC's gacha API. OFF by
+  // default; the web hides the entry until this flips (exposed on /health). CC's gacha reads need no key
+  // (x-api-key optional). CC_ENV=dev points at CC's dev endpoints; CC_GACHA_URL overrides the base entirely.
+  classicGachaEnabled: process.env.CLASSIC_GACHA_ENABLED === 'true',
+  ccEnv: process.env.CC_ENV ?? 'main', // 'main' | 'dev'
+  ccGachaUrl: process.env.CC_GACHA_URL ?? '', // base override; default derived from ccEnv in the CC client
+  ccApiKey: process.env.COLLECTORCRYPT_API_KEY ?? '', // optional — CC gacha endpoints don't enforce it
+
   // Funding: per-accrual rate = skewFactor * (skew / openInterest), bps (the heavy side pays)
   fundingSkewFactorBps: num('FUNDING_SKEW_FACTOR_BPS', 30), // skew-balancing component (max)
   fundingIntervalMs: num('FUNDING_INTERVAL_MS', 60 * 60 * 1000), // hourly
