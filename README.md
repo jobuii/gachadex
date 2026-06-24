@@ -210,12 +210,15 @@ by construction and never gated.
 - **Pooled-LP counterparty.** There is no order book. Trades fill against the LP pool at the mark;
   the pool books trader PnL (LPs win when traders lose, and vice-versa).
 - **Fees.** A trading commission (`FEE_BPS`, **default 0** — off; when set, charged on both open and
-  close) splits between LPs and platform fee revenue (`FEE_LP_SHARE_PCT`); live-editable in the admin panel.
+  close) splits between LPs and platform fee revenue (`FEE_LP_SHARE_PCT`, default 50%). The LP's share of
+  fees, funding, and liquidation penalties is operator-tunable in the admin **"LP Fee Sources"** panel.
 - **Funding.** Hourly, skew-balancing: the heavier side pays the lighter side (cumulative-index lazy
-  settle). Keeps the mark tethered to the index.
+  settle) via the LP pool, which keeps a configurable cut (`LP_FUNDING_SHARE_PCT`, default 80%; the rest
+  → house revenue). Keeps the mark tethered to the index.
 - **Liquidations.** A maintenance-margin sweep runs every few seconds and after every accepted print.
-  Liquidations are loss-capped at the trader's margin; a 1% penalty tops up the **insurance fund**;
-  any bad debt is drawn from insurance first, then socialized across LP NAV. Every leg is a ledger entry.
+  Liquidations are loss-capped at the trader's margin; the penalty (`LIQ_FEE_BPS`) **splits LP/house**
+  (`LP_LIQ_SHARE_PCT`, default 60% LP — it no longer auto-funds insurance). Any bad debt is drawn from
+  insurance first, then socialized across LP NAV. Every leg is a ledger entry.
 - **Open-interest caps.** Per-side OI caps protect the pool from one-sided risk — a static cap **and**
   a NAV-relative cap (`OI_CAP_NAV_BPS`), so no single side can outgrow a set fraction of LP NAV.
 - **Adaptive depth.** The skew→premium conversion uses a depth that scales with pool NAV and
@@ -239,9 +242,10 @@ by construction and never gated.
   advisory lock, so concurrent orders on the same market serialize.
 - **Idempotency.** Every order/close carries a client key; replays (even concurrent ones) return the
   prior result instead of double-executing.
-- **Chart of accounts.** `USER_COLLATERAL`, `USER_POSITION_MARGIN`, `LP_POOL`, `INSURANCE_FUND`,
-  `FEE_REVENUE`, `FUNDING_POOL`, `PNL_CLEARING`, `FAUCET_SOURCE`, `TREASURY_USDC` (real-funds custody
-  mirror), `DROP_POOL` (the DROP giveaway pot).
+- **Chart of accounts.** `USER_COLLATERAL`, `USER_POSITION_MARGIN`, `RESTING_ORDER_MARGIN` (reserve held
+  against a resting limit order), `LP_POOL`, `INSURANCE_FUND`, `FEE_REVENUE`, `FUNDING_POOL`,
+  `PNL_CLEARING`, `FAUCET_SOURCE`, `TREASURY_USDC` (real-funds custody mirror), `DROP_POOL` (the DROP
+  giveaway pot), `GAME_POOL` (the Games house bankroll).
 
 ---
 
@@ -506,13 +510,16 @@ to the browser). Copy `apps/api/.env.example` → `apps/api/.env`; every key has
 | `OI_CAP_NAV_BPS` · `MAX_PNL_FACTOR_BPS` · `ADL_PNL_FACTOR_BPS` | `0` (off) | Pool-risk caps (NAV-relative OI · open-gate · ADL); turn on for real funds |
 | `FAUCET_DEFAULT_USD` | `10000` | Per-claim play USDC (balance capped at $1M) |
 | `REFERRAL_BONUS_USD` / `MAX_REFERRALS_PAID` | `1000` / `50` | Referral payout (both parties) + per-referrer cap |
-| `FEE_BPS` / `FEE_LP_SHARE_PCT` | `0` / `50` | Trading commission (bps; **default off**, charged on both open + close) + LP share; live-editable in admin. `FEE_LP_SHARE_PCT` also caps affiliate cashback at `100 − it`% (the house keeps the rest) |
-| `FUNDING_SKEW_FACTOR_BPS` / `FUNDING_INTERVAL_MS` | `30` / `1h` | Funding rate cap + cadence |
-| `LIQ_FEE_BPS` / `LIQUIDATION_SWEEP_MS` / `ORACLE_STALE_MS` | `100` / `5s` / `36h` | Liquidation penalty, sweep, staleness halt |
+| `FEE_BPS` / `FEE_LP_SHARE_PCT` | `0` / `50` | Trading commission (bps; **default off**, charged on both open + close) + the LP share of it; live-editable in admin. `FEE_LP_SHARE_PCT` also caps affiliate cashback at `100 − it`% (the house keeps the rest) |
+| `LP_FUNDING_SHARE_PCT` / `LP_LIQ_SHARE_PCT` | `80` / `60` | LP's share of **funding** + the **liquidation penalty** (the rest → house `FEE_REVENUE`). All three LP shares are live-editable in the admin **"LP Fee Sources"** panel; the pool page shows a separately-published snapshot (operator "Refresh pool numbers") |
+| `FUNDING_SKEW_FACTOR_BPS` / `FUNDING_INTERVAL_MS` | `30` / `1h` | Funding rate cap + cadence (each settlement splits LP/house per `LP_FUNDING_SHARE_PCT`) |
+| `LIQ_FEE_BPS` / `LIQUIDATION_SWEEP_MS` / `ORACLE_STALE_MS` | `100` / `5s` / `36h` | Liquidation penalty (split LP/house per `LP_LIQ_SHARE_PCT` — it **no longer auto-funds insurance**), sweep, staleness halt |
 | `CHAT_BIG_BET_USD` / `CHAT_BIG_WIN_USD` | `500` / `100` | Chat action-bar thresholds (USD; live-editable in the admin CHAT view) |
 | `DROP_TIPS_ENABLED` | `false` | Opens **real-USDC** player tipping into the DROP pot — keep off until the draw/payout ships |
 | `DROP_TIP_MIN_USD` / `DROP_TIP_MAX_USD` | `1` / `10000` | Per-tip bounds (USD) |
 | `DROP_INTERVAL_MIN` / `DROP_HOUSE_FLOOR_USD` / `DROP_GDEX_MIN` | `60` / `250` / `500000` | DROP round knobs (Phase 2 mechanic) |
+| `RESTING_ORDERS_ENABLED` | `false` | Gates **Limit / Stop-Loss / Take-Profit** resting orders (all fill at the mark; SL/TP are reduce-only position brackets = a free OCO). Ships **dark** — the routes 404 + the sweep no-ops until `true` |
+| `GAMES_ENABLED` | `false` | Gates the **Games** surface (provably-fair USDC games). One switch — reveals the customer Games tab/page **and** enables the game APIs together. Ships **dark** |
 
 ---
 
@@ -638,12 +645,17 @@ JPY toggle), and **7 UI skins**. **Delegated trading keys** (scoped, revocable) 
 alongside — live chat with reactions, leaderboard rank badges, presence, and moderation, plus the
 **DROP** giveaway-pot teaser with real-USDC player tipping (flag-gated, **off by default**).
 
+Two **flag-gated surfaces** ship **dark** alongside the live engine: **Limit / Stop-Loss / Take-Profit**
+resting orders (`RESTING_ORDERS_ENABLED` — all fill at the mark; SL/TP are reduce-only position brackets,
+a free OCO) and a **Games** surface of provably-fair USDC games (`GAMES_ENABLED`). The LP's cut of every
+revenue stream — **trading fees / funding / liquidation penalties** — is **operator-configurable** (admin
+**"LP Fee Sources"**), and the pool page surfaces LP **earnings + APY** from an operator-published snapshot.
+
 **Operator responsibility before real money on mainnet:** the security audit, KYC/AML, and geofencing
 are yours to put in place — the code only gates on `ALLOW_MAINNET_FUNDS=true`, it does not verify them.
 
 Still deferred: the full **DROP** round mechanic (the scheduled draw, the rare.win pack-open, and the
 on-chain NFT prize — needs rare.win API access), the **Sealed** price feed (the Sealed index stays gated
-until a sealed-product source is wired), Scrydex **population reports** + full JustTCG retirement,
-**limit / stop** orders (today's `limitPriceE6` is a slippage guard, not a resting order), a Go engine
-rewrite, and the **KMS-held deposit seed** (`DEPOSIT_SEED_KMS_REF` is recognized but throws "not
+until a sealed-product source is wired), Scrydex **population reports** + full JustTCG retirement, a Go
+engine rewrite, and the **KMS-held deposit seed** (`DEPOSIT_SEED_KMS_REF` is recognized but throws "not
 implemented" — use `DEPOSIT_MASTER_SEED` for now).
