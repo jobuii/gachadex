@@ -160,6 +160,16 @@ test('open: a CC-refunded pack credits the buy back', async () => {
   assert.equal(await collOf(user), before); // refunded
 });
 
+test('open: a non-deliverable reveal (CC auto-sell — we never request turbo) refunds, never strands paid', async () => {
+  const user = await newUser();
+  const before = await collOf(user);
+  const cc = fakeCc();
+  cc.reveals = [{ success: true, code: 'TURBO_MODE_BUYBACK', buybackAmount: 30_000_000 }]; // no nft_address, not WAITING
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'nondeliver' }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(r.status, 'failed');         // refunded, not stuck 'paid' forever
+  assert.equal(await collOf(user), before); // fully refunded
+});
+
 test('sell-back: 95% to the user, 5% to FEE_REVENUE, prize sold once', async () => {
   const user = await newUser();
   const chain = fakeChain();

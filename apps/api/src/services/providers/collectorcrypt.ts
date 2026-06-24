@@ -1,11 +1,11 @@
-/* Collector Crypt gacha API client — server-only, READ-ONLY subset for the Classic Gacha lobby (P0).
+/* Collector Crypt gacha API client — server-only, for Classic Gacha.
    docs/classic-gacha-cc-packs-spec.md §3. Ported from rare.win's proven lib/collectorcrypt.ts.
 
    Base: gacha.collectorcrypt.com (CC_ENV=dev → dev-gacha.collectorcrypt.com; CC_GACHA_URL overrides).
    Auth: optional x-api-key (config.ccApiKey), never required by CC.
-   Monetary fields from these GET reads (machines.price/ev, getNfts.insured_value, winners.insuredValue) are
-   DOLLARS, not base units — the `toLobby*` mappers convert to micro-USDC for the wire. The open / buyback /
-   submit (paying) endpoints are deliberately NOT here; they arrive in P1 with the custody work. */
+   Two halves: the READ-ONLY lobby GETs (P0) whose monetary fields (machines.price/ev, getNfts.insured_value,
+   winners.insuredValue) are DOLLARS — the `toLobby*` mappers convert to micro-USDC for the wire — and the
+   paying POSTs (P1, generate / submit / open / buyback) whose monetary fields are USDC BASE UNITS. */
 import { config } from '../../config.ts';
 import { usdc } from '../../money.ts';
 
@@ -46,7 +46,8 @@ async function gachaGet<T>(
     }
     clearTimeout(timer);
     if (res.status >= 500 && attempt < retries) { await sleep(300 * 2 ** attempt); continue; } // transient 5xx → retry
-    throw new Error(`CC gacha ${path} → ${res.status}`);
+    const body = await res.text().catch(() => ''); // keep CC's error text — diagnosing the live test needs it
+    throw new Error(`CC gacha ${path} → ${res.status}${body ? ` ${body.slice(0, 300)}` : ''}`);
   }
 }
 
@@ -149,7 +150,10 @@ async function gachaPost<T>(path: string, body: unknown, opts: { timeoutMs?: num
       headers: { 'Content-Type': 'application/json', ...(config.ccApiKey ? { 'x-api-key': config.ccApiKey } : {}) },
       body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`CC gacha ${path} → ${res.status}`);
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => ''); // surface CC's error text (e.g. sold-out) for the live test
+      throw new Error(`CC gacha ${path} → ${res.status}${errBody ? ` ${errBody.slice(0, 300)}` : ''}`);
+    }
     return (await res.json()) as T;
   } finally {
     clearTimeout(timer);

@@ -206,7 +206,7 @@ export const getArena = () => req('/games/arena', { auth: true }); // { arena: A
 export const getArenaById = (roundId) => req(`/games/arena/${roundId}`, { auth: true });
 export const arenaJoin = (wishlist, idempotencyKey) => req('/games/arena/join', { method: 'POST', auth: true, body: { wishlist, idempotencyKey } });
 
-// --- classic gacha (docs/classic-gacha-cc-packs-spec.md P0 — read-only Collector Crypt lobby; public) ---
+// --- classic gacha (docs/classic-gacha-cc-packs-spec.md) — public Collector Crypt lobby reads (P0) below; authed buy/sell/withdraw/Tokens (P1–P4) further down ---
 export const getCcMachines = () => req('/gacha/machines'); // { machines: [{ code, name, game, priceE6, buybackPct, tiers, stock, image }] }
 export const getCcMachineCards = (code) => req(`/gacha/machines/${encodeURIComponent(code)}/cards`); // { cards: [{ mint, name, imageUrl, valueE6, rarity }] }
 export const getCcWinners = (count = 50) => req(`/gacha/winners?count=${count}`); // { winners: [{ winner, mint, name, imageUrl, valueE6, tier, packType }] }

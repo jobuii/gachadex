@@ -4,10 +4,10 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import * as api from '../../lib/api.js';
 import { signAndSubmitNftWithdrawal } from '../../lib/withdraw.js';
 
-// Classic Gacha lobby (docs/classic-gacha-cc-packs-spec.md, P0 — read-only). Browses the live Collector
-// Crypt machines: a game-filter, a machine strip, the selected machine's detail (price + tier legend +
-// buyback %), the real graded cards in its pool, and a recent-winners ticker. Buying arrives in P1, so the
-// Rip button is a disabled placeholder here.
+// Classic Gacha (docs/classic-gacha-cc-packs-spec.md, P0–P4). Browses the live Collector Crypt machines (a
+// game-filter, a machine strip, the selected machine's detail = price + tier legend + buyback %, the real
+// graded cards in its pool, a recent-winners ticker), rips a pack (pay USDC or loyalty Tokens) and reveals
+// the won card, and manages pulls in inventory: sell back, trade the matched GDEX market, or withdraw the NFT.
 
 const usd = (e6) => formatUsd(BigInt(e6 || 0)); // `|| 0` guards '', null, undefined (e6 is always an integer string)
 const tokenPrice = (e6) => Math.floor(Number(e6 || 0) / 1000).toLocaleString(); // a pack's Token price = USD×1000 = priceE6/1000
@@ -15,6 +15,7 @@ const fmtTokens = (n) => Number(n || 0).toLocaleString();
 const TIER_COLOR = { common: '#eab308', uncommon: '#22c55e', rare: '#3b82f6', epic: '#ef4444', legendary: '#a855f7', mythic: '#f472b6' };
 const tierColor = (label, i) => TIER_COLOR[(label ?? '').toLowerCase()] ?? ['#eab308', '#22c55e', '#3b82f6', '#ef4444'][i] ?? '#eab308';
 const titleCase = (s) => (s ?? '').replace(/\b\w/g, (c) => c.toUpperCase());
+const hideBrokenImg = (e) => { e.currentTarget.style.visibility = 'hidden'; }; // CC image 404 → hide, keep the card
 
 export function ClassicGacha({ onTradeMarket }) {
   const [machines, setMachines] = useState([]);
@@ -56,7 +57,7 @@ export function ClassicGacha({ onTradeMarket }) {
     return () => { alive = false; };
   }, [selected]);
 
-  const loadInventory = () => api.getGachaInventory().then((r) => setInventory(r.inventory ?? [])).catch(() => {});
+  const loadInventory = () => { if (!api.hasSession()) return; api.getGachaInventory().then((r) => setInventory(r.inventory ?? [])).catch(() => {}); };
   useEffect(() => { loadInventory(); }, []);
   // Keep the winners ticker fresh — CC's feed moves as other players rip.
   useEffect(() => {
@@ -64,7 +65,7 @@ export function ClassicGacha({ onTradeMarket }) {
     return () => clearInterval(t);
   }, []);
   // Loyalty Tokens: the balance/progress, and whether spending Tokens is enabled (earn always accrues).
-  const loadTokens = () => api.getTokenBalance().then(setTokens).catch(() => {});
+  const loadTokens = () => { if (!api.hasSession()) return; api.getTokenBalance().then(setTokens).catch(() => {}); };
   useEffect(() => { loadTokens(); api.getHealth().then((h) => setTokensEnabled(!!h.tokensEnabled)).catch(() => {}); }, []);
 
   // Rip: open a pack, then poll until CC's reveal lands (the payment webhook can lag a few seconds).
@@ -202,7 +203,7 @@ export function ClassicGacha({ onTradeMarket }) {
             <div className="gacha-card-grid">
               {cards.map((c) => (
                 <div key={c.mint} className="gacha-card">
-                  <img src={c.imageUrl} alt={c.name} loading="lazy" onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
+                  <img src={c.imageUrl} alt={c.name} loading="lazy" onError={hideBrokenImg} />
                   <span className="gacha-card-name" title={c.name}>{c.name}</span>
                   <span className="gacha-card-val">{usd(c.valueE6)}</span>
                 </div>
@@ -233,7 +234,7 @@ export function ClassicGacha({ onTradeMarket }) {
           <div className="gacha-card-grid">
             {inventory.map((it) => (
               <div key={it.id} className="gacha-card">
-                {it.imageUrl && <img src={it.imageUrl} alt={it.name ?? ''} loading="lazy" onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />}
+                {it.imageUrl && <img src={it.imageUrl} alt={it.name ?? ''} loading="lazy" onError={hideBrokenImg} />}
                 <span className="gacha-card-name" title={it.name ?? ''}>{it.name ?? 'card'}{it.grade ? ` · ${it.grade}` : ''}</span>
                 <span className="gacha-card-val">{usd(it.valueE6)}</span>
                 {it.status === 'held' ? (

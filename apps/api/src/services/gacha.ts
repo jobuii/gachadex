@@ -12,18 +12,19 @@ import type { GachaChain } from './custody/gacha-chain.ts';
 import { defaultCcClient, ccVerifyUrl, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
 
 /**
- * Classic Gacha service (docs/classic-gacha-cc-packs-spec.md, P1 — buy → open → sell-back, USDC only).
+ * Classic Gacha service (docs/classic-gacha-cc-packs-spec.md, P1–P4 — buy → open → sell-back / withdraw,
+ * pay with USDC or loyalty Tokens).
  *
  * Custodial + real-money: the user pays from their GDEX balance (the USDC ledger is the spend gate), the hot
  * wallet JIT-funds a per-user NFT-custody wallet, that wallet pays CC + receives the real graded-card NFT,
- * and a sell-back returns CC's buyback USDC to the hot wallet (altRecipient) with GDEX taking a 5% cut.
+ * and a sell-back returns CC's buyback USDC to the hot wallet (altRecipient) with GDEX taking a 5% cut
+ * (10% on an instant sell-on-reveal). A held NFT can instead be withdrawn to the user's own wallet (P2).
  *
  * The on-chain ops are behind an injected `GachaChain` and the CC API behind an injected `CcClient`, so the
  * money / idempotency / state-machine logic below is unit-tested with fakes; the live Solana + CC behavior is
  * the operator's real-funds test (spec P1). Money invariants (spec §16): receipt-before-payment; a row with a
  * payment_sig is never auto-failed; every failed/refunded buy posts exactly one GACHA_REFUND; the inventory
- * write is idempotent on the mint; sell-back locks the prize row + checks status='held'. Turbo / instant-sell /
- * withdraw / convert are later phases.
+ * write is idempotent on the mint; sell-back locks the prize row + checks status='held'.
  */
 
 const GACHA_OFF = () => new HttpError(404, 'classic gacha is not available');
@@ -53,13 +54,16 @@ const OPEN_COLS =
   `id, user_id, machine_code, price_e6::text AS price_e6, paid_with, cc_memo, payment_sig, custody_pubkey, status,
    nft_mint, nft_name, nft_image, grade, insured_value_e6::text AS insured_value_e6, rarity, nft_market_id, created_at::text AS created_at`;
 
+/** CC's provably-fair verify link for an open, or null before a memo exists. */
+const verifyUrlFor = (memo: string | null): string | null => (memo ? ccVerifyUrl(memo) : null);
+
 const rowToResult = (r: OpenRow): OpenResult => ({
   openId: r.id,
   status: r.status,
   card: r.nft_mint
     ? { mint: r.nft_mint, name: r.nft_name, grade: r.grade, imageUrl: r.nft_image, valueE6: r.insured_value_e6 ?? '0', rarity: r.rarity, marketId: r.nft_market_id }
     : null,
-  verifyUrl: r.cc_memo ? ccVerifyUrl(r.cc_memo) : null,
+  verifyUrl: verifyUrlFor(r.cc_memo),
 });
 
 /** Best-effort match of a won CC card to a tradeable GDEX market (P3 trade tie-in). CC names carry year/#/grade,
@@ -75,7 +79,7 @@ async function matchMarket(q: Queryer, cardName: string | null): Promise<string 
   return r.rows[0]?.id ?? null;
 }
 
-// ── reveal-metadata extraction (CC's openPack response carries the won card; real DAS reconcile is P2) ──
+// ── reveal-metadata extraction (the won card's name/grade/value come from CC's openPack response) ──
 function attr(reveal: CcOpenResult, key: string): string | null {
   const hit = (reveal.nftWon?.content?.metadata?.attributes ?? []).find((x) => (x.trait_type ?? '').toLowerCase() === key.toLowerCase());
   return hit && hit.value != null ? String(hit.value) : null;
@@ -191,13 +195,17 @@ async function deliverOpen(db: Db, openId: string, deps: GachaDeps): Promise<Ope
   for (let attempt = 0; attempt < MAX_REVEAL_ATTEMPTS; attempt++) {
     const reveal = await cc.openPackReveal(row.cc_memo);
     if (reveal.nft_address) return await recordReveal(db, openId, reveal);
-    if (reveal.code === 'WAITING_FOR_WEBHOOK' && attempt < MAX_REVEAL_ATTEMPTS - 1) {
-      await sleepFn(REVEAL_RETRY_MS);
-      continue;
+    if (reveal.code === 'WAITING_FOR_WEBHOOK') {
+      if (attempt < MAX_REVEAL_ATTEMPTS - 1) { await sleepFn(REVEAL_RETRY_MS); continue; }
+      break; // still waiting after retries → leave 'paid' for the reconciler
     }
-    break;
+    // Terminal reveal with NO nft_address and not waiting — e.g. CC auto-sold a Common (TURBO_MODE_BUYBACK /
+    // buybackAmount). We never request turbo, so this shouldn't happen; refund rather than strand the user's money
+    // forever (the spec's turbo_sold credit path is deferred). Log loudly — it means CC behaved unexpectedly.
+    console.error('[gacha] non-deliverable reveal — refunding open', openId, { code: reveal.code ?? null, buybackAmount: reveal.buybackAmount ?? null });
+    return await settleRefund(db, openId, 'failed');
   }
-  return rowToResult((await getOpenRow(db, openId))!); // still 'paid' → reconciler finishes it
+  return rowToResult((await getOpenRow(db, openId))!); // still 'paid' (waiting) → reconciler finishes it
 }
 
 async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promise<OpenResult> {
@@ -216,7 +224,7 @@ async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promi
       `UPDATE gacha_pack_opens SET status='opened', nft_mint=$2, nft_name=$3, nft_image=$4, grade=$5, insured_value_e6=$6, rarity=$7, nft_market_id=$8, opened_at=now() WHERE id=$1`,
       [openId, card.mint, card.name, card.imageUrl, card.grade, card.insuredValueE6, card.rarity, marketId],
     );
-    return { openId, status: 'opened', verifyUrl: cur.cc_memo ? ccVerifyUrl(cur.cc_memo) : null, card: { mint: card.mint, name: card.name, grade: card.grade, imageUrl: card.imageUrl, valueE6: card.insuredValueE6, rarity: card.rarity, marketId } };
+    return { openId, status: 'opened', verifyUrl: verifyUrlFor(cur.cc_memo), card: { mint: card.mint, name: card.name, grade: card.grade, imageUrl: card.imageUrl, valueE6: card.insuredValueE6, rarity: card.rarity, marketId } };
   });
 }
 
@@ -340,7 +348,12 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
     if (!submit.success && !submit.signature) throw new HttpError(502, 'buyback submission failed');
     gross = BigInt(Math.trunc(quote.refundAmount)); // base units CC commits to pay the hot wallet
   } catch (e) {
-    await db.query(`UPDATE gacha_nft_inventory SET status = 'held' WHERE id = $1 AND status = 'selling'`, [prizeId]).catch(() => {}); // release the claim → retryable
+    // Release the claim (selling → held) so the user can retry. Most submit failures mean nothing moved (build
+    // error / 4xx / pre-broadcast timeout). The rare broadcast-then-timeout leaves the NFT gone yet the row back at
+    // 'held' — log so an operator can reconcile (no inventory reconciler yet; mirrors the withdraw path's logging).
+    await db.query(`UPDATE gacha_nft_inventory SET status = 'held' WHERE id = $1 AND status = 'selling'`, [prizeId])
+      .catch((revertErr) => console.error('[gacha] sell-back revert failed — prize stuck "selling":', prizeId, revertErr));
+    console.error('[gacha] sell-back failed (released to held — verify the NFT is still in custody):', prizeId, e instanceof Error ? e.message : e);
     throw e;
   }
 

@@ -57,7 +57,8 @@ export async function gachaRoutes(app: FastifyInstance): Promise<void> {
     gate();
     const q = req.query as { count?: string; packType?: string };
     const count = Math.min(Number(q.count) || 50, 200);
-    const { data } = await getAllWinners({ count, packType: q.packType });
+    const packType = q.packType && MACHINE_CODE_RE.test(q.packType) ? q.packType : undefined; // validate before proxying to CC (like machineCode)
+    const { data } = await getAllWinners({ count, packType });
     return { winners: (data ?? []).map(toLobbyWinner) };
   });
 
