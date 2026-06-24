@@ -790,6 +790,7 @@ CREATE TABLE IF NOT EXISTS gacha_pack_opens (
   status           TEXT NOT NULL DEFAULT 'pending',
   nft_mint         TEXT, nft_name TEXT, nft_image TEXT, grade TEXT, insured_value_e6 BIGINT, rarity TEXT,
   nft_market_id    TEXT,                              -- matched GDEX market (P3 trade tie-in; often NULL)
+  nft_year         TEXT,                              -- card year, for the reveal "Issued" beat
   turbo_refund_e6  BIGINT,                            -- USDC paid on a turbo Common auto-sell (deferred)
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   opened_at        TIMESTAMPTZ,

@@ -42,7 +42,7 @@ test('toLobbyMachine: missing tierRanges/thumbnail/buyback degrade to null/0', (
 
 test('toLobbyCard: nft_address→mint, insured_value→micro-USDC', () => {
   const n: CcPackNft = { nft_address: 'MintAbc', name: '2017 Charizard PSA 10', rarity: 'epic', image: 'https://cc/c.png', insured_value: 4475 };
-  assert.deepEqual(toLobbyCard(n), { mint: 'MintAbc', name: '2017 Charizard PSA 10', imageUrl: 'https://cc/c.png', valueE6: '4475000000', rarity: 'epic' });
+  assert.deepEqual(toLobbyCard(n), { mint: 'MintAbc', name: '2017 Charizard PSA 10', imageUrl: 'https://cc/c.png', valueE6: '4475000000', rarity: 'epic', grade: 'PSA 10' });
 });
 
 test('toLobbyWinner: nested name/image, insuredValue→micro-USDC, prize_tier→tier', () => {

@@ -13,27 +13,25 @@ import { RevealFX } from './RevealFX.jsx';
 const usd = (e6) => formatUsd(BigInt(e6 || 0));
 
 const RARITY = {
-  common: { color: '#9aa0aa', label: 'Common', fx: null, sound: 'winCommon' },
-  uncommon: { color: '#22c55e', label: 'Uncommon', fx: null, sound: 'winCommon' },
-  rare: { color: '#3b82f6', label: 'Rare', fx: 'rare', sound: 'winRare' },
-  epic: { color: '#a855f7', label: 'Epic', fx: 'epic', sound: 'winEpic' },
-  legendary: { color: '#f59e0b', label: 'Legendary', fx: 'epic', sound: 'winEpic' },
-  mythic: { color: '#f472b6', label: 'Mythic', fx: 'epic', sound: 'winEpic' },
+  common: { color: '#ef4444', label: 'Common', fx: null, sound: 'winCommon' }, // red
+  uncommon: { color: '#22c55e', label: 'Uncommon', fx: null, sound: 'winCommon' }, // green
+  rare: { color: '#a855f7', label: 'Rare', fx: 'rare', sound: 'winRare' }, // violet — lighter celebration
+  epic: { color: '#f59e0b', label: 'Epic', fx: 'epic', sound: 'winEpic' }, // gold — the full jackpot
 };
 const tierOf = (r) => RARITY[(r || '').toLowerCase()] ?? RARITY.common;
 
-// Per-tier beat timings (ms): grade → tier → flip → done. Epics linger for maximum suspense.
+// Per-tier beat timings (ms): Year → Grade → Type → flip → done (revealed card). Epics linger for max suspense.
 const BEATS = {
-  base: { grade: 400, tier: 1100, flip: 1900, done: 2400 },
-  rare: { grade: 500, tier: 1500, flip: 2600, done: 3200 },
-  epic: { grade: 700, tier: 2100, flip: 3700, done: 4500 },
+  base: { year: 350, grade: 1050, tier: 1750, flip: 2450, done: 2950 },
+  rare: { year: 450, grade: 1350, tier: 2250, flip: 3150, done: 3750 },
+  epic: { year: 600, grade: 1750, tier: 3050, flip: 4150, done: 4950 },
 };
 
 export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onTrade, onClose }) {
   const card = result?.card ?? null;
   const tier = card ? tierOf(card.rarity) : null;
   const big = tier?.fx ?? null; // 'rare' | 'epic' | null
-  const [phase, setPhase] = useState('charging'); // charging | grade | tier | flip | done | failed
+  const [phase, setPhase] = useState('charging'); // charging | year | grade | tier | flip | done | failed
   const [muted, setMutedState] = useState(isMuted());
   const [shownE6, setShownE6] = useState(null); // EPIC value count-up
   const coinLoop = useRef(null);
@@ -54,6 +52,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
     if (!card) { setPhase('failed'); return; }
     const seq = big === 'epic' ? BEATS.epic : big === 'rare' ? BEATS.rare : BEATS.base;
     const at = (ms, fn) => timers.current.push(setTimeout(fn, ms));
+    at(seq.year, () => { setPhase('year'); playSound('beat', { volume: 0.7 }); });
     at(seq.grade, () => { setPhase('grade'); playSound('beat'); });
     at(seq.tier, () => { setPhase('tier'); playSound('beat', { volume: 0.9 }); });
     at(seq.flip, () => { setPhase('flip'); playSound('flip'); });
@@ -117,6 +116,9 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
                   <div className="gacha-card3d-conic" aria-hidden />
                   <div className="gacha-card3d-logo" aria-hidden>G</div>
                   <div className="gacha-beat">
+                    {phase === 'year' && card?.year && (
+                      <div className="gacha-beat-in"><span className="gacha-beat-label">Issued</span><span className="gacha-beat-val">{card.year}</span></div>
+                    )}
                     {phase === 'grade' && card?.grade && (
                       <div className="gacha-beat-in"><span className="gacha-beat-label">Certified</span><span className="gacha-beat-val">{card.grade}</span></div>
                     )}

@@ -64,6 +64,9 @@ export type CcMachine = {
   ev?: number; // CC's odds-weighted expected insured value ($)
   turboMode?: boolean;
   thumbnailUrl?: string;
+  image?: string;
+  videoSrc?: string;  // CC's animated machine (webm)
+  videoHevc?: string; // HEVC/mp4 fallback for Safari
   public?: boolean;
 };
 export type CcPackNft = { id?: string; nft_address: string; name: string; rarity: string; image: string; insured_value: number };
@@ -102,9 +105,10 @@ export type LobbyMachine = {
   code: string; name: string; game: string;
   priceE6: string; buybackPct: number;
   tiers: Array<{ label: string; pct: number; minE6: string | null; maxE6: string | null }>;
-  stock: Record<string, number>; image: string | null;
+  stock: Record<string, number>;
+  image: string | null; video: string | null; videoHevc: string | null; evE6: string;
 };
-export type LobbyCard = { mint: string; name: string; imageUrl: string; valueE6: string; rarity: string };
+export type LobbyCard = { mint: string; name: string; imageUrl: string; valueE6: string; rarity: string; grade: string | null };
 export type LobbyWinner = { winner: string; mint: string; name: string | null; imageUrl: string | null; valueE6: string; tier: number; packType: string };
 
 /** Dollars → micro-USDC string (0 for non-finite). */
@@ -113,16 +117,25 @@ const e6 = (dollars: number | undefined | null): string => usdc(Number.isFinite(
 function gameOf(code: string): string {
   return (code.split(/[_-]/)[0] || '').toLowerCase() || 'other';
 }
+/** Absolutize a CC media path — machine image/video come back relative (e.g. "/pokemon_50.webm"). */
+const ccAbs = (p: string | null | undefined): string | null => (!p ? null : /^https?:\/\//i.test(p) ? p : `${gachaBase()}${p}`);
+/** Pull a "PSA 10" / "CGC 9.5" style grade out of a CC card name (the pool feed has no grade field). */
+const GRADE_RE = /\b(PSA|CGC|BGS|SGC|TAG|Beckett|CGA)\b[^\d]{0,14}(\d+(?:\.5)?)/i;
 
 export function toLobbyMachine(m: CcMachine): LobbyMachine {
   const tiers = Object.entries(m.odds ?? {}).map(([label, p]) => {
     const r = m.tierRanges?.[label];
     return { label, pct: Math.round((p ?? 0) * 1000) / 10, minE6: r ? e6(r.start) : null, maxE6: r ? e6(r.end) : null };
   });
-  return { code: m.code, name: m.name, game: gameOf(m.code), priceE6: e6(m.price), buybackPct: m.instantBuyback ?? 0, tiers, stock: m.stock ?? {}, image: m.thumbnailUrl ?? null };
+  return {
+    code: m.code, name: m.name, game: gameOf(m.code), priceE6: e6(m.price), evE6: e6(m.ev),
+    buybackPct: m.instantBuyback ?? 0, tiers, stock: m.stock ?? {},
+    image: ccAbs(m.thumbnailUrl || m.image), video: ccAbs(m.videoSrc), videoHevc: ccAbs(m.videoHevc),
+  };
 }
 export function toLobbyCard(n: CcPackNft): LobbyCard {
-  return { mint: n.nft_address, name: n.name, imageUrl: n.image, valueE6: e6(n.insured_value), rarity: n.rarity };
+  const g = (n.name || '').match(GRADE_RE);
+  return { mint: n.nft_address, name: n.name, imageUrl: n.image, valueE6: e6(n.insured_value), rarity: n.rarity, grade: g ? `${g[1].toUpperCase()} ${g[2]}` : null };
 }
 export function toLobbyWinner(w: CcWinner): LobbyWinner {
   return {

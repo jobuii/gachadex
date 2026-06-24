@@ -13,8 +13,10 @@ import { GachaReveal } from './GachaReveal.jsx';
 const usd = (e6) => formatUsd(BigInt(e6 || 0)); // `|| 0` guards '', null, undefined (e6 is always an integer string)
 const tokenPrice = (e6) => Math.floor(Number(e6 || 0) / 1000).toLocaleString(); // a pack's Token price = USD×1000 = priceE6/1000
 const fmtTokens = (n) => Number(n || 0).toLocaleString();
-const TIER_COLOR = { common: '#eab308', uncommon: '#22c55e', rare: '#3b82f6', epic: '#ef4444', legendary: '#a855f7', mythic: '#f472b6' };
-const tierColor = (label, i) => TIER_COLOR[(label ?? '').toLowerCase()] ?? ['#eab308', '#22c55e', '#3b82f6', '#ef4444'][i] ?? '#eab308';
+const TIER_COLOR = { common: '#ef4444', uncommon: '#22c55e', rare: '#a855f7', epic: '#f59e0b' }; // red · green · violet · gold
+const tierColor = (label, i) => TIER_COLOR[(label ?? '').toLowerCase()] ?? ['#ef4444', '#22c55e', '#a855f7', '#f59e0b'][i] ?? '#ef4444';
+const GAMES = [['all', 'All'], ['pokemon', 'Pokémon'], ['onepiece', 'One Piece'], ['mtg', 'MTG']];
+const ALLOWED_GAMES = new Set(['pokemon', 'onepiece', 'mtg']);
 const titleCase = (s) => (s ?? '').replace(/\b\w/g, (c) => c.toUpperCase());
 const hideBrokenImg = (e) => { e.currentTarget.style.visibility = 'hidden'; }; // CC image 404 → hide, keep the card
 
@@ -107,11 +109,11 @@ export function ClassicGacha({ onTradeMarket }) {
   // Borrows a real card image from the current pool when available. Gated by import.meta.env.DEV → never ships.
   const previewReveal = (rarity) => {
     const c = cards?.[0];
-    const valueByTier = { common: '12000000', uncommon: '28000000', rare: '85000000', epic: '4475000000', legendary: '12000000000' };
+    const valueByTier = { common: '12000000', uncommon: '28000000', rare: '85000000', epic: '4475000000' };
     setRevealSpentE6('50000000');
     setRevealResult({
       openId: 'preview', status: 'opened', verifyUrl: null,
-      card: { mint: 'preview', name: c?.name ?? 'Charizard VMAX', grade: 'PSA 10', imageUrl: c?.imageUrl ?? null, valueE6: valueByTier[rarity] ?? '12000000', rarity, marketId: null },
+      card: { mint: 'preview', name: c?.name ?? 'Charizard VMAX', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? null, valueE6: valueByTier[rarity] ?? '12000000', rarity, marketId: null, year: '2000' },
     });
     setRevealOpen(true);
   };
@@ -147,9 +149,9 @@ export function ClassicGacha({ onTradeMarket }) {
   if (err) return <div className="order-error">Couldn’t load packs: {err}</div>;
   if (machines.length === 0) return <div className="empty-state">No packs available right now.</div>;
 
-  const games = ['all', ...Array.from(new Set(machines.map((m) => m.game)))];
-  const shown = game === 'all' ? machines : machines.filter((m) => m.game === game);
-  const machine = machines.find((m) => m.code === selected) ?? shown[0] ?? machines[0];
+  const base = machines.filter((m) => ALLOWED_GAMES.has(m.game)); // only Pokémon / One Piece / MTG
+  const shown = game === 'all' ? base : base.filter((m) => m.game === game);
+  const machine = machines.find((m) => m.code === selected) ?? shown[0] ?? base[0] ?? machines[0];
   const revealCard = revealResult?.card ?? null;
   const revealItem = revealCard ? inventory.find((i) => i.mint === revealCard.mint) : null; // held row backing the reveal
 
@@ -171,16 +173,16 @@ export function ClassicGacha({ onTradeMarket }) {
         <div className="gacha-devbar">
           <span>⚡ Preview reveal (dev only):</span>
           <button onClick={() => previewReveal('common')}>Common</button>
+          <button onClick={() => previewReveal('uncommon')}>Uncommon</button>
           <button onClick={() => previewReveal('rare')}>Rare</button>
           <button onClick={() => previewReveal('epic')}>Epic</button>
-          <button onClick={() => previewReveal('legendary')}>Legendary</button>
         </div>
       )}
 
       <div className="gacha-tabs">
-        {games.map((g) => (
-          <button key={g} className={`gacha-tab ${g === game ? 'active' : ''}`} onClick={() => setGame(g)}>
-            {g === 'all' ? 'All' : titleCase(g)}
+        {GAMES.map(([key, label]) => (
+          <button key={key} className={`gacha-tab ${key === game ? 'active' : ''}`} onClick={() => setGame(key)}>
+            {label}
           </button>
         ))}
       </div>
@@ -188,7 +190,7 @@ export function ClassicGacha({ onTradeMarket }) {
       <div className="gacha-strip">
         {shown.map((m) => (
           <button key={m.code} className={`gacha-chip ${m.code === selected ? 'active' : ''}`} onClick={() => setSelected(m.code)}>
-            {m.image ? <img src={m.image} alt="" loading="lazy" /> : <span className="gacha-chip-ph" aria-hidden="true">📦</span>}
+            {m.image ? <img src={m.image} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <span className="gacha-chip-ph" aria-hidden="true">📦</span>}
             <span className="gacha-chip-name">{m.name}</span>
             <span className="gacha-chip-price">{usd(m.priceE6)}</span>
           </button>
@@ -197,35 +199,47 @@ export function ClassicGacha({ onTradeMarket }) {
 
       <div className="gacha-main">
         <aside className="gacha-machine">
-          <div className="gacha-machine-art">{machine.image ? <img src={machine.image} alt={machine.name} /> : <span aria-hidden="true">📦</span>}</div>
+          <div className="gacha-machine-art">
+            <span className="gacha-machine-badge">★ Standard</span>
+            {machine.video ? (
+              <video className="gacha-machine-media" autoPlay loop muted playsInline poster={machine.image ?? undefined} key={machine.code}>
+                {machine.videoHevc && <source src={machine.videoHevc} type="video/mp4" />}
+                <source src={machine.video} type="video/webm" />
+              </video>
+            ) : machine.image ? (
+              <img className="gacha-machine-media" src={machine.image} alt={machine.name} referrerPolicy="no-referrer" />
+            ) : <span className="gacha-machine-ph" aria-hidden="true">📦</span>}
+          </div>
           <h3>{machine.name}</h3>
-          <div className="gacha-price">{usd(machine.priceE6)}</div>
+          <div className="gacha-machine-stats">
+            <div><span className="gacha-stat-label">Price</span><span className="gacha-stat-val">{usd(machine.priceE6)}</span></div>
+            {Number(machine.evE6) > 0 && <div><span className="gacha-stat-label">Expected</span><span className="gacha-stat-val up">{usd(machine.evE6)}</span></div>}
+            <div><span className="gacha-stat-label">Buyback</span><span className="gacha-stat-val up">{machine.buybackPct}%</span></div>
+          </div>
           {tokensEnabled && (
             <div className="gacha-paywith" role="group" aria-label="Pay with">
               <button className={`gacha-pay ${payWith === 'usdc' ? 'active' : ''}`} onClick={() => setPayWith('usdc')}>USDC</button>
               <button className={`gacha-pay ${payWith === 'tokens' ? 'active' : ''}`} onClick={() => setPayWith('tokens')}>🪙 Tokens</button>
             </div>
           )}
-          <button className="btn-primary" disabled={ripping} onClick={() => requestRip(machine)}>
-            {ripping ? 'Ripping…' : payWith === 'tokens' ? `Rip — ${tokenPrice(machine.priceE6)} Tokens` : `Rip — ${usd(machine.priceE6)}`}
+          <button className="btn-primary gacha-open-btn" disabled={ripping} onClick={() => requestRip(machine)}>
+            {ripping ? 'Opening…' : payWith === 'tokens' ? `Open — ${tokenPrice(machine.priceE6)} 🪙` : `Open — ${usd(machine.priceE6)}`}
           </button>
           {ripErr && <div className="order-error" style={{ marginTop: '0.5rem' }}>{ripErr}</div>}
           {machine.tiers?.length > 0 && (
-            <ul className="gacha-tiers">
-              {machine.tiers.map((t, i) => (
-                <li key={t.label}>
-                  <span className="gacha-dot" style={{ background: tierColor(t.label, i) }} aria-hidden="true" />
-                  <span className="gacha-tier-label">{titleCase(t.label)}</span>
-                  <span className="gacha-tier-range">{t.minE6 != null ? `${usd(t.minE6)}–${usd(t.maxE6)}` : ''}</span>
-                  <span className="gacha-tier-pct">{t.pct}%</span>
-                </li>
+            <div className="gacha-odds">
+              <p className="gacha-odds-title">Odds</p>
+              {machine.tiers.map((t) => (
+                <div key={t.label} className="gacha-odds-row">
+                  <span className="gacha-dot" style={{ background: tierColor(t.label) }} aria-hidden="true" />
+                  <span className="gacha-odds-label">{titleCase(t.label)}</span>
+                  <span className="gacha-odds-bar"><span style={{ width: `${Math.min(100, t.pct)}%`, background: tierColor(t.label) }} /></span>
+                  <span className="gacha-odds-pct">{t.pct}%</span>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
-          <div className="gacha-meta">
-            <span>Instant buyback {machine.buybackPct}%</span>
-            <span>Pack contains 1 card</span>
-          </div>
+          <p className="gacha-meta-line">1 card per pack · guaranteed authentic</p>
         </aside>
 
         <section className="gacha-cards">
@@ -238,9 +252,12 @@ export function ClassicGacha({ onTradeMarket }) {
             <div className="gacha-card-grid">
               {cards.map((c) => (
                 <div key={c.mint} className="gacha-card">
-                  <img src={c.imageUrl} alt={c.name} loading="lazy" onError={hideBrokenImg} />
+                  <img src={c.imageUrl} alt={c.name} loading="lazy" referrerPolicy="no-referrer" onError={hideBrokenImg} />
                   <span className="gacha-card-name" title={c.name}>{c.name}</span>
-                  <span className="gacha-card-val">{usd(c.valueE6)}</span>
+                  <div className="gacha-card-meta">
+                    <span className="gacha-card-val"><span aria-hidden="true">🪙</span> {usd(c.valueE6)}</span>
+                    {c.grade && <span className="gacha-card-grade">{c.grade}</span>}
+                  </div>
                 </div>
               ))}
             </div>
@@ -269,7 +286,7 @@ export function ClassicGacha({ onTradeMarket }) {
           <div className="gacha-card-grid">
             {inventory.map((it) => (
               <div key={it.id} className="gacha-card">
-                {it.imageUrl && <img src={it.imageUrl} alt={it.name ?? ''} loading="lazy" onError={hideBrokenImg} />}
+                {it.imageUrl && <img src={it.imageUrl} alt={it.name ?? ''} loading="lazy" referrerPolicy="no-referrer" onError={hideBrokenImg} />}
                 <span className="gacha-card-name" title={it.name ?? ''}>{it.name ?? 'card'}{it.grade ? ` · ${it.grade}` : ''}</span>
                 <span className="gacha-card-val">{usd(it.valueE6)}</span>
                 {it.status === 'held' ? (

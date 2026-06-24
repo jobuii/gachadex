@@ -30,16 +30,14 @@ export function setMuted(m) {
 }
 export function toggleMuted() { return setMuted(!muted); }
 
-// Cache one <audio> per clip; play a clone so overlapping triggers don't cut each other off.
-const cache = {};
-/** Play a named clip. Returns the HTMLAudioElement (so a loop can be stopped) or null. */
+/** Play a named clip with a FRESH element each call — guarantees the right clip plays (a cached/cloned element
+ *  could silently replay the wrong buffer) and lets triggers overlap. Returns the element (to stop a loop) or null. */
 export function playSound(name, { volume = 1, loop = false } = {}) {
   if (muted) return null;
   const file = FILES[name];
   if (!file || typeof Audio === 'undefined') return null;
   try {
-    const tmpl = (cache[name] ??= new Audio(`${BASE}/${file}.mp3`));
-    const a = tmpl.cloneNode(true); // independent instance → overlapping plays
+    const a = new Audio(`${BASE}/${file}.mp3`);
     a.volume = Math.max(0, Math.min(1, volume));
     a.loop = loop;
     a.play().catch(() => {}); // autoplay policy / missing file → no-op

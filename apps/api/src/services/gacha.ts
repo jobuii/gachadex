@@ -40,19 +40,19 @@ export interface GachaDeps {
   now?: () => number; // injectable clock for the reconcile grace window (tests)
 }
 
-export interface GachaCard { mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; rarity: string | null; marketId: string | null }
+export interface GachaCard { mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; rarity: string | null; marketId: string | null; year: string | null }
 export interface OpenResult { openId: string; status: string; card: GachaCard | null; verifyUrl: string | null; duplicate?: boolean }
 
 interface OpenRow {
   id: string; user_id: string; machine_code: string; price_e6: string; paid_with: string; cc_memo: string | null;
   payment_sig: string | null; custody_pubkey: string | null; status: string;
   nft_mint: string | null; nft_name: string | null; nft_image: string | null; grade: string | null;
-  insured_value_e6: string | null; rarity: string | null; nft_market_id: string | null; created_at: string;
+  insured_value_e6: string | null; rarity: string | null; nft_market_id: string | null; nft_year: string | null; created_at: string;
 }
 
 const OPEN_COLS =
   `id, user_id, machine_code, price_e6::text AS price_e6, paid_with, cc_memo, payment_sig, custody_pubkey, status,
-   nft_mint, nft_name, nft_image, grade, insured_value_e6::text AS insured_value_e6, rarity, nft_market_id, created_at::text AS created_at`;
+   nft_mint, nft_name, nft_image, grade, insured_value_e6::text AS insured_value_e6, rarity, nft_market_id, nft_year, created_at::text AS created_at`;
 
 /** CC's provably-fair verify link for an open, or null before a memo exists. */
 const verifyUrlFor = (memo: string | null): string | null => (memo ? ccVerifyUrl(memo) : null);
@@ -61,7 +61,7 @@ const rowToResult = (r: OpenRow): OpenResult => ({
   openId: r.id,
   status: r.status,
   card: r.nft_mint
-    ? { mint: r.nft_mint, name: r.nft_name, grade: r.grade, imageUrl: r.nft_image, valueE6: r.insured_value_e6 ?? '0', rarity: r.rarity, marketId: r.nft_market_id }
+    ? { mint: r.nft_mint, name: r.nft_name, grade: r.grade, imageUrl: r.nft_image, valueE6: r.insured_value_e6 ?? '0', rarity: r.rarity, marketId: r.nft_market_id, year: r.nft_year }
     : null,
   verifyUrl: verifyUrlFor(r.cc_memo),
 });
@@ -221,10 +221,10 @@ async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promi
       [randomUUID(), cur.user_id, openId, card.mint, cur.custody_pubkey, card.name, card.grade, card.setName, card.year, card.imageUrl, card.insuredValueE6, marketId],
     );
     await q.query(
-      `UPDATE gacha_pack_opens SET status='opened', nft_mint=$2, nft_name=$3, nft_image=$4, grade=$5, insured_value_e6=$6, rarity=$7, nft_market_id=$8, opened_at=now() WHERE id=$1`,
-      [openId, card.mint, card.name, card.imageUrl, card.grade, card.insuredValueE6, card.rarity, marketId],
+      `UPDATE gacha_pack_opens SET status='opened', nft_mint=$2, nft_name=$3, nft_image=$4, grade=$5, insured_value_e6=$6, rarity=$7, nft_market_id=$8, nft_year=$9, opened_at=now() WHERE id=$1`,
+      [openId, card.mint, card.name, card.imageUrl, card.grade, card.insuredValueE6, card.rarity, marketId, card.year],
     );
-    return { openId, status: 'opened', verifyUrl: verifyUrlFor(cur.cc_memo), card: { mint: card.mint, name: card.name, grade: card.grade, imageUrl: card.imageUrl, valueE6: card.insuredValueE6, rarity: card.rarity, marketId } };
+    return { openId, status: 'opened', verifyUrl: verifyUrlFor(cur.cc_memo), card: { mint: card.mint, name: card.name, grade: card.grade, imageUrl: card.imageUrl, valueE6: card.insuredValueE6, rarity: card.rarity, marketId, year: card.year } };
   });
 }
 
