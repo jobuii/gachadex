@@ -129,6 +129,18 @@ export function ClassicGacha({ onTradeMarket }) {
     });
     setRevealOpen(true);
   };
+  const previewYolo = () => {
+    setRevealSpentE6('50000000'); setSummaryResults(null);
+    setRevealResult({ openId: 'preview', status: 'turbo_sold', card: null, verifyUrl: null, turboRefundE6: '27000000' });
+    setRevealOpen(true);
+  };
+  const previewMulti = () => {
+    const c = cards?.[0];
+    const mk = (rarity, value) => ({ openId: 'p', status: 'opened', verifyUrl: null, turboRefundE6: null, card: { mint: 'p', name: c?.name ?? 'Card', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? null, valueE6: value, rarity, marketId: null, year: '2000' } });
+    setRevealSpentE6('50000000');
+    setSummaryResults([mk('common', '12000000'), mk('rare', '85000000'), mk('epic', '4475000000'), { openId: 'p', status: 'turbo_sold', card: null, verifyUrl: null, turboRefundE6: '27000000' }, mk('uncommon', '28000000')]);
+    setRevealOpen(true);
+  };
 
   const sellBack = async (item, instant = false) => {
     setRipErr(null);
@@ -190,6 +202,8 @@ export function ClassicGacha({ onTradeMarket }) {
           <button onClick={() => previewReveal('uncommon')}>Uncommon</button>
           <button onClick={() => previewReveal('rare')}>Rare</button>
           <button onClick={() => previewReveal('epic')}>Epic</button>
+          <button onClick={previewYolo}>YOLO sold</button>
+          <button onClick={previewMulti}>Multi ×5</button>
         </div>
       )}
 
