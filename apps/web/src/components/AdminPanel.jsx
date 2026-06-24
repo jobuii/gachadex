@@ -720,6 +720,10 @@ export function AdminPanel({ onGoToMarket } = {}) {
             onClick={() => allocate(api.adminInsuranceToFees, feesDraft, setFeesDraft, 'Insurance → fees')}>
             Insurance → fees
           </button>
+          <span className="muted" style={{ fontSize: '0.78rem', flexBasis: '100%' }}>
+            allocatable now — fees → insurance: <strong>{economics ? formatUsd(BigInt(economics.feeRevenueE6)) : '—'}</strong>
+            {' · '}insurance → fees: <strong>{insuranceE6 != null ? formatUsd(BigInt(insuranceE6)) : '—'}</strong>
+          </span>
         </div>
       </label>
       {treasury && (
@@ -784,7 +788,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
         skew (the heavy side pays the lighter side via the LP pool). Enter a percentage: <code>0.30</code>{' '}
         means up to 0.30%/hour at full skew. Currently{' '}
         <strong>{fundingFactor ? `${(fundingFactor.bps / 100).toFixed(2)}%/hour` : '—'}</strong>
-        {fundingFactor ? ` (env default ${(fundingFactor.default / 100).toFixed(2)}%/hour)` : ''}.
+        {fundingFactor ? ` ≈ ${((fundingFactor.bps / 100) * 24).toFixed(2)}%/day at full skew (env default ${(fundingFactor.default / 100).toFixed(2)}%/hour)` : ''}.
       </p>
       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.35rem 0' }}>
         <input
@@ -871,6 +875,9 @@ export function AdminPanel({ onGoToMarket } = {}) {
                   onChange={(e) => setLimitDrafts((d) => ({ ...d, [key]: e.target.value }))}
                   style={{ width: '100%', marginTop: '0.2rem' }}
                 />
+                <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text)', marginTop: '0.2rem' }}>
+                  current: <strong>{custodyLimits.current[key]}</strong> <span className="muted">(def {custodyLimits.defaults[key]})</span>
+                </span>
               </label>
             ))}
           </div>
