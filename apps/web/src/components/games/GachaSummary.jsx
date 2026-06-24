@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { formatUsd } from '@pokex/pricing';
 
 // Multi-open summary (docs/classic-gacha-cc-packs-spec.md). After opening more than one pack: a net line
@@ -37,7 +38,7 @@ export function GachaSummary({ results, spentE6, onSell, onClose }) {
     setBusy(false);
   };
 
-  return (
+  return createPortal(
     <div className="gacha-reveal-overlay" onClick={onClose}>
       <div className="gacha-reveal-bg" aria-hidden />
       <div className="gacha-reveal-stage gacha-summary" onClick={(e) => e.stopPropagation()}>
@@ -73,6 +74,7 @@ export function GachaSummary({ results, spentE6, onSell, onClose }) {
           <button className="btn-primary" onClick={onClose}>Keep / Done</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

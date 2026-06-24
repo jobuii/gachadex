@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { formatUsd } from '@pokex/pricing';
 import { useWallet } from '@solana/wallet-adapter-react';
 import * as api from '../../lib/api.js';
@@ -19,6 +20,7 @@ const tierColor = (label, i) => TIER_COLOR[(label ?? '').toLowerCase()] ?? ['#ef
 const GAMES = [['all', 'All'], ['pokemon', 'Pokémon'], ['onepiece', 'One Piece']];
 const ALLOWED_GAMES = new Set(['pokemon', 'onepiece']);
 const HIDDEN_MACHINES = new Set(['pokemon_2500', 'pokemon_5000', 'pokemon_151']); // hidden per operator
+const PREVIEW_IMG = 'https://d1xpxki1g4htqu.cloudfront.net/_nIGwpul5IF9JxQ3La5uK3myeBL6fr6UBcA6s1ZX6V4'; // dev-preview fallback card art
 const titleCase = (s) => (s ?? '').replace(/\b\w/g, (c) => c.toUpperCase());
 const hideBrokenImg = (e) => { e.currentTarget.style.visibility = 'hidden'; }; // CC image 404 → hide, keep the card
 
@@ -40,6 +42,7 @@ export function ClassicGacha({ onTradeMarket }) {
   const [yolo, setYolo] = useState(false); // YOLO/turbo: auto-sell commons
   const [qty, setQty] = useState(1);
   const [summaryResults, setSummaryResults] = useState(null); // multi-open results → GachaSummary
+  const [previewSell, setPreviewSell] = useState(false); // dev preview: stub the summary's onSell so the mock can show "Sold ✓"
   const [tokens, setTokens] = useState(null); // { balance, untilFreePackTokens }
   const [tokensEnabled, setTokensEnabled] = useState(false);
   const { signMessage } = useWallet();
@@ -94,7 +97,7 @@ export function ClassicGacha({ onTradeMarket }) {
     if (!m) return;
     setRipErr(null);
     setRipping(true);
-    setRevealSpentE6(m.priceE6); setRevealResult(null); setSummaryResults(null); setRevealOpen(true); // charging
+    setRevealSpentE6(m.priceE6); setRevealResult(null); setSummaryResults(null); setPreviewSell(false); setRevealOpen(true); // charging
     try {
       if (n === 1) {
         const r = await openOne(m);
@@ -115,7 +118,7 @@ export function ClassicGacha({ onTradeMarket }) {
     }
   };
 
-  const closeReveal = () => { setRevealOpen(false); setRevealResult(null); setSummaryResults(null); };
+  const closeReveal = () => { setRevealOpen(false); setRevealResult(null); setSummaryResults(null); setPreviewSell(false); };
 
   // Dev-only: fire the reveal with a mock pull so the animation/sound can be tuned without a real (paid) open.
   // Borrows a real card image from the current pool when available. Gated by import.meta.env.DEV → never ships.
@@ -125,7 +128,7 @@ export function ClassicGacha({ onTradeMarket }) {
     setRevealSpentE6('50000000');
     setRevealResult({
       openId: 'preview', status: 'opened', verifyUrl: null,
-      card: { mint: 'preview', name: c?.name ?? 'Charizard VMAX', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? null, valueE6: valueByTier[rarity] ?? '12000000', rarity, marketId: null, year: '2000' },
+      card: { mint: 'preview', name: c?.name ?? 'Charizard VMAX', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? PREVIEW_IMG, valueE6: valueByTier[rarity] ?? '12000000', rarity, marketId: null, year: '2000' },
     });
     setRevealOpen(true);
   };
@@ -136,9 +139,11 @@ export function ClassicGacha({ onTradeMarket }) {
   };
   const previewMulti = () => {
     const c = cards?.[0];
-    const mk = (rarity, value) => ({ openId: 'p', status: 'opened', verifyUrl: null, turboRefundE6: null, card: { mint: 'p', name: c?.name ?? 'Card', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? null, valueE6: value, rarity, marketId: null, year: '2000' } });
+    let n = 0;
+    const mk = (rarity, value) => ({ openId: `p${n}`, status: 'opened', verifyUrl: null, turboRefundE6: null, card: { mint: `p${n++}`, name: c?.name ?? 'Card', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? PREVIEW_IMG, valueE6: value, rarity, marketId: null, year: '2000' } });
     setRevealSpentE6('50000000');
-    setSummaryResults([mk('common', '12000000'), mk('rare', '85000000'), mk('epic', '4475000000'), { openId: 'p', status: 'turbo_sold', card: null, verifyUrl: null, turboRefundE6: '27000000' }, mk('uncommon', '28000000')]);
+    setSummaryResults([mk('common', '12000000'), mk('rare', '85000000'), mk('epic', '4475000000'), { openId: 'pt', status: 'turbo_sold', card: null, verifyUrl: null, turboRefundE6: '27000000' }, mk('uncommon', '28000000')]);
+    setPreviewSell(true); // mock: let the summary's Sell buttons resolve so the sell-all / sell-some flow is demoable
     setRevealOpen(true);
   };
 
@@ -347,7 +352,7 @@ export function ClassicGacha({ onTradeMarket }) {
 
       <p className="muted gacha-note">Real graded-card packs from Collector Crypt — bought with your GachaDex balance. Sell a pull back for USDC (GDEX keeps 5%) or keep it.</p>
 
-      {confirmMachine && (
+      {confirmMachine && createPortal(
         <div className="gacha-modal-overlay" onClick={() => setConfirmMachine(null)}>
           <div className="gacha-confirm" onClick={(e) => e.stopPropagation()}>
             <div className="gacha-confirm-art">{confirmMachine.image ? <img src={confirmMachine.image} alt="" referrerPolicy="no-referrer" onError={hideBrokenImg} /> : <span aria-hidden="true">📦</span>}</div>
@@ -363,11 +368,12 @@ export function ClassicGacha({ onTradeMarket }) {
               <button className="btn-primary" onClick={confirmRip}>Open</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {revealOpen && (summaryResults ? (
-        <GachaSummary results={summaryResults} spentE6={revealSpentE6} onSell={sellByMint} onClose={closeReveal} />
+        <GachaSummary results={summaryResults} spentE6={revealSpentE6} onSell={previewSell ? async () => true : sellByMint} onClose={closeReveal} />
       ) : (
         <GachaReveal
           result={revealResult}

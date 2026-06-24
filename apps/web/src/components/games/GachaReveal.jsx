@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { formatUsd } from '@pokex/pricing';
 import { playSound, stopSound, isMuted, toggleMuted } from '../../lib/sound.js';
 import { RevealFX } from './RevealFX.jsx';
@@ -42,7 +43,9 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
     playSound('rip');
     const t = timers;
     const loop = coinLoop;
-    return () => { t.current.forEach(clearTimeout); stopSound(loop.current); };
+    // Re-arm `started` on cleanup so React 18 StrictMode's dev mount→unmount→mount double-invoke reschedules
+    // the beats instead of clearing them and freezing on the card-back (rare.win's CardReveal hits the same).
+    return () => { t.current.forEach(clearTimeout); t.current = []; stopSound(loop.current); started.current = false; };
   }, []);
 
   // Once the open result lands, run the beat sequence exactly once.
@@ -88,7 +91,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
 
   const close = () => { stopSound(coinLoop.current); onClose(); };
 
-  return (
+  return createPortal(
     <div className={`gacha-reveal-overlay ${big && done ? `gr-pop-${big}` : ''}`} onClick={close}>
       <div className="gacha-reveal-bg" aria-hidden />
       {done && big && <RevealFX kind={big} color={tier.color} />}
@@ -141,7 +144,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
                 {/* front face — the revealed card */}
                 <div className="gacha-card3d-front">
                   {card?.imageUrl
-                    ? <img src={card.imageUrl} alt={card.name ?? ''} onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
+                    ? <img src={card.imageUrl} alt={card.name ?? ''} referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
                     : <div className="gacha-card3d-noimg" aria-hidden>🃏</div>}
                 </div>
               </div>
@@ -166,6 +169,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
           </>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
