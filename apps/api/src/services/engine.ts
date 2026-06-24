@@ -6,7 +6,7 @@ import { advisoryXactLock, type Db, type Queryer } from '../db/client.ts';
 import { getMarketById, type MarketRow } from './markets.ts';
 import { recomputeMark } from './marks.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, getBalance, postTxn } from './ledger.ts';
-import { getFeeBps, getLiqFeeBps } from './fees.ts';
+import { getFeeBps, getLiqFeeBps, getLpTradingPct, getLpLiquidationPct } from './fees.ts';
 import { getBigBetUsd, getBigWinUsd } from './chat-config.ts';
 import { emitChatEvent, type ChatEventInput } from './chat.ts';
 import { refreshReserved } from './lp.ts';
@@ -31,7 +31,7 @@ async function chargeFee(
   const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
   const lp = await getOrCreateSystemAccount(q, 'LP_POOL');
   const rev = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
-  const lpPart = (feeAmt * BigInt(config.feeLpSharePct)) / 100n;
+  const lpPart = (feeAmt * BigInt(getLpTradingPct())) / 100n;
   const revPart = feeAmt - lpPart;
   await postTxn(q, {
     reason,
@@ -1014,9 +1014,12 @@ async function liquidatePositionInTx(q: Queryer, pos: PositionRow, market: Marke
   if (remaining > 0n) {
     liqFeeTaken = liqFee < remaining ? liqFee : remaining;
     if (liqFeeTaken > 0n) {
+      const rev = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
+      const lpLiqPart = (liqFeeTaken * BigInt(getLpLiquidationPct())) / 100n; // LP's configured share; house keeps the rest
       await postTxn(q, { reason: 'LIQUIDATION_FEE', refType: 'liquidation', refId: pos.id, entries: [
         { accountId: coll, amount: -liqFeeTaken },
-        { accountId: insurance, amount: liqFeeTaken },
+        { accountId: lp, amount: lpLiqPart },
+        { accountId: rev, amount: liqFeeTaken - lpLiqPart },
       ] });
     }
   }
