@@ -10,6 +10,8 @@ export const RARITY_TIERS = Object.keys(RARITY_COLORS);
 
 // micro-USD integer string → display string ('|| 0' guards '', null, undefined).
 export const usd = (e6) => formatUsd(BigInt(e6 || 0));
+// whole-dollar format, no cents (e.g. $4,475) — for compact lobby card values where the coin sits inline.
+export const usdWhole = (e6) => `$${Math.round(Number(e6 || 0) / 1e6).toLocaleString('en-US')}`;
 
 // micro-USD a player nets after a basis-point cut (floor) — e.g. a sell-back fee.
 export const netAfterCutE6 = (valueE6, cutBps) => (BigInt(valueE6 || 0) * (10_000n - BigInt(cutBps))) / 10_000n;

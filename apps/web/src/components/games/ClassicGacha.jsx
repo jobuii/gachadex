@@ -4,7 +4,7 @@ import * as api from '../../lib/api.js';
 import { GachaReveal } from './GachaReveal.jsx';
 import { GachaSummary } from './GachaSummary.jsx';
 import { GachaInventory } from './GachaInventory.jsx';
-import { RARITY_COLORS, usd } from './gacha-util.js';
+import { RARITY_COLORS, usd, usdWhole } from './gacha-util.js';
 
 // Classic Gacha (docs/classic-gacha-cc-packs-spec.md, P0–P4). Browses the live Collector Crypt machines (a
 // game-filter, a machine strip, the selected machine's detail = price + tier legend + buyback %, the real
@@ -314,7 +314,7 @@ export function ClassicGacha({ onTradeMarket }) {
                   <span className="gacha-card-name" title={c.name}>{c.name}</span>
                   <div className="gacha-card-meta">
                     {c.grade && <span className="gacha-card-grade">{c.grade}</span>}
-                    <span className="gacha-card-val"><span aria-hidden="true">🪙</span> {usd(c.valueE6)}</span>
+                    <span className="gacha-card-val"><span aria-hidden="true">🪙</span>{usdWhole(c.valueE6)}</span>
                   </div>
                 </div>
               ))}
