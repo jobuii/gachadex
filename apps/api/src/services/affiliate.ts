@@ -1,6 +1,7 @@
 import { HttpError } from '../errors.ts';
 import { config } from '../config.ts';
 import type { Db, Queryer } from '../db/client.ts';
+import { liveKnob } from './live-knob.ts';
 import { upsertUser } from './auth.ts';
 import { setReferralCodeTx } from './referral.ts';
 
@@ -23,10 +24,14 @@ export interface FeeAffiliate {
 }
 
 /** One indexed lookup on the fee hot path: resolve BOTH the trader's own fee discount AND any cashback
- *  owed to the affiliate who referred them. Inactive affiliates resolve to no discount / no cashback. */
+ *  owed to the affiliate who referred them. An active per-wallet `affiliate_terms` row OVERRIDES (even with a
+ *  lower/zero rate); otherwise the platform-wide defaults apply (0 unless an operator set them). Cashback is
+ *  still only owed when the trader was referred — there has to be a referrer to pay. */
 export async function resolveFeeAffiliate(q: Queryer, traderUserId: string): Promise<FeeAffiliate> {
-  const r = await q.query<{ discount_bps: number | null; cb_user: string | null; cb_bps: number | null }>(
-    `SELECT own.fee_discount_bps AS discount_bps, ref.user_id AS cb_user, ref.cashback_bps AS cb_bps
+  const r = await q.query<{ own_discount: number | null; referrer_id: string | null; ref_cashback: number | null }>(
+    `SELECT own.fee_discount_bps AS own_discount,
+            u.referred_by        AS referrer_id,
+            ref.cashback_bps     AS ref_cashback
        FROM users u
        LEFT JOIN affiliate_terms own ON own.user_id = u.id          AND own.active
        LEFT JOIN affiliate_terms ref ON ref.user_id = u.referred_by AND ref.active
@@ -34,8 +39,14 @@ export async function resolveFeeAffiliate(q: Queryer, traderUserId: string): Pro
     [traderUserId],
   );
   const row = r.rows[0];
-  const discountBps = row?.discount_bps ?? 0;
-  const cashback = row?.cb_user && (row.cb_bps ?? 0) > 0 ? { userId: row.cb_user, bps: row.cb_bps as number } : null;
+  // own fee discount: an active individual term wins (even if lower/zero); else the platform default.
+  const discountBps = row?.own_discount ?? getPlatformFeeDiscountBps();
+  // cashback to the referrer (only when this trader was referred): their active term wins; else platform default.
+  let cashback: FeeAffiliate['cashback'] = null;
+  if (row?.referrer_id) {
+    const bps = row.ref_cashback ?? getPlatformCashbackBps();
+    if (bps > 0) cashback = { userId: row.referrer_id, bps };
+  }
   return { discountBps, cashback };
 }
 
@@ -43,6 +54,35 @@ export async function resolveFeeAffiliate(q: Queryer, traderUserId: string): Pro
 export function applyFeeDiscount(grossFee: bigint, discountBps: number): bigint {
   const d = BigInt(Math.max(0, Math.min(10000, Math.floor(discountBps || 0))));
   return grossFee - (grossFee * d) / 10000n;
+}
+
+// ---- platform-wide defaults -----------------------------------------------
+// Cashback % + own-fee-discount % that apply to EVERY wallet by default (settings-backed, cached for the fee
+// hot path; default 0 = dormant, zero behaviour change). An active per-wallet `affiliate_terms` row overrides
+// these for that wallet. Cashback is still only paid when a trader was referred (there must be a referrer).
+const platformCashback = liveKnob('platform_cashback_bps', 0, (v) => validateBps(v, 'platform cashbackBps', maxCashbackBps()));
+const platformFeeDiscount = liveKnob('platform_fee_discount_bps', 0, (v) => validateBps(v, 'platform feeDiscountBps', 10000));
+
+export const getPlatformCashbackBps = platformCashback.get;
+export const getPlatformFeeDiscountBps = platformFeeDiscount.get;
+export const loadPlatformCashbackBps = platformCashback.load;
+export const loadPlatformFeeDiscountBps = platformFeeDiscount.load;
+
+export function platformDefaultsView(): { cashbackBps: number; feeDiscountBps: number; maxCashbackBps: number } {
+  return { cashbackBps: platformCashback.get(), feeDiscountBps: platformFeeDiscount.get(), maxCashbackBps: maxCashbackBps() };
+}
+
+/** Operator: set the platform-wide default cashback + fee-discount (bps). Validates BOTH before writing
+ *  either, so a bad value can't leave the two knobs half-applied. */
+export async function setPlatformAffiliateDefaults(
+  db: Db,
+  opts: { cashbackBps: unknown; feeDiscountBps: unknown },
+): Promise<{ cashbackBps: number; feeDiscountBps: number; maxCashbackBps: number }> {
+  validateBps(opts.cashbackBps, 'cashbackBps', maxCashbackBps());
+  validateBps(opts.feeDiscountBps, 'feeDiscountBps', 10000);
+  await platformCashback.set(db, opts.cashbackBps);
+  await platformFeeDiscount.set(db, opts.feeDiscountBps);
+  return platformDefaultsView();
 }
 
 // ---- operator (admin) ------------------------------------------------------
