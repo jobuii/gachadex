@@ -7,6 +7,8 @@ import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './led
 import { getNftCustodyKeypair } from './custody/wallet.ts';
 import { createNftWithdrawNonce, verifyNftWithdrawStepUp } from './auth.ts';
 import { spendTokens, earnTokens, tokensEarnedForOpen, tokenPriceForPack } from './tokens.ts';
+import { openPosition } from './engine.ts';
+import { lastMarkE6 } from './marks.ts';
 import { gachaConfig, gachaMarkupE6 } from './gacha-config.ts';
 import type { GachaChain } from './custody/gacha-chain.ts';
 import { defaultCcClient, ccVerifyUrl, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
@@ -409,6 +411,43 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
     await q.query(`UPDATE gacha_nft_inventory SET status='sold', sell_value_e6=$2, sell_cut_e6=$3, txn_id=$4, settled_at=now() WHERE id=$1`, [prizeId, payout.toString(), cut.toString(), txnId]);
     return { prizeId, payoutE6: payout.toString(), cutE6: cut.toString() };
   });
+}
+
+// ─────────────────────────────── convert: sell-back → open a perp (lever C, P3) ───────────────────────────────
+export interface ConvertResult { prizeId: string; payoutE6: string; cutE6: string; positionId: string | null; positionError?: string }
+const CONVERT_LEVERAGE_DEFAULT = 2; // one-click default; the engine still enforces the market's own max
+const CONVERT_LEVERAGE_MAX = 20; // sanity cap; openPosition rejects anything above the market's max_leverage_e2
+
+/**
+ * Convert a won slab into a GDEX perp on the same card (spec §9, lever C — only when the card matched a market).
+ * TWO async stages, NOT atomic (openPosition takes its own market lock + tx, and the sell-back waits on the CC
+ * buyback, so they cannot share a tx): (1) the normal sell-back settles the proceeds to USER_COLLATERAL; (2) a
+ * separate openPosition on the card's market, sized so the proceeds ARE the margin. If stage 2 fails the user
+ * simply keeps the USDC (reported in `positionError`); stage 1 is never rolled back.
+ */
+export async function convert(db: Db, userId: string, prizeId: string, deps: GachaDeps, opts: { side?: 'long' | 'short'; leverage?: number } = {}): Promise<ConvertResult> {
+  if (!config.classicGachaEnabled) throw GACHA_OFF();
+  const pre = (await db.query<{ market_id: string | null; status: string }>(
+    `SELECT market_id, status FROM gacha_nft_inventory WHERE id = $1 AND user_id = $2`, [prizeId, userId])).rows[0];
+  if (!pre) throw new HttpError(404, 'prize not found');
+  if (!pre.market_id) throw new HttpError(409, 'this card has no GDEX market to convert into', 'no_market');
+  if (pre.status !== 'held') throw new HttpError(409, 'prize already settled');
+
+  const sb = await sellBack(db, userId, prizeId, deps); // stage 1 (claims the row, on-chain buyback, settles payout)
+
+  const side = opts.side === 'short' ? 'short' : 'long';
+  const leverage = Math.max(1, Math.min(CONVERT_LEVERAGE_MAX, Math.floor(opts.leverage ?? CONVERT_LEVERAGE_DEFAULT)));
+  try {
+    const markE6 = (await lastMarkE6(db, pre.market_id)) ?? 0n;
+    if (markE6 <= 0n) throw new HttpError(400, 'no price for this market yet');
+    // qty so that margin (= notional/leverage = qty·mark/leverage) equals the proceeds.
+    const qtyE6 = (BigInt(sb.payoutE6) * BigInt(leverage) * 1_000_000n) / markE6;
+    if (qtyE6 <= 0n) throw new HttpError(400, 'proceeds too small to open a position');
+    const pos = await openPosition(db, userId, { marketId: pre.market_id, side, qtyE6, leverage, idempotencyKey: `gconv-${prizeId}` });
+    return { prizeId, payoutE6: sb.payoutE6, cutE6: sb.cutE6, positionId: pos.positionId };
+  } catch (e) {
+    return { prizeId, payoutE6: sb.payoutE6, cutE6: sb.cutE6, positionId: null, positionError: e instanceof Error ? e.message : 'could not open the position' };
+  }
 }
 
 // ─────────────────────────────── withdraw the real NFT (P2) ───────────────────────────────

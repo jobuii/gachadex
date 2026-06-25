@@ -72,7 +72,7 @@ export async function applyMarkClamp(
 
 /** The latest mark written for a market (the per-update clamp anchor). Orders by id too so a tie on
  *  computed_at returns the genuinely-newest row. */
-async function lastMarkE6(q: Queryer, marketId: string): Promise<bigint | null> {
+export async function lastMarkE6(q: Queryer, marketId: string): Promise<bigint | null> {
   const r = await q.query<{ m: string }>(
     `SELECT mark_price_e6::text AS m FROM marks WHERE market_id = $1 ORDER BY computed_at DESC, id DESC LIMIT 1`,
     [marketId],

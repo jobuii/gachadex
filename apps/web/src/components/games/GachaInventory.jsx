@@ -29,6 +29,16 @@ export function GachaInventory({ onTradeMarket, refreshKey = 0, heading = 'Your 
     catch (e) { setErr(e.message); }
   };
   const trade = (item) => { if (onTradeMarket && item?.marketId) onTradeMarket({ id: item.marketId }); };
+  const convert = async (item) => {
+    setErr(null);
+    if (!window.confirm('Sell this card and open a 2× long on its market with the proceeds? You can adjust the position after.')) return;
+    try {
+      const r = await api.convertGachaPrize(item.id, { side: 'long', leverage: 2 });
+      load();
+      if (r.positionError) setErr(`Sold for the proceeds, but the position didn’t open: ${r.positionError}`);
+      else trade(item); // jump to the card's market to manage the new position
+    } catch (e) { setErr(e.message); }
+  };
   const withdraw = async (item) => {
     setErr(null);
     if (!signMessage) { setErr('Connect a wallet that can sign messages to withdraw.'); return; }
@@ -54,6 +64,7 @@ export function GachaInventory({ onTradeMarket, refreshKey = 0, heading = 'Your 
               <>
                 <button className="btn-ghost sm" onClick={() => sellBack(it)}>Sell back</button>
                 {it.marketId && <button className="btn-ghost sm" onClick={() => trade(it)}>Trade</button>}
+                {it.marketId && <button className="btn-ghost sm" onClick={() => convert(it)}>Convert</button>}
                 <button className="btn-ghost sm" onClick={() => withdraw(it)}>Withdraw</button>
               </>
             ) : (

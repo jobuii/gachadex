@@ -126,6 +126,17 @@ export async function gachaRoutes(app: FastifyInstance): Promise<void> {
     return sellBack(await getDb(), req.userId!, (req.params as { id: string }).id, { chain: await realChain(), cc: defaultCcClient }, { instant });
   });
 
+  // Convert a won card → a GDEX perp on its market (lever C): sell-back then open a position with the proceeds.
+  // 409 'no_market' when the card has no matched market; stage 2 failing leaves the user with the USDC proceeds.
+  app.post('/gacha/prizes/:id/convert', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
+    realGate();
+    const b = (req.body ?? {}) as { side?: string; leverage?: number };
+    const side = b.side === 'short' ? 'short' : b.side === 'long' ? 'long' : undefined;
+    const leverage = Number.isFinite(b.leverage) ? Number(b.leverage) : undefined;
+    const { convert } = await gachaSvc();
+    return convert(await getDb(), req.userId!, (req.params as { id: string }).id, { chain: await realChain(), cc: defaultCcClient }, { side, leverage });
+  });
+
   // Withdraw a held NFT to the user's own wallet (P2). Step 1: the step-up nonce/message over (mint, dest).
   app.post('/gacha/prizes/:id/withdraw/nonce', rl(config.routeRateLimits.withdrawNonce, FULL), async (req) => {
     realGate();

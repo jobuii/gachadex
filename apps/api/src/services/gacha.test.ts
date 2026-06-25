@@ -17,7 +17,7 @@ const { getDb } = await import('../db/client.ts');
 const { migrate } = await import('../db/migrate.ts');
 const { usdc } = await import('../money.ts');
 const { fund, sign } = await import('../test-helpers.ts');
-const { openPack, sellBack, reconcilePending, nftWithdrawNonce, requestNftWithdraw } = await import('./gacha.ts');
+const { openPack, sellBack, convert, reconcilePending, nftWithdrawNonce, requestNftWithdraw } = await import('./gacha.ts');
 const { tokensEarnedForOpen, tokenPriceForPack, earnTokens, getTokenSummary } = await import('./tokens.ts');
 const { setGachaConfig, gachaAdminConfig } = await import('./gacha-config.ts');
 const { gachaMonitoring } = await import('./gacha-monitoring.ts');
@@ -400,4 +400,52 @@ test('monitoring: reports packs opened, the rarity mix, volume + per-machine sta
   const pm = m.machines.find((x) => x.code === 'pokemon_50');
   assert.ok(pm && pm.opens >= 2);                  // per-machine opens
   assert.ok((pm.rarity.epic ?? 0) >= 2);           // per-machine realized odds
+});
+
+// ── lever C: convert a won card → a GDEX perp on its market (sell-back → openPosition) ──
+async function seedMarket(markUsd) {
+  const id = randomUUID();
+  await db.query(`INSERT INTO markets(id, kind, game, symbol, display_name, status, tradeable, featured) VALUES($1,'card','pokemon',$2,$3,'active',true,true)`, [id, 'CONV-' + id.slice(0, 6), 'Conv ' + id.slice(0, 4)]);
+  if (markUsd != null) await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6) VALUES($1,$2,$2)`, [id, usdc(markUsd).toString()]);
+  return id;
+}
+async function openAndMatch(user, key, marketId) {
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: key }, { chain: fakeChain(), cc: fakeCc(), ...noWait });
+  const prize = (await db.query<{ id: string }>(`SELECT id FROM gacha_nft_inventory WHERE user_id = $1 ORDER BY acquired_at DESC LIMIT 1`, [user])).rows[0];
+  // set explicitly (incl. NULL) so we override any name-based auto-match left over from an earlier test
+  await db.query(`UPDATE gacha_nft_inventory SET market_id = $2 WHERE id = $1`, [prize.id, marketId]);
+  return prize.id;
+}
+
+test('convert: sells the card then opens a long perp sized so the proceeds are the margin', async () => {
+  const user = await newUser();
+  const marketId = await seedMarket(100); // $100 mark
+  const prizeId = await openAndMatch(user, 'conv1', marketId);
+  const r = await convert(db, user, prizeId, { chain: fakeChain(), cc: fakeCc(), ...noWait }, { side: 'long', leverage: 2 });
+  assert.ok(r.positionId, 'a position opened');
+  assert.ok(BigInt(r.payoutE6) > 0n);
+  assert.equal((await db.query<{ s: string }>(`SELECT status s FROM gacha_nft_inventory WHERE id = $1`, [prizeId])).rows[0].s, 'sold'); // stage 1 done
+  const pos = (await db.query<{ side: string; margin: string }>(`SELECT side, margin_uusdc::text margin FROM positions WHERE id = $1`, [r.positionId])).rows[0];
+  assert.equal(pos.side, 'long');
+  const d = BigInt(pos.margin) - BigInt(r.payoutE6); // margin ≈ proceeds (within $1 of rounding)
+  assert.ok((d < 0n ? -d : d) <= usdc(1), `margin ${pos.margin} vs proceeds ${r.payoutE6}`);
+});
+
+test('convert: a card with no matched market is rejected (no_market) and stays held', async () => {
+  const user = await newUser();
+  const prizeId = await openAndMatch(user, 'conv2', null); // no market_id
+  await assert.rejects(convert(db, user, prizeId, { chain: fakeChain(), cc: fakeCc(), ...noWait }), /market/i);
+  assert.equal((await db.query<{ s: string }>(`SELECT status s FROM gacha_nft_inventory WHERE id = $1`, [prizeId])).rows[0].s, 'held'); // never sold
+});
+
+test('convert: if the position fails to open, the user keeps the sell-back proceeds', async () => {
+  const user = await newUser();
+  const marketId = await seedMarket(null); // market with NO mark → stage 2 can't price → fails gracefully
+  const prizeId = await openAndMatch(user, 'conv3', marketId);
+  const before = await collOf(user);
+  const r = await convert(db, user, prizeId, { chain: fakeChain(), cc: fakeCc(), ...noWait });
+  assert.equal(r.positionId, null);
+  assert.ok(r.positionError);
+  assert.equal((await db.query<{ s: string }>(`SELECT status s FROM gacha_nft_inventory WHERE id = $1`, [prizeId])).rows[0].s, 'sold'); // stage 1 still committed
+  assert.ok((await collOf(user)) > before, 'proceeds credited to the user');
 });
