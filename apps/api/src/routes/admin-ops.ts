@@ -286,10 +286,12 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/admin/gacha/config', rl(config.routeRateLimits.admin), async () => {
     const cfg = gachaAdminConfig();
     const disabled = new Set(cfg.disabledMachines);
-    let machines: Array<{ code: string; name: string; game: string; priceE6: string; disabled: boolean }> = [];
+    // The full lobby machine (incl. live CC stock per tier, odds, $ ranges, EV, buyback) + the operator's
+    // disabled flag, so the admin "Live machines" panel can surface stock/odds the player lobby doesn't.
+    let machines: Array<ReturnType<typeof toLobbyMachine> & { disabled: boolean }> = [];
     try {
       const { machines: ccm } = await getMachines();
-      machines = (ccm ?? []).map(toLobbyMachine).map((m) => ({ code: m.code, name: m.name, game: m.game, priceE6: m.priceE6, disabled: disabled.has(m.code) }));
+      machines = (ccm ?? []).map(toLobbyMachine).map((m) => ({ ...m, disabled: disabled.has(m.code) }));
     } catch { /* CC unreachable → still return the knobs (the machine toggles just won't list this load) */ }
     return { config: cfg, machines };
   });

@@ -1,11 +1,15 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { formatUsd } from '@pokex/pricing';
 import * as api from '../lib/api.js';
 import { Stat, PnlStat } from './adminStats.jsx';
-import { RARITY_TIERS } from './games/gacha-util.js';
+import { RARITY_TIERS, RARITY_COLORS } from './games/gacha-util.js';
 
 // realized odds: the % of pulls in each tier (C/U/R/E) for a count map + total.
 const oddsStr = (counts, total) => RARITY_TIERS.map((r) => `${r[0].toUpperCase()} ${total ? Math.round(((counts[r] ?? 0) / total) * 100) : 0}%`).join(' · ');
+// tier → swatch (local 1-liner like the lobby's; gacha-util notes each component keeps its own wrapper).
+const tierColor = (label, i = 0) => RARITY_COLORS[(label ?? '').toLowerCase()] ?? Object.values(RARITY_COLORS)[i] ?? '#ef4444';
+const titleCase = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+const rangeStr = (t) => (t.minE6 ? formatUsd(BigInt(t.minE6)) : '—') + (t.maxE6 ? `–${formatUsd(BigInt(t.maxE6))}` : '+');
 
 /**
  * Operator Classic Gacha view (docs/classic-gacha-cc-packs-spec.md §12). The economics readout (cut revenue vs
@@ -24,11 +28,27 @@ export function GachaAdminView({ adminKey }) {
   const [msg, setMsg] = useState(null);
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [restocks, setRestocks] = useState({}); // { [code]: { [tier]: delta } } — stock increases since the last poll
+  const prevStockRef = useRef({}); // { [code]: { [tier]: count } } from the previous poll (in-memory baseline)
 
   const load = useCallback(() => {
     return Promise.all([api.adminGetGachaConfig(adminKey), api.adminGetGachaMonitoring(adminKey)])
       .then(([c, m]) => {
-        setCfg(c.config); setMachines(c.machines ?? []); setMon(m);
+        const list = c.machines ?? [];
+        // Restock diff: flag any tier whose CC stock went UP vs the previous poll (no baseline on the first load).
+        const nextStock = {};
+        const nextRestocks = {};
+        for (const mm of list) {
+          nextStock[mm.code] = mm.stock ?? {};
+          const prev = prevStockRef.current[mm.code];
+          if (prev) for (const [tier, n] of Object.entries(mm.stock ?? {})) {
+            const d = (n ?? 0) - (prev[tier] ?? 0);
+            if (d > 0) (nextRestocks[mm.code] ??= {})[tier] = d;
+          }
+        }
+        prevStockRef.current = nextStock;
+        setRestocks(nextRestocks);
+        setCfg(c.config); setMachines(list); setMon(m);
         setFreePack(String(c.config.freePackThresholdUsd));
         setBuyback((c.config.buybackCutBps / 100).toString());
         setTurbo((c.config.turboCutBps / 100).toString());
@@ -163,6 +183,40 @@ export function GachaAdminView({ adminKey }) {
             <input type="checkbox" checked={!m.disabled} disabled={busy} onChange={(e) => toggleMachine(m.code, e.target.checked)} />
             <span>{m.name} <span className="muted">· {formatUsd(BigInt(m.priceE6))} · {m.code}</span></span>
           </label>
+        ))}
+        {machines.length === 0 && <p className="muted">No machines loaded (Collector Crypt unreachable?).</p>}
+      </div>
+
+      <h3 style={{ marginTop: '1.5rem' }}>Live machines — stock &amp; odds{' '}
+        <span className="muted" style={{ fontSize: '0.7rem', fontWeight: 400 }}>· live from Collector Crypt · ▲ = restocked since the last 30s refresh</span>
+      </h3>
+      <div className="gacha-live-machines">
+        {machines.filter((m) => (m.tiers?.length ?? 0) > 0 || Object.keys(m.stock ?? {}).length > 0).map((m) => (
+          <div key={m.code} style={{ margin: '0.7rem 0' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
+              <strong>{m.name}</strong>
+              <span className="muted" style={{ fontSize: '0.8rem' }}>
+                {formatUsd(BigInt(m.priceE6))}{Number(m.evE6) > 0 ? ` · EV ${formatUsd(BigInt(m.evE6))}` : ''}{m.buybackPct ? ` · buyback ${m.buybackPct}%` : ''}{m.disabled ? ' · hidden' : ''}
+              </span>
+            </div>
+            <table className="hist-table" style={{ marginTop: '0.25rem' }}>
+              <thead><tr><th>Tier</th><th>Odds</th><th>Value range</th><th>Stock</th></tr></thead>
+              <tbody>
+                {(m.tiers ?? []).map((t, i) => {
+                  const stock = (m.stock ?? {})[t.label] ?? 0;
+                  const up = restocks[m.code]?.[t.label] ?? 0;
+                  return (
+                    <tr key={t.label}>
+                      <td><span className="gacha-dot" style={{ background: tierColor(t.label, i), display: 'inline-block', width: 9, height: 9, borderRadius: '50%', marginRight: 6 }} />{titleCase(t.label)}</td>
+                      <td>{t.pct}%</td>
+                      <td>{rangeStr(t)}</td>
+                      <td>{stock}{up > 0 ? <span style={{ color: 'var(--up, #22c55e)', fontWeight: 600 }}> ▲ +{up}</span> : null}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         ))}
         {machines.length === 0 && <p className="muted">No machines loaded (Collector Crypt unreachable?).</p>}
       </div>
