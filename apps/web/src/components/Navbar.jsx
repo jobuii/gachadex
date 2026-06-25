@@ -12,8 +12,8 @@ const VIEWS = [
   { id: 'pool', label: 'Pool', short: 'Pool' },
   { id: 'games', label: 'Games', short: 'Games' },
   { id: 'leaderboard', label: 'Leaderboard', short: 'Ranks' },
-  { id: 'portfolio', label: 'Portfolio', short: 'Folio' },
   { id: 'docs', label: 'Docs' }, // routes to /docs (no `short` → desktop nav only, like Home)
+  { id: 'portfolio', label: 'Portfolio', short: 'Folio' }, // always the rightmost nav option
 ];
 
 // Mobile tab-bar glyphs (line-style; inherit the tab colour via currentColor). Keyed by view id.

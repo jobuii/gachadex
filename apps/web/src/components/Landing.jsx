@@ -98,6 +98,10 @@ export function Landing() {
     e?.preventDefault();
     navigate('/exchange');
   };
+  const goDocs = (e) => {
+    e?.preventDefault();
+    navigate('/docs');
+  };
   const scrollTo = (id) => (e) => {
     e.preventDefault();
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
@@ -121,6 +125,7 @@ export function Landing() {
           <a href="#how" onClick={scrollTo('how')}>HOW IT WORKS</a>
           <a href="#why" onClick={scrollTo('why')}>FEATURES</a>
           <a href="#faq" onClick={scrollTo('faq')}>FAQ</a>
+          <a href="/docs" onClick={goDocs}>DOCS</a>
           {SOCIALS.map(([label, href, d]) => (
             <a key={label} className="lp-social" href={href} target="_blank" rel="noopener noreferrer" title={label} aria-label={label}>
               <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={d} /></svg>
