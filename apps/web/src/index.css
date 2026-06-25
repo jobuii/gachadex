@@ -1821,7 +1821,14 @@ td.addr:hover { text-decoration: underline; }
   text-transform: uppercase; letter-spacing: 0.07em; }
 
 .io-scroll { overflow-x: auto; }
-.io-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+/* table-layout:fixed + the shared <colgroup> (see IndexOverview.jsx) give all three game panels one
+   identical column geometry so they align column-for-column; min-width keeps the numeric columns legible
+   (the panel scrolls via .io-scroll) on narrow viewports instead of crushing them. */
+.io-table { width: 100%; table-layout: fixed; min-width: 58rem; border-collapse: separate; border-spacing: 0; }
+.io-col-price, .io-col-range { width: 6.5rem; }
+.io-col-chg { width: 5.25rem; }
+.io-col-action { width: 5.5rem; }
+/* .io-col-name carries no width → it absorbs the remaining space, identical for every panel (still aligned) */
 .io-table thead th { background: var(--bg-2); text-align: left; white-space: nowrap;
   font-family: var(--font-chat); font-size: 0.58rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--text-muted); padding: 0.62rem 0.9rem; border-bottom: 1px solid var(--border); }
@@ -1839,7 +1846,7 @@ td.addr:hover { text-decoration: underline; }
 .io-subhead td { padding: 0.85rem 0.9rem 0.3rem; border-bottom: 0; font-family: var(--font-chat); font-size: 0.78rem;
   font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent-lit); }
 
-.io-name { font-family: var(--font-chat); font-size: 0.7rem; font-weight: 600; color: var(--text); }
+.io-name { font-family: var(--font-chat); font-size: 0.7rem; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
 .io-table td.io-price { font-weight: 700; }
 .io-table td.io-range { color: var(--text-muted); }
 .io-table td.io-delta.up { color: var(--success); }
@@ -1848,7 +1855,6 @@ td.addr:hover { text-decoration: underline; }
 
 .io-soon { margin-left: 0.5rem; font-family: var(--font-chat); font-size: 0.52rem; color: var(--text-muted); font-weight: 600;
   border: 1px solid var(--border); border-radius: 5px; padding: 0.08rem 0.38rem; text-transform: uppercase; letter-spacing: 0.05em; vertical-align: middle; }
-.io-action { width: 1%; }
 .io-cta { display: inline-block; font-family: var(--font-chat); font-size: 0.66rem; font-weight: 600; color: var(--text-muted);
   border: 1px solid var(--border); border-radius: var(--pill); padding: 0.26rem 0.62rem; white-space: nowrap;
   opacity: 0; transition: opacity 110ms ease, color 110ms ease, border-color 110ms ease; }

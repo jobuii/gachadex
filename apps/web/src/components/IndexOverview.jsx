@@ -125,6 +125,20 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
             </header>
             <div className="io-scroll">
               <table className="io-table">
+                {/* shared column geometry — every game panel renders this same colgroup, so the columns
+                    line up across panels (separate <table>s otherwise auto-size their columns independently,
+                    and Pokémon's longer index names widened its first column relative to OP/Magic). */}
+                <colgroup>
+                  <col className="io-col-name" />
+                  <col className="io-col-price" />
+                  <col className="io-col-chg" />
+                  <col className="io-col-chg" />
+                  <col className="io-col-chg" />
+                  <col className="io-col-chg" />
+                  <col className="io-col-range" />
+                  <col className="io-col-range" />
+                  <col className="io-col-action" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th className="label">Index</th>
