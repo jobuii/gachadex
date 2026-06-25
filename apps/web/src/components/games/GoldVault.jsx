@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../../lib/api.js';
+import { useAuth } from '../../auth/AuthContext.jsx';
 import { GoldBar } from './GoldBar.jsx';
 import { GachaReveal } from './GachaReveal.jsx';
 
@@ -25,9 +26,10 @@ export function GoldVault({ refreshKey = 0 }) {
   const [revealResult, setRevealResult] = useState(null);
   const [instantCutBps, setInstantCutBps] = useState(1000);
   const raf = useRef(0);
+  const { user } = useAuth(); // re-loads on sign-in, clears on sign-out (no page refresh needed)
 
-  const load = () => { if (!api.hasSession()) { setGold(null); return; } api.getGoldBalance().then(setGold).catch(() => {}); };
-  useEffect(() => { load(); }, [refreshKey]);
+  const load = useCallback(() => { if (!user) { setGold(null); return; } api.getGoldBalance().then(setGold).catch(() => {}); }, [user]);
+  useEffect(() => { load(); }, [load, refreshKey]); // user change (login/logout) or a pack open → reload
   useEffect(() => {
     api.getHealth().then((h) => { setEnabled(!!h.goldEnabled); if (h.gachaInstantCutBps != null) setInstantCutBps(Number(h.gachaInstantCutBps)); }).catch(() => {});
     api.getCcMachines().then((m) => setMachine25((m.machines ?? []).find((x) => Number(x.priceE6) === FREE_PACK_PRICE_E6) ?? null)).catch(() => {});
