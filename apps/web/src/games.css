@@ -103,7 +103,7 @@
 .gacha-chip { flex: 0 0 auto; width: 110px; display: flex; flex-direction: column; align-items: center; gap: 0.25rem; padding: 0.5rem; border: 1px solid var(--border, #2a2a38); border-radius: var(--radius, 10px); background: var(--bg-2, #14141c); color: var(--text, #e8e8f0); cursor: pointer; }
 .gacha-chip.active { border-color: var(--cg, #f59e0b); box-shadow: 0 0 0 1px var(--cg, #f59e0b); }
 .gacha-chip img, .gacha-chip-ph { width: 64px; height: 64px; object-fit: contain; font-size: 2rem; line-height: 64px; }
-.gacha-chip-name { font-size: 0.72rem; text-align: center; line-height: 1.1; max-height: 2.2em; overflow: hidden; }
+.gacha-chip-name { font-size: 0.72rem; text-align: center; line-height: 1.1; height: 2.2em; display: flex; align-items: center; justify-content: center; overflow: hidden; } /* fixed 2-line box → prices align even for 1-line names */
 .gacha-chip-price { font-size: 0.8rem; font-weight: 700; color: var(--cg, #f59e0b); }
 .gacha-main { display: grid; grid-template-columns: minmax(300px, 360px) 1fr; gap: 1.25rem; margin-top: 1rem; align-items: start; }
 .gacha-machine { border: 1px solid var(--border, #2a2a38); border-radius: 16px; padding: 1rem 1.1rem 1.2rem; background: var(--bg-2, #14141c); text-align: left; }
@@ -387,9 +387,29 @@
   background-size: 250% 100%; background-position: 50% 0;
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent;
   filter: drop-shadow(0 0 16px rgba(255,201,60,0.8)) drop-shadow(0 3px 5px rgba(0,0,0,0.55));
-  animation: gr-tier-pop 0.5s cubic-bezier(0.34,1.7,0.45,1) both, gr-gold-shine 2.4s linear infinite;
+  /* slams in hard like a rubber stamp (overrides the gentle pop) + keeps the gold shine sweep */
+  animation: gr-stamp 0.5s cubic-bezier(0.2,0.75,0.3,1) both, gr-gold-shine 2.4s linear infinite;
 }
 @keyframes gr-gold-shine { from { background-position: 250% 0; } to { background-position: -50% 0; } }
+/* the EPIC stamp: huge + tilted + soft → slams down past 1 → settles. Reads as a hard impact. */
+@keyframes gr-stamp {
+  0% { opacity: 0; transform: scale(2.7) rotate(-7deg); }
+  45% { opacity: 1; }
+  62% { transform: scale(0.86) rotate(2deg); }
+  80% { transform: scale(1.08) rotate(-1.5deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+/* whole-screen shake the instant EPIC stamps */
+.gacha-reveal-overlay.gr-epic-quake { animation: gr-quake 0.5s cubic-bezier(0.36,0.07,0.19,0.97) both; }
+@keyframes gr-quake {
+  0%, 100% { transform: translate(0, 0); }
+  12% { transform: translate(-9px, 5px) rotate(-0.5deg); }
+  26% { transform: translate(8px, -7px) rotate(0.5deg); }
+  40% { transform: translate(-7px, 6px); }
+  55% { transform: translate(6px, -5px); }
+  70% { transform: translate(-4px, 3px); }
+  85% { transform: translate(2px, -2px); }
+}
 /* darkening scrim behind the beats → high contrast (dim while charging, deepens while a beat reads) */
 .gacha-card3d-scrim { position: absolute; inset: 0; pointer-events: none; z-index: 1; opacity: 0.45; transition: opacity 0.35s ease;
   background: radial-gradient(ellipse 72% 58% at 50% 50%, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.62) 42%, rgba(0,0,0,0.16) 78%, transparent 100%); }
@@ -437,7 +457,7 @@
   .gacha-card3d.done, .gacha-card3d-back, .gacha-card3d-conic { animation: none; }
   .gacha-beat-in, .gacha-beat-tier { animation: none; }
   .gacha-card3d-scrim { transition: none; }
-  .gr-pop-epic, .gr-pop-epic::before, .gacha-reveal-banner { animation: none; }
+  .gr-pop-epic, .gr-pop-epic::before, .gacha-reveal-banner, .gacha-reveal-overlay.gr-epic-quake { animation: none; }
 }
 
 /* dev-only reveal preview bar (import.meta.env.DEV → never in a production build) */

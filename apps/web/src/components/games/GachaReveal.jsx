@@ -42,7 +42,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   const started = useRef(false);
 
   useEffect(() => {
-    playSound('rip');
+    playSound('rip', { debounceMs: 500 }); // once, as the charging screen opens (debounce drops StrictMode's echo)
     const t = timers;
     const loop = coinLoop;
     // Re-arm `started` on cleanup so React 18 StrictMode's dev mount→unmount→mount double-invoke reschedules
@@ -63,7 +63,8 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
     const at = (ms, fn) => timers.current.push(setTimeout(fn, ms));
     at(seq.year, () => { setPhase('year'); playSound('beat', { volume: 0.7 }); });
     at(seq.grade, () => { setPhase('grade'); playSound('beat'); });
-    at(seq.tier, () => { setPhase('tier'); playSound('beat', { volume: 0.9 }); });
+    // The Type reveal: a plain beat — except EPIC, which lands with a heavy thud (the stamp + screen shake ride the CSS).
+    at(seq.tier, () => { setPhase('tier'); playSound(big === 'epic' ? 'thud' : 'beat', { volume: big === 'epic' ? 1 : 0.9 }); });
     at(seq.flip, () => { setPhase('flip'); playSound('flip'); });
     at(seq.done, () => {
       setPhase('done');
@@ -98,7 +99,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   const close = () => { stopSound(coinLoop.current); onClose(); };
 
   return createPortal(
-    <div className={`gacha-reveal-overlay ${big && done ? `gr-pop-${big}` : ''}`} onClick={close}>
+    <div className={`gacha-reveal-overlay ${big && done ? `gr-pop-${big}` : ''} ${phase === 'tier' && big === 'epic' ? 'gr-epic-quake' : ''}`} onClick={close}>
       <div className="gacha-reveal-bg" aria-hidden />
       {done && big && <RevealFX kind={big} color={tier.color} />}
 

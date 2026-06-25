@@ -9,6 +9,7 @@ const BASE = '/sounds/gacha';
 const FILES = {
   rip: 'rip',
   beat: 'beat',
+  thud: 'thud', // heavy stamp — the EPIC type reveal
   flip: 'flip',
   winCommon: 'win-common',
   winRare: 'win-rare',
@@ -17,6 +18,10 @@ const FILES = {
   confetti: 'confetti',
   click: 'click',
 };
+
+// Last-played timestamp per clip, for the optional `debounceMs` guard (drops React 18 StrictMode's
+// double-invoke of a mount sound so e.g. `rip` plays once, not twice, on a fresh reveal).
+const lastPlayed = {};
 
 const MUTE_KEY = 'gdex_gacha_muted';
 let muted = false;
@@ -32,10 +37,15 @@ export function toggleMuted() { return setMuted(!muted); }
 
 /** Play a named clip with a FRESH element each call — guarantees the right clip plays (a cached/cloned element
  *  could silently replay the wrong buffer) and lets triggers overlap. Returns the element (to stop a loop) or null. */
-export function playSound(name, { volume = 1, loop = false } = {}) {
+export function playSound(name, { volume = 1, loop = false, debounceMs = 0 } = {}) {
   if (muted) return null;
   const file = FILES[name];
   if (!file || typeof Audio === 'undefined') return null;
+  if (debounceMs > 0) {
+    const now = Date.now();
+    if (lastPlayed[name] && now - lastPlayed[name] < debounceMs) return null; // skip the StrictMode echo
+    lastPlayed[name] = now;
+  }
   try {
     const a = new Audio(`${BASE}/${file}.mp3`);
     a.volume = Math.max(0, Math.min(1, volume));
