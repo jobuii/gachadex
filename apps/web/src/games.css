@@ -365,12 +365,12 @@
 .gacha-beat { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 2; }
 .gacha-beat-in { text-align: center; padding: 0 10px; animation: gr-beat-in 0.35s cubic-bezier(0.34,1.5,0.4,1) both; }
 .gacha-beat-label { display: block; font-size: 0.58rem; text-transform: uppercase; letter-spacing: 0.32em; color: rgba(255,255,255,0.62); font-weight: 700; margin-bottom: 0.7rem; }
-/* Year / Grade — retro-arcade pixel font, white, with a dark stroke + extruded 3D drop (high-score look) */
-.gacha-beat-val { display: block; font-family: 'Press Start 2P', var(--font-display, monospace); font-size: clamp(0.95rem, 5.4vw, 1.5rem); line-height: 1.2; color: #fff; -webkit-text-stroke: 1.5px rgba(0,0,0,0.55);
-  text-shadow: 0 1px 0 #cfd2dc, 0 2px 0 #b4b8c6, 0 3px 0 #9aa0b2, 0 4px 0 #848ba0, 0 5px 0 #6e7488, 0 6px 8px rgba(0,0,0,0.5), 0 9px 20px rgba(0,0,0,0.45); }
-/* Type / rarity — same pixel font in the rarity colour with a heavy matching glow; springs in bigger */
-.gacha-beat-tier { color: var(--rarity, #fff); font-size: clamp(0.78rem, 4.2vw, 1.15rem); -webkit-text-stroke: 1.2px rgba(0,0,0,0.5);
-  text-shadow: 0 0 10px var(--rarity, #fff), 0 0 26px var(--rarity, #fff), 0 3px 0 rgba(0,0,0,0.5), 0 6px 16px rgba(0,0,0,0.5);
+/* Year / Grade — the app's display font, white, with a dark stroke + extruded 3D drop */
+.gacha-beat-val { display: block; font-family: var(--font-display, 'Space Grotesk', sans-serif); font-weight: 800; font-size: clamp(1.6rem, 9vw, 2.6rem); line-height: 1.1; letter-spacing: 0.01em; color: #fff; -webkit-text-stroke: 1px rgba(0,0,0,0.45);
+  text-shadow: 0 1px 0 #c2c6d2, 0 2px 0 #a6acbd, 0 3px 0 #888fa3, 0 4px 8px rgba(0,0,0,0.5), 0 8px 20px rgba(0,0,0,0.45); }
+/* Type / rarity — same display font, UPPERCASE, in the rarity colour with a heavy matching glow; springs in */
+.gacha-beat-tier { color: var(--rarity, #fff); font-weight: 800; text-transform: uppercase; letter-spacing: 0.02em; font-size: clamp(1.05rem, 6vw, 1.5rem); -webkit-text-stroke: 1px rgba(0,0,0,0.4);
+  text-shadow: 0 0 12px var(--rarity, #fff), 0 0 28px var(--rarity, #fff), 0 2px 0 rgba(0,0,0,0.45), 0 5px 14px rgba(0,0,0,0.5);
   animation: gr-tier-pop 0.5s cubic-bezier(0.34,1.7,0.45,1) both; }
 /* darkening scrim behind the beats → high contrast (dim while charging, deepens while a beat reads) */
 .gacha-card3d-scrim { position: absolute; inset: 0; pointer-events: none; z-index: 1; opacity: 0.45; transition: opacity 0.35s ease;
@@ -390,6 +390,7 @@
   color: var(--rarity, #fff); background: color-mix(in srgb, var(--rarity, #8b5cf6) 16%, transparent); border: 1px solid color-mix(in srgb, var(--rarity, #8b5cf6) 55%, transparent); box-shadow: 0 0 16px -3px var(--rarity, transparent); }
 .gacha-reveal-spent { font-size: 0.74rem; margin: 0.1rem 0 0.4rem; }
 .gacha-reveal-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: center; }
+.gacha-reveal-actions button { font-size: 0.84rem; font-weight: 700; padding: 0.55rem 0.85rem; white-space: nowrap; }
 
 /* epic screen flash + shake on payoff */
 .gr-pop-epic::before { content: ''; position: absolute; inset: 0; background: #fff; pointer-events: none; z-index: 8; animation: gr-flash 0.5s ease-out forwards; }
@@ -444,8 +445,9 @@
 .gacha-odds-pct { width: 40px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted, #8b8b9a); }
 .gacha-meta-line { font-size: 0.66rem; color: var(--muted, #8b8b9a); text-align: center; margin: 0.7rem 0 0; }
 /* card-in-pack meta (insured value + grade), collectorroll layout */
-.gacha-card-meta { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; width: 100%; margin-top: 0.3rem; }
-.gacha-card-grade { font-size: 0.64rem; color: var(--muted, #8b8b9a); white-space: nowrap; }
+/* value on its own line, grade as a readable badge below (was cramped sharing one row in a ~110px tile) */
+.gacha-card-meta { display: flex; flex-direction: column; align-items: flex-start; gap: 0.3rem; width: 100%; margin-top: 0.35rem; }
+.gacha-card-grade { font-size: 0.68rem; font-weight: 700; color: var(--text); background: var(--bg-3, rgba(255,255,255,0.04)); border: 1px solid var(--border); border-radius: 5px; padding: 0.12rem 0.42rem; white-space: nowrap; }
 
 /* smaller Contains/Buyback (less in-your-face) */
 .gacha-machine-grid .gacha-eyebrow { font-size: 0.52rem; }
@@ -457,8 +459,8 @@
 .gacha-qty-stepper button:disabled { opacity: 0.35; cursor: not-allowed; }
 .gacha-qty-stepper button:hover:not(:disabled) { background: var(--bg-2); color: var(--cg, #f59e0b); }
 .gacha-qty-stepper > span { min-width: 38px; text-align: center; font-weight: 800; font-variant-numeric: tabular-nums; }
-/* rare.win Open button: icon+label left, price right */
-.gacha-open-btn { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; width: 100%; }
+/* rare.win Open button: icon+label left, price right — big text, tight padding (button height unchanged) */
+.gacha-open-btn { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; width: 100%; font-size: 0.85rem; font-weight: 700; padding: 0.4rem 0.7rem; }
 .gacha-open-left { display: inline-flex; align-items: center; gap: 0.45rem; }
 .gacha-open-price { font-variant-numeric: tabular-nums; }
 /* YOLO toggle */
@@ -495,4 +497,4 @@
 .gacha-summary-payout { text-align: center; font-size: 0.8rem; margin: 0 0 0.7rem; min-height: 1.1em; }
 .gacha-summary-payout strong { font-size: 0.96rem; font-variant-numeric: tabular-nums; }
 .gacha-summary-actions { display: flex; gap: 0.6rem; margin-top: 0.2rem; }
-.gacha-summary-actions > button { flex: 1; }
+.gacha-summary-actions > button { flex: 1; font-size: 0.84rem; font-weight: 700; padding: 0.55rem 0.7rem; white-space: nowrap; }
