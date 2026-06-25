@@ -852,6 +852,10 @@ button { border-radius: var(--pill); }
 
 /* account-history tables (orders / trades / transactions / position history) */
 .hist-table { width: 100%; border-collapse: collapse; font-size: 0.45rem; }
+/* In the exchange bottom panel, match the larger Open-Positions size for readability. It scrolls inside the
+   fixed-height panel (.bottom-content overflow:auto), so it can't add page-level vertical scroll. The
+   admin / chat-admin tables (also .hist-table) stay compact at 0.45rem. */
+.bottom-content .hist-table { font-size: 0.62rem; }
 .hist-table th {
   text-align: left; font-weight: normal; color: var(--text-muted); letter-spacing: 0.03rem;
   padding: 0.3rem 0.55rem; white-space: nowrap; border-bottom: 1px solid var(--border);
@@ -1397,11 +1401,11 @@ button { border-radius: var(--pill); }
 .market-halt-badge { margin-left: auto; color: var(--danger); font-size: 0.5rem; border: 1px solid var(--danger); padding: 0.15rem 0.3rem; }
 
 /* Open-interest panel */
-.oi-row { display: flex; justify-content: space-between; font-size: 0.55rem; margin-bottom: 0.4rem; }
+.oi-row { display: flex; justify-content: space-between; font-size: 0.62rem; margin-bottom: 0.4rem; }
 .oi-bar { display: flex; height: 14px; border: 1px solid var(--border); overflow: hidden; }
 .oi-bar-long { background: var(--success); }
 .oi-bar-short { background: var(--danger); }
-.oi-hint { margin-top: 0.5rem; font-size: 0.5rem; color: var(--text-muted); line-height: 1.5; }
+.oi-hint { margin-top: 0.5rem; font-size: 0.6rem; color: var(--text-muted); line-height: 1.5; }
 
 /* Positions table */
 .positions-table { width: 100%; border-collapse: collapse; font-size: 0.62rem; }
