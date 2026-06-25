@@ -20,16 +20,11 @@ const RARITY = {
 const tierOf = (r) => RARITY[(r || '').toLowerCase()] ?? RARITY.common;
 
 // The reveal as RELATIVE gaps (ms): Year → (gradeGap) Grade → (typeGap) Type → (flipGap) flip → (hold) done.
-// The beats don't start until the RIP sound has finished AND the card has animated in (RIP_AUDIBLE_MS below).
-// Year + Grade tick by at the ORIGINAL pace (gradeGap/typeGap unchanged); then the Type beat LINGERS its original
-// gap PLUS ~1.5s so the player reads the rarity, and the flipped card LINGERS its original gap PLUS ~1.5s before
-// the info/actions appear. (Original type→flip / flip→done: base 1050/700, rare 1250/900, epic 1500/1100.)
-// Multi-opens skip all of this (straight to the summary) so a slow single reveal never gets tedious.
-const BEATS = {
-  base: { gradeGap: 1150, typeGap: 1200, flipGap: 2550, hold: 2200 },
-  rare: { gradeGap: 1400, typeGap: 1450, flipGap: 2750, hold: 2400 },
-  epic: { gradeGap: 1800, typeGap: 1900, flipGap: 3000, hold: 2600 },
-};
+// SAME pacing for every rarity (common through epic). The beats don't start until the RIP sound has finished AND
+// the card has animated in (RIP_AUDIBLE_MS below): Year + Grade tick by quickly (~1.2s each), then the Type beat
+// and the flipped card each DWELL ~2.5s so the player reads the rarity and sees the card before the info/actions
+// appear. Multi-opens skip all of this (straight to the summary) so a slow single reveal never gets tedious.
+const BEATS = { gradeGap: 1200, typeGap: 1200, flipGap: 2500, hold: 2500 };
 // rip.mp3's tear ends ~2.28s (then ~0.8s of trailing silence) — hold the year beat until then so the rip finishes
 // and the card-in animation plays first. If the open+poll already outlasted the rip, just give a short settle.
 const RIP_AUDIBLE_MS = 2300;
@@ -66,14 +61,13 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
       else setPhase('failed');
       return;
     }
-    const seq = big === 'epic' ? BEATS.epic : big === 'rare' ? BEATS.rare : BEATS.base;
     // Start the beats only once the rip has finished (and the card-in animation has played). If the open+poll
     // already ran past the rip, fall back to a short settle. Then space the rest by their relative gaps.
     const yearAt = Math.max(RIP_AUDIBLE_MS - (performance.now() - mountAt.current), MIN_SETTLE_MS);
-    const gradeAt = yearAt + seq.gradeGap;
-    const typeAt = gradeAt + seq.typeGap;
-    const flipAt = typeAt + seq.flipGap;
-    const doneAt = flipAt + seq.hold;
+    const gradeAt = yearAt + BEATS.gradeGap;
+    const typeAt = gradeAt + BEATS.typeGap;
+    const flipAt = typeAt + BEATS.flipGap;
+    const doneAt = flipAt + BEATS.hold;
     const at = (ms, fn) => timers.current.push(setTimeout(fn, ms));
     at(yearAt, () => { setPhase('year'); playSound('beat', { volume: 0.7 }); });
     at(gradeAt, () => { setPhase('grade'); playSound('beat'); });
