@@ -383,6 +383,68 @@ both client-side and in the service. Linking a code creates the wallet's account
 
 ---
 
+## Classic Gacha — Collector Crypt real-NFT packs (flag-gated, pre-launch)
+
+A Games-page surface that resells **Collector Crypt (CC)** graded-card gacha packs. Buy a pack with your
+GachaDex balance → GDEX pays CC on-chain → **CC's draw (its own VRF — we don't run the RNG)** reveals and
+delivers a **real graded-card NFT** into your GDEX custody wallet. Then **sell it back** (GDEX keeps **5%**,
+or **10%** on an instant sell-on-reveal), **withdraw** the real NFT to an external wallet (step-up signed),
+**convert** it (sell-back → open a perp on that card's market with the proceeds), or **trade** the matched
+market. Built on `development`, **OFF by default** behind `CLASSIC_GACHA_ENABLED` and **real-funds-gated**
+(the open/sell/withdraw routes 403 in play-money). Held NFTs live in **Portfolio → Inventory** and in the
+lobby's "Your pulls". Spec: `docs/classic-gacha-cc-packs-spec.md`.
+
+### Economics & EV calibration
+
+Because the draw is CC's, **GDEX does not design the prize odds or house edge** — this is a margin business,
+not a prize-table business. "EV calibration" here means two things:
+
+1. **Read CC's per-machine numbers.** `/api/machines` returns, per machine, CC's expected insured value
+   (`ev`), the rarity `tierRanges` ($ bands), per-tier `odds`, `instantBuyback` % (what CC pays to buy a card
+   back), and current `stock` per tier. You don't change these — you use them to pick which machines to
+   feature/enable and to understand the sell-back economics per price tier ($25/$50/$100/$250/$1000).
+2. **Set GDEX's margin knobs so the house nets positive.** Three live-tunable knobs (admin **Gacha** tab):
+   the **sell-back cut** (5% manual / 10% instant), an optional **purchase markup** (default 0), and the
+   **free-pack rebate** (Tokens loyalty: ~**2.5%** of every paid open accrues toward a free `$25` pack at the
+   `$1000`-spend threshold, funded as real USDC from the `GACHA_REWARDS_BUDGET` account).
+
+   The tension: **the rebate is paid on _every_ open, but the cut is earned only on _sold-back_ opens.** So
+   there's a break-even sell-back rate — at the default 5% cut and ~2.5% rebate (≈ `$1.10` cut on a ~`$22`
+   buyback vs ~`$0.63` rebate on a `$25` pack): **break-even ≈ 57% sell-back**. The operator's CC data shows
+   ~90% sell back, so the spec concludes **no markup is required** — but if real players _hold or withdraw_
+   more than expected (especially grail buyers on the `$1000` machine), the rebate can outrun the cut and the
+   house bleeds; the markup knob is the backstop. With `TOKENS_ENABLED` **off** there is **no rebate liability**
+   at all — the cut + markup is pure margin and the 57% figure doesn't apply.
+
+   **Calibrating concretely:** decide on Tokens, set the knobs for the expected sell-back behavior, **pre-fund
+   `GACHA_REWARDS_BUDGET`** to cover the free-pack liability, then watch the monitoring readout (below) — the
+   live sell-back rate vs the 57% break-even, and the **per-machine net** — and adjust the knobs live (or
+   disable / mark-up a tier that's net-negative).
+
+### Operations — the `/api/machines` feed, monitoring, and recovery
+
+- **Call cadence.** `GET /gacha/machines` proxies CC's `/api/machines` **live on every request, with no
+  server-side cache** (rate-limited only). The customer lobby fetches it **once per page load** (no client
+  polling); the admin Gacha tab re-fetches every **30s** while open. So CC is hit roughly on customer
+  page-loads plus once per 30s per open admin tab. (A short server-side cache is an available optimization if
+  CC load becomes a concern — not yet added.)
+- **What the feed carries vs what's shown today.** The payload already includes per-tier **stock**, **odds %**,
+  **$ ranges**, **EV**, and **buyback %**. The **player lobby** shows EV, buyback %, and the per-tier odds bars
+  for the selected machine. The **admin tab** currently shows only the machine name/price + enable toggle —
+  **there is no operator stock / restock / cross-machine-odds view yet** (the data is fetched but not
+  surfaced; a per-machine live stock+odds panel with restock highlighting is a planned add).
+- **Monitoring readout** (admin Gacha tab): the §6 economics (sell-back cut + markup revenue vs Token-rebate
+  cost, the operator net, and the live sell-back rate vs the ~57% break-even); activity (packs opened all-time
+  + 24h, USDC volume, prize value, biggest pull, players, withdraws, realized rarity odds); **per-machine**
+  opens, net, and realized odds; and **stuck-row counts**.
+- **Stuck-row reconciler.** A pack mid sell-back/withdraw is briefly `selling`/`withdrawing`; a process crash
+  can strand it. `reconcileStuckPrizes` (admin **Reconcile** button + boot recovery) reads each NFT's
+  on-chain owner via DAS and resolves it: still in custody → released to `held`; gone for a withdraw → marked
+  `withdrawn`; sold-but-unsettled → flagged in the logs for a manual credit. Status-guarded + idempotent; a
+  grace window (default 300s) keeps it clear of any live in-flight op.
+
+---
+
 ## Architecture
 
 ```
@@ -640,6 +702,12 @@ alongside — live chat with reactions, leaderboard rank badges, presence, and m
 
 **Operator responsibility before real money on mainnet:** the security audit, KYC/AML, and geofencing
 are yours to put in place — the code only gates on `ALLOW_MAINNET_FUNDS=true`, it does not verify them.
+
+**Classic Gacha** (Collector Crypt real-NFT packs, section above) is built end to end but **off by default**
+behind `CLASSIC_GACHA_ENABLED` + real-funds gating, **not yet merged or launched** — pre-launch work is
+operator-side: EV/margin calibration, pre-funding `GACHA_REWARDS_BUDGET`, a CC-mainnet live test, and KYC.
+An operator **per-machine stock + odds + restock** panel is planned (the data is already in the feed, just
+not yet surfaced in the admin tab).
 
 Still deferred: the full **DROP** round mechanic (the scheduled draw, the rare.win pack-open, and the
 on-chain NFT prize — needs rare.win API access), the **Sealed** price feed (the Sealed index stays gated
