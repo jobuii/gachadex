@@ -71,11 +71,15 @@ export async function getGoldHistory(db: Db, userId: string, limit = 50): Promis
  *  Σ gold_ledger == gold_balances invariant still holds. Destructive — operator-gated. Returns the user count. */
 export async function resetGoldBalances(db: Db): Promise<{ usersReset: number }> {
   return db.tx(async (q) => {
-    const rows = (await q.query<{ user_id: string; balance: string }>(`SELECT user_id, balance FROM gold_balances WHERE balance <> 0`)).rows;
+    // Lock the non-zero rows (FOR UPDATE) so a concurrent earn/spend can't change a balance between the read and
+    // the zero — which would leave a stale −balance ledger and break the Σ invariant. Zero ONLY the rows we
+    // ledgered (per-row, not a blanket UPDATE): a balance earned AFTER this SELECT isn't in the locked set and
+    // keeps its own +ledger, so its invariant holds too instead of being silently zeroed without a matching row.
+    const rows = (await q.query<{ user_id: string; balance: string }>(`SELECT user_id, balance FROM gold_balances WHERE balance <> 0 FOR UPDATE`)).rows;
     for (const r of rows) {
       await q.query(`INSERT INTO gold_ledger(id, user_id, delta, reason) VALUES($1,$2,$3,'ADMIN_RESET')`, [randomUUID(), r.user_id, (-BigInt(r.balance)).toString()]);
+      await q.query(`UPDATE gold_balances SET balance = 0 WHERE user_id = $1`, [r.user_id]);
     }
-    await q.query(`UPDATE gold_balances SET balance = 0`);
     return { usersReset: rows.length };
   });
 }
