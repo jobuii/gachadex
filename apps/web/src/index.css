@@ -19,7 +19,7 @@
   --cb-opacity:   .4;
   /* shape language — retro defaults (sharp, chunky, pixel weight); skins override in themes.css */
   --radius:       0px;   /* panels / inputs / boxes */
-  --pill:         0px;   /* buttons / chips */
+  --pill:         6px;   /* buttons / chips — a slight, consistent curve */
   --border-w:     2px;
   --weight-strong: 400;  /* headings / buttons / tabs */
 }
@@ -46,6 +46,8 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: var(--gold); }
 ::-webkit-scrollbar-corner { background: var(--bg); }
 html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
+/* Consistent slight curve on every button (a specific rule can still override with its own radius). */
+button { border-radius: var(--pill); }
 
 /* ─── NAVBAR ─────────────────────────────────── */
 .navbar {
@@ -839,7 +841,7 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 .sub-tabs { display: flex; gap: 0.4rem; margin-bottom: 0.55rem; }
 .sub-tab-btn {
   background: var(--bg-3); border: 1px solid var(--border); color: var(--text-muted);
-  font-family: var(--font-base); font-size: 0.4rem; padding: 0.3rem 0.6rem; cursor: pointer;
+  font-family: var(--font-base); font-size: 0.5rem; padding: 0.4rem 0.85rem; cursor: pointer;
 }
 .sub-tab-btn:hover { color: var(--text); }
 .sub-tab-btn.active { color: var(--gold); border-color: var(--gold); }
@@ -1721,7 +1723,8 @@ td.addr:hover { text-decoration: underline; }
 
 /* ===== Profile avatars: chat sprites · Portfolio banner · avatar picker ===== */
 .chat-avatar { overflow: hidden; }
-.chat-avatar-img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+/* scale up to crop the sprite's transparent margin so the creature fills the box (parent clips the overflow) */
+.chat-avatar-img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; transform: scale(2); }
 
 .pf-banner {
   position: relative; display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap;
