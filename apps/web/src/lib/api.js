@@ -214,6 +214,25 @@ export const getArena = () => req('/games/arena', { auth: true }); // { arena: A
 export const getArenaById = (roundId) => req(`/games/arena/${roundId}`, { auth: true });
 export const arenaJoin = (wishlist, idempotencyKey) => req('/games/arena/join', { method: 'POST', auth: true, body: { wishlist, idempotencyKey } });
 
+// --- classic gacha (docs/classic-gacha-cc-packs-spec.md) — public Collector Crypt lobby reads (P0) below; authed buy/sell/withdraw/Gold (P1–P4) further down ---
+export const getCcMachines = () => req('/gacha/machines'); // { machines: [{ code, name, game, priceE6, buybackPct, tiers, stock, image }] }
+export const getCcMachineCards = (code) => req(`/gacha/machines/${encodeURIComponent(code)}/cards`); // { cards: [{ mint, name, imageUrl, valueE6, rarity }] }
+export const getCcWinners = (count = 50) => req(`/gacha/winners?count=${count}`); // { winners: [{ winner, mint, name, imageUrl, valueE6, tier, packType }] }
+// P1 — buy → open → sell-back (real-funds; trade-scoped). open returns {openId, status, card}; poll opens/:id until status='opened'.
+export const openGachaPack = (machineCode, idempotencyKey, expectedPriceE6, payWith = 'usdc', turbo = false, claim = false) => req('/gacha/open', { method: 'POST', auth: true, body: { machineCode, idempotencyKey, expectedPriceE6, payWith, turbo, claim } });
+export const getGachaOpen = (id) => req(`/gacha/opens/${id}`, { auth: true });
+export const gachaReconcile = () => req('/gacha/reconcile', { method: 'POST', auth: true });
+export const getGachaInventory = () => req('/gacha/inventory', { auth: true }); // { inventory: [{ id, mint, name, grade, imageUrl, valueE6, marketId, status }] }
+export const sellGachaPrize = (id, instant = false) => req(`/gacha/prizes/${id}/sell-back`, { method: 'POST', auth: true, body: { instant: Boolean(instant) } }); // GDEX keeps 5% (10% if instant sell-on-reveal)
+// Convert a won card → a perp on its market (sell-back then open a position with the proceeds). 409 if no market.
+export const convertGachaPrize = (id, { side = 'long', leverage = 2 } = {}) => req(`/gacha/prizes/${id}/convert`, { method: 'POST', auth: true, body: { side, leverage } });
+// Withdraw the real NFT to an external wallet (P2; full scope + step-up). Step 1: nonce/message over (mint, dest).
+export const gachaWithdrawNonce = (prizeId, dest) => req(`/gacha/prizes/${prizeId}/withdraw/nonce`, { method: 'POST', auth: true, body: { dest } });
+export const gachaWithdraw = (prizeId, body) => req(`/gacha/prizes/${prizeId}/withdraw`, { method: 'POST', auth: true, body }); // { dest, message, signature }
+// P4 — loyalty Gold.
+export const getGoldBalance = () => req('/gold/balance', { auth: true }); // { balance, perUsd, untilFreePackGold }
+export const getGoldHistory = () => req('/gold/history', { auth: true }); // { history: [{ delta, reason, createdAt }] }
+
 // --- LP ---
 export const getPool = () => req('/lp/pool');
 export const getLpPosition = () => req('/lp/position', { auth: true });
@@ -270,6 +289,12 @@ export const adminSetGamesConfig = (body, adminKey) => adminReq('/admin/games/co
 export const adminSeedGamePool = (amountUsd, adminKey) => adminReq('/admin/games/seed-pool', adminKey, { amountUsd });
 export const adminCancelBreak = (roundId, adminKey) => adminReq('/admin/games/break/cancel', adminKey, { roundId });
 export const adminCancelArena = (roundId, adminKey) => adminReq('/admin/games/arena/cancel', adminKey, { roundId });
+// Classic Gacha: live knobs (cut %s, markup, free-pack threshold, per-machine enable) + the economics readout.
+export const adminGetGachaConfig = (adminKey) => adminGet('/admin/gacha/config', adminKey);
+export const adminSetGachaConfig = (body, adminKey) => adminReq('/admin/gacha/config', adminKey, body);
+export const adminGetGachaMonitoring = (adminKey) => adminGet('/admin/gacha/monitoring', adminKey);
+export const adminReconcileStuckGacha = (adminKey) => adminReq('/admin/gacha/reconcile-stuck', adminKey, {}); // recover crash-stranded selling/withdrawing rows
+export const adminResetGold = (adminKey) => adminReq('/admin/gacha/reset-gold', adminKey, {}); // zero every customer's Gold balance (destructive)
 // Treasury + insurance. /admin/treasury (full PoR view incl. insurance + allocatable surplus) is
 // real-funds-only; /admin/insurance (balance) + the fee-allocation moves work in play-money too.
 export const adminGetTreasury = (adminKey) => adminGet('/admin/treasury', adminKey);

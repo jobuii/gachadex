@@ -12,6 +12,8 @@ import { socialRoutes } from './routes/social.ts';
 import { historyRoutes } from './routes/history.ts';
 import { chatRoutes } from './routes/chat.ts';
 import { gameRoutes } from './routes/games.ts';
+import { gachaRoutes } from './routes/gacha.ts';
+import { gachaConfig } from './services/gacha-config.ts';
 import { walletRoutes } from './routes/wallet.ts';
 import { scrydexWebhookRoutes } from './routes/scrydex-webhook.ts';
 import { imageProxyRoutes } from './routes/image-proxy.ts';
@@ -101,6 +103,11 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
     realFunds: config.realFunds,
     listingEnabled: searchAndBetActive, // on-demand /markets/ensure is registered — lets the web hide a dead LIST button
     gamesEnabled: config.gamesEnabled, // the web hides the Games nav tab + page entirely until this flips on
+    classicGachaEnabled: config.classicGachaEnabled, // the web hides the Classic Gacha entry until this flips on
+    goldEnabled: gachaConfig.goldEnabled.get(), // master Gold switch (live knob) — off hides Gold in the UI; earn still accrues
+    payWithGoldEnabled: gachaConfig.payWithGoldEnabled.get(), // gates the "pay with Gold" option on machine purchases
+    gachaInstantCutBps: gachaConfig.turboCutBps.get(), // GDEX's cut on an instant (sell-on-reveal) sell-back → the web shows the net payout (live knob)
+    gachaBuybackCutBps: gachaConfig.buybackCutBps.get(), // GDEX's cut on a later manual sell-back (live knob)
     apiVersion: API_VERSION,
     time: new Date().toISOString(),
   }));
@@ -115,6 +122,7 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
   await app.register(historyRoutes);
   await app.register(chatRoutes);
   await app.register(gameRoutes); // Games surface (docs/games-spec.md); play routes self-gate on GAMES_ENABLED
+  await app.register(gachaRoutes); // Classic Gacha lobby (P0, read-only); routes self-gate on CLASSIC_GACHA_ENABLED
   await app.register(walletRoutes);
   await app.register(scrydexWebhookRoutes); // Scrydex price webhook (§8), HMAC-verified; encapsulated raw-body parser
   await app.register(imageProxyRoutes); // same-origin re-serve of whitelisted CDN images (canvas-safe share cards)

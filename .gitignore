@@ -1,3 +1,6 @@
+# Windows "mark of the web" alternate-data-stream files (WSL exposes NTFS ADS as these on downloads)
+*:Zone.Identifier
+
 # Logs
 logs
 *.log

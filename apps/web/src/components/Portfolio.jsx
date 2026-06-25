@@ -6,6 +6,7 @@ import { WalletPanel } from './WalletPanel';
 import { OpenPositions } from './OpenPositions';
 import { PositionHistory } from './PositionHistory';
 import { ReferralPanel } from './ReferralPanel';
+import { GachaInventory } from './games/GachaInventory.jsx';
 import { ProfileBanner } from './ProfileBanner';
 import * as api from '../lib/api.js';
 
@@ -97,6 +98,11 @@ export function Portfolio({ markets, onSelect }) {
           }}
         />
       )}
+
+      <GachaInventory
+        heading="Card inventory"
+        onTradeMarket={(mkt) => { const m = markets.find((x) => x.id === mkt.id); if (m) onSelect(m); }}
+      />
 
       <ReferralPanel onRedeemed={refresh} cashbackTotalUusdc={v.cashbackTotalUusdc} />
     </div>

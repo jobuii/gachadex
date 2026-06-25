@@ -154,6 +154,22 @@ export const config = {
   // this env flag is the kill switch that hides + disables the whole surface until the operator opts in.
   gamesEnabled: process.env.GAMES_ENABLED === 'true',
 
+  // Classic Gacha (docs/classic-gacha-cc-packs-spec.md) — real Collector Crypt graded-card packs as a Games
+  // surface, coexisting with the synthetic Pack Rip. P0 is a read-only lobby proxying CC's gacha API. OFF by
+  // default; the web hides the entry until this flips (exposed on /health). CC's gacha reads need no key
+  // (x-api-key optional). CC_ENV=dev points at CC's dev endpoints; CC_GACHA_URL overrides the base entirely.
+  classicGachaEnabled: process.env.CLASSIC_GACHA_ENABLED === 'true',
+  ccEnv: process.env.CC_ENV ?? 'main', // 'main' | 'dev'
+  ccGachaUrl: process.env.CC_GACHA_URL ?? '', // base override; default derived from ccEnv in the CC client
+  ccApiKey: process.env.COLLECTORCRYPT_API_KEY ?? '', // optional — CC gacha endpoints don't enforce it
+  gachaBuybackCutBps: num('GACHA_BUYBACK_CUT_BPS', 500), // GDEX's cut of a manual sell-back → FEE_REVENUE (5%)
+  gachaTurboCutBps: num('GACHA_TURBO_CUT_BPS', 1000), // higher cut for an instant (sell-on-reveal) sell-back (10%)
+  gachaMarkupBps: num('GACHA_MARKUP_BPS', 0), // optional purchase markup over the CC price → FEE_REVENUE (spec §6, default 0/off; admin-tunable)
+  goldEnabled: process.env.GOLD_ENABLED === 'true', // pay-with-Gold + loyalty earn (P4); dark until set
+  gachaFreePackThresholdUsd: num('GACHA_FREE_PACK_THRESHOLD_USD', 1000), // USD spend that earns one free $25 pack — the loyalty earn rate derives from it (admin-tunable knob)
+  gachaStockPollMs: num('GACHA_STOCK_POLL_MS', 300_000), // how often the stock worker polls CC for restocks (5 min)
+  heliusDasUrl: process.env.HELIUS_DAS_URL ?? '', // DAS-capable RPC for getAsset (a won NFT's collection/owner — needed to transfer an MPL Core asset out); falls back to solanaRpcUrl
+
   // Funding: per-accrual rate = skewFactor * (skew / openInterest), bps (the heavy side pays)
   fundingSkewFactorBps: num('FUNDING_SKEW_FACTOR_BPS', 30), // skew-balancing component (max)
   fundingIntervalMs: num('FUNDING_INTERVAL_MS', 60 * 60 * 1000), // hourly

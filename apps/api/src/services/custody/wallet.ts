@@ -32,6 +32,24 @@ export function deriveDepositKeypair(index: number): Keypair {
   return Keypair.fromSeed(key);
 }
 
+/**
+ * Per-user NFT-custody wallet (Classic Gacha, docs/classic-gacha-cc-packs-spec.md §5). Derived from the
+ * SAME master seed + the user's deposit `index`, but on the `…/1'` change path so it is a DIFFERENT address
+ * than the deposit wallet (`…/0'`) and is NEVER enumerated by the deposit scanner / swept. It holds won
+ * graded-card NFTs (and is the payer + recipient when buying a CC pack). Deriving it on demand from the
+ * stored index means no extra table.
+ */
+export function deriveNftCustodyKeypair(index: number): Keypair {
+  const { key } = derivePath(`m/44'/501'/${index}'/1'`, masterSeedHex());
+  return Keypair.fromSeed(key);
+}
+
+/** The user's NFT-custody keypair, keyed to their deposit derivation index (allocates the index if needed). */
+export async function getNftCustodyKeypair(db: Db, userId: string): Promise<Keypair> {
+  const { derivationIndex } = await getOrCreateDepositAddress(db, userId);
+  return deriveNftCustodyKeypair(derivationIndex);
+}
+
 export interface DepositAddress {
   userId: string;
   address: string;

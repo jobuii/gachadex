@@ -20,6 +20,7 @@ import { loadMarkClampBps } from './services/marks.ts';
 import { loadChatConfig } from './services/chat-config.ts';
 import { loadDropConfig } from './services/drop-config.ts';
 import { loadGameConfig } from './services/game-config.ts';
+import { loadGachaConfig } from './services/gacha-config.ts';
 import { settleExpiredDuels } from './services/games-duel.ts';
 import { settleExpiredLeagues } from './services/games-fantasy.ts';
 import { settleExpiredArenas } from './services/games-arena.ts';
@@ -140,6 +141,25 @@ function startGamesSettleLoop(db: Db, log: FastifyBaseLogger) {
     }
   };
   setInterval(() => void run(), 60_000);
+}
+
+/** Classic Gacha: poll CC machine stock so restocks are recorded server-side (visible even with no admin tab
+ *  open). Lease-guarded so only one instance polls CC per interval. */
+function startGachaStockLoop(db: Db, log: FastifyBaseLogger) {
+  const run = async () => {
+    if (!(await tryAcquireLease(db, 'gacha-stock-poll', INSTANCE_ID, config.gachaStockPollMs))) return;
+    try {
+      const { pollMachineStock } = await import('./services/gacha-stock.ts');
+      const r = await pollMachineStock(db);
+      if (r.restocks) log.info(r, 'gacha stock poll: restocks recorded');
+    } catch (e) {
+      log.warn(e, 'gacha stock poll failed');
+    } finally {
+      await releaseLease(db, 'gacha-stock-poll', INSTANCE_ID).catch(() => {});
+    }
+  };
+  setTimeout(() => void run(), 5_000);
+  setInterval(() => void run(), config.gachaStockPollMs);
 }
 
 /** Self-chained worker loop: the next pass is scheduled only after the current one finishes, so
@@ -269,10 +289,11 @@ async function main() {
     startFundingLoop(db, app.log);
     startLiquidationLoop(db, app.log);
     startGamesSettleLoop(db, app.log);
+    if (config.classicGachaEnabled) startGachaStockLoop(db, app.log);
     startRestingOrderLoop(db, app.log); // dark unless RESTING_ORDERS_ENABLED=true
     // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
     // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.
-    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadLpTradingPct(d), loadLpFundingPct(d), loadLpLiquidationPct(d), loadPlatformCashbackBps(d), loadPlatformFeeDiscountBps(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
+    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadLpTradingPct(d), loadLpFundingPct(d), loadLpLiquidationPct(d), loadPlatformCashbackBps(d), loadPlatformFeeDiscountBps(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadGachaConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
     await loadLiveKnobs(db);
     setInterval(() => void loadLiveKnobs(db).catch((e) => app.log.warn(e, 'live-knob refresh failed')), 30_000);
     if (config.realFunds) {
@@ -281,6 +302,14 @@ async function main() {
       startDepositScanner(db, app.log);
       startWithdrawalWorker(db, app.log);
       startTreasuryWorker(db, app.log);
+      // Recover Classic Gacha NFTs stranded 'selling'/'withdrawing' by a crash mid-flight (spec §9/§16). Fire-and-
+      // forget so it never blocks boot; self-gates on CLASSIC_GACHA_ENABLED and on DAS being reachable.
+      if (config.classicGachaEnabled) {
+        void import('./services/gacha-reconcile.ts')
+          .then((m) => m.reconcileStuckPrizes(db))
+          .then((r) => { if (r.scanned) app.log.info(r, 'gacha stuck-row reconcile (boot)'); })
+          .catch((e) => app.log.warn(e, 'gacha stuck-row reconcile failed'));
+      }
     }
   } catch (err) {
     app.log.error(err);

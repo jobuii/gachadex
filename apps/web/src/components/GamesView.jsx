@@ -8,14 +8,17 @@ import { TheBreak } from './games/TheBreak.jsx';
 import { PriceDuel } from './games/PriceDuel.jsx';
 import { CardFantasy } from './games/CardFantasy.jsx';
 import { DraftArena } from './games/DraftArena.jsx';
+import { ClassicGacha } from './games/ClassicGacha.jsx';
+import { GoldVault } from './games/GoldVault.jsx';
 
 // The playable game panels, keyed by the lobby/server id.
-const PANELS = { 'pack-rip': PackRip, 'set-poker': SetPoker, 'grade-gamble': GradeGamble, 'the-break': TheBreak, 'price-duel': PriceDuel, fantasy: CardFantasy, 'draft-arena': DraftArena };
+const PANELS = { 'classic-gacha': ClassicGacha, 'pack-rip': PackRip, 'set-poker': SetPoker, 'grade-gamble': GradeGamble, 'the-break': TheBreak, 'price-duel': PriceDuel, fantasy: CardFantasy, 'draft-arena': DraftArena };
 
 // The full 7-game lineup (docs/games-spec.md) — all live. id matches the server's games list; cat groups
 // the lobby into sections (like flip.gg's "Originals" rows).
 const LINEUP = [
-  { id: 'pack-rip', name: 'Pack Rip', icon: '🎴', blurb: 'Open a pack, reveal a card, sell it back for USDC.', live: true, cat: 'casino' },
+  { id: 'classic-gacha', name: 'Classic Gacha', icon: '💎', blurb: 'Open real graded-card packs from Collector Crypt.', live: true, cat: 'gacha', img: '/games/classic-gacha.png', gated: 'classicGacha' },
+  { id: 'pack-rip', name: 'Pack Rip', icon: '🎴', blurb: 'Open a pack, reveal a card, sell it back for USDC.', live: true, cat: 'gacha' },
   { id: 'set-poker', name: 'Set Poker', icon: '🃏', blurb: 'Five-card draw — your cards’ value beats the house.', live: true, cat: 'casino' },
   { id: 'grade-gamble', name: 'Grade Gamble', icon: '🔍', blurb: 'Gamble a raw card up the grade ladder.', live: true, cat: 'casino' },
   { id: 'the-break', name: 'The Break', icon: '📦', blurb: 'Buy spots in a shared case; the cards shuffle to spots.', live: true, cat: 'casino' },
@@ -26,13 +29,15 @@ const LINEUP = [
 
 // Lobby sections, in order.
 const SECTIONS = [
+  { cat: 'gacha', label: 'Gacha', icon: '💎' },
   { cat: 'casino', label: 'Casino', icon: '🎰' },
   { cat: 'skill', label: 'Skill & PvP', icon: '🆚' },
 ];
 
-export function GamesView({ onTradeMarket }) {
+export function GamesView({ onTradeMarket, gamesVisible, classicGachaVisible }) {
   const [config, setConfig] = useState(null); // server games list (enabled flags + tiers)
   const [selected, setSelected] = useState(null);
+  const [goldVersion, setGoldVersion] = useState(0); // bump → the Gold vault reloads (after a pack open)
   const startFeed = useGames((s) => s.start);
 
   useEffect(() => {
@@ -47,22 +52,29 @@ export function GamesView({ onTradeMarket }) {
   if (Panel) {
     return (
       <div className="page games">
-        <button className="link games-back" onClick={() => setSelected(null)}>← All games</button>
-        <Panel config={serverGame(selected)} onTradeMarket={onTradeMarket} />
+        <div className="games-topbar">
+          <button className="link games-back" onClick={() => setSelected(null)}>← All games</button>
+          <GoldVault refreshKey={goldVersion} />
+        </div>
+        <Panel config={serverGame(selected)} onTradeMarket={onTradeMarket} onGoldChanged={() => setGoldVersion((v) => v + 1)} />
       </div>
     );
   }
 
   return (
     <div className="page games">
-      <div className="games-hero">
-        <h2>Games</h2>
-        <p className="muted">
-          Provably-fair card games. Win a card, sell it back for USDC at its live oracle price — or keep it and trade the market.
-        </p>
+      <div className="games-topbar">
+        <div className="games-hero">
+          <h2>Games</h2>
+          <p className="muted">
+            Provably-fair card games. Win a card, sell it back for USDC at its live oracle price — or keep it and trade the market.
+          </p>
+        </div>
+        <GoldVault refreshKey={goldVersion} />
       </div>
-      {masterOff && <div className="games-banner">Games are not live yet — check back soon.</div>}
+      {gamesVisible && masterOff && !classicGachaVisible && <div className="games-banner">Games are not live yet — check back soon.</div>}
       {SECTIONS.map((s) => {
+        if (s.cat === 'gacha' ? !classicGachaVisible : !gamesVisible) return null; // each surface gates on its own flag
         const games = LINEUP.filter((g) => g.cat === s.cat);
         if (games.length === 0) return null;
         return (
@@ -70,8 +82,8 @@ export function GamesView({ onTradeMarket }) {
             <h3 className="games-section-head"><span className="games-section-icon" aria-hidden="true">{s.icon}</span>{s.label}</h3>
             <div className="games-grid">
               {games.map((g) => {
-                const sg = serverGame(g.id);
-                const enabled = g.live && sg?.enabled;
+                // gated entries ride their own surface flag; everything else rides the game's server toggle
+                const enabled = g.gated === 'classicGacha' ? classicGachaVisible : g.live && serverGame(g.id)?.enabled;
                 return (
                   <button
                     key={g.id}
@@ -82,7 +94,7 @@ export function GamesView({ onTradeMarket }) {
                     <span className="game-art" aria-hidden="true">
                       <span className="game-art-deck"><i /><i /><i /></span>
                       <span className="game-art-icon">{g.icon}</span>
-                      <img className="game-art-img" src={`/games/${g.id}.webp`} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                      <img className="game-art-img" src={g.img ?? `/games/${g.id}.webp`} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                     </span>
                     <span className="game-foot">
                       <span className="game-foot-main">

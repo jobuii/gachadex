@@ -34,7 +34,7 @@ import type { TreasuryChain } from './treasury.ts';
  * cap down to the cold treasury. The hot secret comes from the environment — never the config.
  */
 
-function hotWallet(): Keypair {
+export function hotWallet(): Keypair {
   const raw = process.env.HOT_WALLET_SECRET ?? '';
   if (!raw) throw new Error('HOT_WALLET_SECRET is not set (base58 secret key or JSON byte array)');
   try {
