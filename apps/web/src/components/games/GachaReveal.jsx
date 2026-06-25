@@ -19,14 +19,19 @@ const RARITY = {
 };
 const tierOf = (r) => RARITY[(r || '').toLowerCase()] ?? RARITY.common;
 
-// Per-tier beat timings (ms): Year → Grade → Type → flip → done (revealed card). Each beat lingers ~1.1s so the
-// reveal builds anticipation rare.win-style; rares/epics stretch further for the payoff. Multi-opens skip this
-// (they go straight to the summary) so a slow single reveal never becomes tedious across a 5-pack.
+// The reveal as RELATIVE gaps (ms): Year → (gradeGap) Grade → (typeGap) Type → (flipGap) flip → (hold) done.
+// The beats don't start until the RIP sound has finished AND the card has animated in (RIP_AUDIBLE_MS below);
+// `hold` is the dwell on the flipped card so the player ingests which card they pulled before the info/actions
+// appear. Multi-opens skip all of this (straight to the summary) so a slow single reveal never gets tedious.
 const BEATS = {
-  base: { year: 650, grade: 1800, tier: 3000, flip: 4050, done: 4750 },
-  rare: { year: 800, grade: 2200, tier: 3650, flip: 4900, done: 5800 },
-  epic: { year: 1000, grade: 2800, tier: 4700, flip: 6200, done: 7300 },
+  base: { gradeGap: 1150, typeGap: 1200, flipGap: 700, hold: 1500 },
+  rare: { gradeGap: 1400, typeGap: 1450, flipGap: 800, hold: 1500 },
+  epic: { gradeGap: 1800, typeGap: 1900, flipGap: 1000, hold: 1700 },
 };
+// rip.mp3's tear ends ~2.28s (then ~0.8s of trailing silence) — hold the year beat until then so the rip finishes
+// and the card-in animation plays first. If the open+poll already outlasted the rip, just give a short settle.
+const RIP_AUDIBLE_MS = 2300;
+const MIN_SETTLE_MS = 350;
 
 export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onTrade, onClose, instantCutBps = 1000 }) {
   const card = result?.card ?? null;
@@ -38,8 +43,10 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   const coinLoop = useRef(null);
   const timers = useRef([]);
   const started = useRef(false);
+  const mountAt = useRef(0); // when the rip started → so the year beat can wait out the rip
 
   useEffect(() => {
+    mountAt.current = performance.now();
     playSound('rip', { debounceMs: 500 }); // once, as the charging screen opens (debounce drops StrictMode's echo)
     const t = timers;
     const loop = coinLoop;
@@ -58,13 +65,20 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
       return;
     }
     const seq = big === 'epic' ? BEATS.epic : big === 'rare' ? BEATS.rare : BEATS.base;
+    // Start the beats only once the rip has finished (and the card-in animation has played). If the open+poll
+    // already ran past the rip, fall back to a short settle. Then space the rest by their relative gaps.
+    const yearAt = Math.max(RIP_AUDIBLE_MS - (performance.now() - mountAt.current), MIN_SETTLE_MS);
+    const gradeAt = yearAt + seq.gradeGap;
+    const typeAt = gradeAt + seq.typeGap;
+    const flipAt = typeAt + seq.flipGap;
+    const doneAt = flipAt + seq.hold;
     const at = (ms, fn) => timers.current.push(setTimeout(fn, ms));
-    at(seq.year, () => { setPhase('year'); playSound('beat', { volume: 0.7 }); });
-    at(seq.grade, () => { setPhase('grade'); playSound('beat'); });
+    at(yearAt, () => { setPhase('year'); playSound('beat', { volume: 0.7 }); });
+    at(gradeAt, () => { setPhase('grade'); playSound('beat'); });
     // The Type reveal: a plain beat — except EPIC, which lands with a heavy thud (the stamp + screen shake ride the CSS).
-    at(seq.tier, () => { setPhase('tier'); playSound(big === 'epic' ? 'thud' : 'beat', { volume: big === 'epic' ? 1 : 0.9 }); });
-    at(seq.flip, () => { setPhase('flip'); playSound('flip'); });
-    at(seq.done, () => {
+    at(typeAt, () => { setPhase('tier'); playSound(big === 'epic' ? 'thud' : 'beat', { volume: big === 'epic' ? 1 : 0.9 }); });
+    at(flipAt, () => { setPhase('flip'); playSound('flip'); });
+    at(doneAt, () => {
       setPhase('done');
       playSound(tier.sound);
       if (big === 'epic') {
@@ -128,7 +142,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
           <>
             {done && big === 'epic' && <div className="gacha-reveal-banner">{tier.label.toUpperCase()} PULL!</div>}
 
-            <div className="gacha-card3d-wrap" style={{ '--rarity': tier?.color ?? '#8b5cf6' }}>
+            <div className="gacha-card3d-wrap gacha-card-enter" style={{ '--rarity': tier?.color ?? '#8b5cf6' }}>
               <div className={`gacha-card3d ${flipped ? 'flipped' : ''} ${done ? `done done-${big || 'base'}` : ''}`}>
                 {/* back face — charging + suspense beats */}
                 <div className={`gacha-card3d-back ${['year', 'grade', 'tier'].includes(phase) ? 'beat-on' : ''}`}>

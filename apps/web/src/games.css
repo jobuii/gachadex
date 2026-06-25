@@ -360,6 +360,13 @@
 
 /* 3D card */
 .gacha-card3d-wrap { perspective: 1200px; }
+/* card-in: the slab animates onto the screen as the pack rips (plays once on mount, before the beats start) */
+.gacha-card-enter { animation: gacha-card-in 1.05s cubic-bezier(0.2, 0.85, 0.3, 1.25) both; }
+@keyframes gacha-card-in {
+  from { opacity: 0; transform: translateY(-44px) scale(0.62) rotate(-5deg); }
+  55%  { opacity: 1; }
+  to   { opacity: 1; transform: none; }
+}
 .gacha-card3d { position: relative; width: clamp(180px, 60vw, 248px); aspect-ratio: 5 / 7; transform-style: preserve-3d; transition: transform 0.95s cubic-bezier(0.34,1.4,0.4,1); will-change: transform; }
 .gacha-card3d.flipped { transform: rotateY(180deg); }
 .gacha-card3d.done { animation: gr-float 3.4s ease-in-out infinite; }
@@ -461,6 +468,7 @@
   .gacha-card3d { transition: opacity 0.3s; }
   .gacha-card3d.flipped { transform: rotateY(180deg); }
   .gacha-card3d.done, .gacha-card3d-back, .gacha-card3d-conic { animation: none; }
+  .gacha-card-enter { animation: none; }
   .gacha-beat-in, .gacha-beat-tier { animation: none; }
   .gacha-card3d-scrim { transition: none; }
   .gr-pop-epic, .gr-pop-epic::before, .gacha-reveal-banner, .gacha-reveal-overlay.gr-epic-quake { animation: none; }
