@@ -45,6 +45,15 @@ test('toLobbyCard: nft_address→mint, insured_value→micro-USDC', () => {
   assert.deepEqual(toLobbyCard(n), { mint: 'MintAbc', name: '2017 Charizard PSA 10', imageUrl: 'https://cc/c.png', valueE6: '4475000000', rarity: 'epic', grade: 'PSA 10' });
 });
 
+test('toLobbyCard: grade comes from the full description when name is truncated past the grade', () => {
+  // CC truncates `name` to 32 chars, dropping the grade; the full `description` still carries it.
+  const n: CcPackNft = {
+    nft_address: 'MintTrunc', name: '2021 #215 Umbreon VMAX ALT ART S',
+    description: '2021 #215 Umbreon VMAX ALT ART SAR PSA 10 Evolving Skies', rarity: 'epic', image: 'https://cc/u.png', insured_value: 520,
+  };
+  assert.equal(toLobbyCard(n).grade, 'PSA 10');
+});
+
 test('toLobbyWinner: nested name/image, insuredValue→micro-USDC, prize_tier→tier', () => {
   const w: CcWinner = {
     winner: '7nB56jAX',

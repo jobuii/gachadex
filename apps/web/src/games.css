@@ -372,6 +372,9 @@
 .gacha-beat-tier { color: var(--rarity, #fff); font-weight: 800; text-transform: uppercase; letter-spacing: 0.02em; font-size: clamp(1.05rem, 6vw, 1.5rem); -webkit-text-stroke: 1px rgba(0,0,0,0.4);
   text-shadow: 0 0 12px var(--rarity, #fff), 0 0 28px var(--rarity, #fff), 0 2px 0 rgba(0,0,0,0.45), 0 5px 14px rgba(0,0,0,0.5);
   animation: gr-tier-pop 0.5s cubic-bezier(0.34,1.7,0.45,1) both; }
+/* the base size keeps the longest word (UNCOMMON) on the card; shorter labels go bigger to stand out */
+.gacha-beat-tier-common { font-size: clamp(1.3rem, 7vw, 2rem); }
+.gacha-beat-tier-rare, .gacha-beat-tier-epic { font-size: clamp(1.5rem, 8vw, 2.4rem); }
 /* darkening scrim behind the beats → high contrast (dim while charging, deepens while a beat reads) */
 .gacha-card3d-scrim { position: absolute; inset: 0; pointer-events: none; z-index: 1; opacity: 0.45; transition: opacity 0.35s ease;
   background: radial-gradient(ellipse 72% 58% at 50% 50%, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.62) 42%, rgba(0,0,0,0.16) 78%, transparent 100%); }
@@ -389,6 +392,14 @@
 .gacha-reveal-tier-chip { display: inline-block; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.22em; padding: 0.3rem 0.75rem; border-radius: 999px;
   color: var(--rarity, #fff); background: color-mix(in srgb, var(--rarity, #8b5cf6) 16%, transparent); border: 1px solid color-mix(in srgb, var(--rarity, #8b5cf6) 55%, transparent); box-shadow: 0 0 16px -3px var(--rarity, transparent); }
 .gacha-reveal-spent { font-size: 0.74rem; margin: 0.1rem 0 0.4rem; }
+/* P&L box — value of the pull vs what the pack cost; green profit / red loss */
+.gacha-reveal-pnl { display: flex; flex-direction: column; align-items: center; gap: 0.08rem; padding: 0.4rem 1.2rem 0.5rem; border-radius: 12px; margin: 0.1rem 0 0.4rem;
+  background: color-mix(in srgb, var(--pnl, #22c55e) 12%, rgba(13,13,21,0.55)); border: 1px solid color-mix(in srgb, var(--pnl, #22c55e) 45%, transparent); }
+.gacha-reveal-pnl.up { --pnl: #22c55e; }
+.gacha-reveal-pnl.down { --pnl: #ef4444; }
+.gacha-reveal-pnl-label { font-size: 0.55rem; text-transform: uppercase; letter-spacing: 0.22em; font-weight: 800; color: var(--pnl); }
+.gacha-reveal-pnl strong { font-size: 1.35rem; font-weight: 900; font-variant-numeric: tabular-nums; line-height: 1.1; color: var(--pnl); }
+.gacha-reveal-pnl-sub { font-size: 0.64rem; }
 .gacha-reveal-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: center; }
 .gacha-reveal-actions button { font-size: 0.84rem; font-weight: 700; padding: 0.55rem 0.85rem; white-space: nowrap; }
 

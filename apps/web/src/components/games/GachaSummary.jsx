@@ -21,6 +21,7 @@ export function GachaSummary({ results, spentE6, onSell, onClose, instantCutBps 
 
   const isSellable = (r) => r.card?.mint && Number(r.card.valueE6) > 0 && !sold[r.card.mint];
   const sellable = results.filter(isSellable);
+  const anySold = Object.keys(sold).length > 0; // once anything's been sold, "Keep All" no longer applies → "Done"
   const selectedRows = sellable.filter((r) => selected[r.card.mint]);
   const selectedPayout = selectedRows.reduce((s, r) => s + netE6(r.card.valueE6), 0n);
 
@@ -96,7 +97,9 @@ export function GachaSummary({ results, spentE6, onSell, onClose, instantCutBps 
           <button className="btn-ghost" disabled={busy || sellable.length === 0} onClick={() => sellRows(sellable)}>
             {busy && selectedRows.length === 0 ? 'Selling…' : `Sell All${sellable.length ? ` (${sellable.length})` : ''}`}
           </button>
-          <button className="btn-ghost" onClick={onClose}>Keep / Done</button>
+          <button className="btn-ghost" disabled={busy} onClick={onClose}>
+            {anySold ? 'Done' : `Keep All${sellable.length ? ` (${sellable.length})` : ''}`}
+          </button>
         </div>
       </div>
     </div>,

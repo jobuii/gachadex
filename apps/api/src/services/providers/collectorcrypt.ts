@@ -69,7 +69,7 @@ export type CcMachine = {
   videoHevc?: string; // HEVC/mp4 fallback for Safari
   public?: boolean;
 };
-export type CcPackNft = { id?: string; nft_address: string; name: string; rarity: string; image: string; insured_value: number };
+export type CcPackNft = { id?: string; nft_address: string; name: string; description?: string; rarity: string; image: string; insured_value: number };
 export type CcWinner = {
   winner: string;
   nft_address: string;
@@ -119,7 +119,8 @@ function gameOf(code: string): string {
 }
 /** Absolutize a CC media path — machine image/video come back relative (e.g. "/pokemon_50.webm"). */
 const ccAbs = (p: string | null | undefined): string | null => (!p ? null : /^https?:\/\//i.test(p) ? p : `${gachaBase()}${p}`);
-/** Pull a "PSA 10" / "CGC 9.5" style grade out of a CC card name (the pool feed has no grade field). */
+/** Pull a "PSA 10" / "CGC 9.5" style grade out of a CC card's text (the pool feed has no grade field).
+ *  Prefer `description` — the `name` is truncated to 32 chars, which drops the grade for ~half the pool. */
 const GRADE_RE = /\b(PSA|CGC|BGS|SGC|TAG|Beckett|CGA)\b[^\d]{0,14}(\d+(?:\.5)?)/i;
 
 export function toLobbyMachine(m: CcMachine): LobbyMachine {
@@ -134,7 +135,7 @@ export function toLobbyMachine(m: CcMachine): LobbyMachine {
   };
 }
 export function toLobbyCard(n: CcPackNft): LobbyCard {
-  const g = (n.name || '').match(GRADE_RE);
+  const g = (n.description || n.name || '').match(GRADE_RE); // description has the full (untruncated) name → the grade
   return { mint: n.nft_address, name: n.name, imageUrl: n.image, valueE6: e6(n.insured_value), rarity: n.rarity, grade: g ? `${g[1].toUpperCase()} ${g[2]}` : null };
 }
 export function toLobbyWinner(w: CcWinner): LobbyWinner {

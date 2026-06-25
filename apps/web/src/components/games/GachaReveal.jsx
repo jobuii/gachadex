@@ -92,6 +92,8 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   const valE6 = shownE6 != null ? String(shownE6) : (card?.valueE6 ?? '0');
   // What the player nets selling this slab straight back to CC now (instant cut, e.g. 10%). Shown on the button.
   const sellNetE6 = card?.valueE6 ? (BigInt(card.valueE6) * (10_000n - BigInt(instantCutBps))) / 10_000n : 0n;
+  // P&L of this pull: the slab's value vs what the pack cost. Negative = paid more than it's worth.
+  const pnlE6 = (card?.valueE6 ? BigInt(card.valueE6) : 0n) - BigInt(spentE6 || 0);
 
   const close = () => { stopSound(coinLoop.current); onClose(); };
 
@@ -143,7 +145,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
                       <div className="gacha-beat-in"><span className="gacha-beat-label">Certified</span><span className="gacha-beat-val">{card.grade}</span></div>
                     )}
                     {phase === 'tier' && tier && (
-                      <div className="gacha-beat-in"><span className="gacha-beat-label">Tier</span><span className="gacha-beat-val gacha-beat-tier">{tier.label}</span></div>
+                      <div className="gacha-beat-in"><span className="gacha-beat-label">Tier</span><span className={`gacha-beat-val gacha-beat-tier gacha-beat-tier-${(card.rarity || '').toLowerCase()}`}>{tier.label}</span></div>
                     )}
                   </div>
                 </div>
@@ -163,7 +165,11 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
                   <div className="gacha-reveal-val" style={{ color: tier.color }}>{usd(valE6)}</div>
                   <span className="gacha-reveal-tier-chip">{tier.label}</span>
                 </div>
-                <p className="gacha-reveal-spent muted">Spent {usd(spentE6)} · this slab is worth ~{usd(card?.valueE6)}</p>
+                <div className={`gacha-reveal-pnl ${pnlE6 < 0n ? 'down' : 'up'}`}>
+                  <span className="gacha-reveal-pnl-label">{pnlE6 < 0n ? 'Loss' : 'Profit'}</span>
+                  <strong>{pnlE6 < 0n ? '−' : '+'}{usd(pnlE6 < 0n ? -pnlE6 : pnlE6)}</strong>
+                  <span className="gacha-reveal-pnl-sub muted">paid {usd(spentE6)} · worth {usd(card?.valueE6)}</span>
+                </div>
                 <div className="gacha-reveal-actions">
                   {canSell && <button className="btn-primary" onClick={onSellNow}>Sell back {usd(sellNetE6)}</button>}
                   {canTrade && <button className="btn-ghost" onClick={onTrade}>Trade</button>}

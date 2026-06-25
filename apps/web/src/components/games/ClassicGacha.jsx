@@ -319,8 +319,8 @@ export function ClassicGacha({ onTradeMarket }) {
                   <img src={c.imageUrl} alt={c.name} loading="lazy" referrerPolicy="no-referrer" onError={hideBrokenImg} />
                   <span className="gacha-card-name" title={c.name}>{c.name}</span>
                   <div className="gacha-card-meta">
-                    <span className="gacha-card-val"><span aria-hidden="true">🪙</span> {usd(c.valueE6)}</span>
                     {c.grade && <span className="gacha-card-grade">{c.grade}</span>}
+                    <span className="gacha-card-val"><span aria-hidden="true">🪙</span> {usd(c.valueE6)}</span>
                   </div>
                 </div>
               ))}
