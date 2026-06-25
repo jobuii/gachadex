@@ -38,6 +38,7 @@ function ChangeCell({ pct }) {
 
 export function IndexOverview({ markets, loading, onTradeMarket }) {
   const [stats, setStats] = useState({}); // marketId -> { change1wPct, change1mPct, changeYtdPct, high52wE6, low52wE6 }
+  const [gameFilter, setGameFilter] = useState('all'); // All / Pokémon / One Piece / Magic — mirrors the Cards screener
 
   // the slower windows (1w/1m/ytd/52w) are computed server-side; poll while this sub-tab is mounted
   useEffect(() => {
@@ -56,7 +57,7 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
   }, []);
 
   // group indices by game (Pokémon → One Piece → Magic), each game's rows sorted by series then tradeable
-  const sections = useMemo(() => {
+  const allSections = useMemo(() => {
     const groups = {};
     for (const m of (markets || []).filter((m) => m.kind === 'index')) (groups[m.game] ??= []).push(m);
     for (const list of Object.values(groups)) {
@@ -72,8 +73,12 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
     return order.filter((g) => groups[g]?.length).map((g) => [g, groups[g]]);
   }, [markets]);
 
-  if (loading && sections.length === 0) return <div className="empty-state">Loading indices…</div>;
-  if (sections.length === 0) return <div className="empty-state">No indices yet.</div>;
+  // the game filter narrows the panels to one game; falls back to All if the active game drops out
+  const games = allSections.map(([g]) => g);
+  const visible = gameFilter === 'all' || !games.includes(gameFilter) ? allSections : allSections.filter(([g]) => g === gameFilter);
+
+  if (loading && allSections.length === 0) return <div className="empty-state">Loading indices…</div>;
+  if (allSections.length === 0) return <div className="empty-state">No indices yet.</div>;
 
   return (
     <div className="index-overview">
@@ -83,7 +88,38 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
         trade it. <span className="muted">YTD &amp; 52W are measured over each index's available history.</span>
       </p>
 
-      {sections.map(([game, list]) => {
+      {allSections.length > 1 && (
+        <div className="io-games" role="tablist" aria-label="Game">
+          <button
+            role="tab"
+            aria-selected={gameFilter === 'all'}
+            className={`game-tab-btn ${gameFilter === 'all' ? 'on' : ''}`}
+            style={{ '--dot': 'var(--text-muted)' }}
+            onClick={() => setGameFilter('all')}
+          >
+            <span className="gdot" />
+            All
+          </button>
+          {allSections.map(([g]) => {
+            const meta = GAME_META[g] || { label: g, color: 'var(--accent)' };
+            return (
+              <button
+                key={g}
+                role="tab"
+                aria-selected={gameFilter === g}
+                className={`game-tab-btn ${gameFilter === g ? 'on' : ''}`}
+                style={{ '--dot': meta.color }}
+                onClick={() => setGameFilter(g)}
+              >
+                <span className="gdot" />
+                {meta.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {visible.map(([game, list]) => {
         const meta = GAME_META[game] || { label: game, color: 'var(--accent)' };
         return (
           <section className="io-section" key={game} style={{ '--game-color': meta.color }}>

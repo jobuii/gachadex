@@ -1806,6 +1806,11 @@ td.addr:hover { text-decoration: underline; }
 .io-blurb { font-family: var(--font-chat); font-size: 0.78rem; color: var(--text-muted); line-height: 1.6;
   margin: 0 0 1.1rem; max-width: 72ch; }
 .io-blurb strong { color: var(--text); }
+/* per-game filter (All / Pokémon / One Piece / Magic) — reuses the Cards screener's .game-tab-btn + .gdot */
+.io-games { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 1.1rem; border-bottom: 1px solid var(--border); }
+.io-games .game-tab-btn { flex: none; font-family: var(--font-chat); font-size: 0.66rem; padding: 0.45rem 0.75rem 0.55rem; margin-bottom: -1px; }
+/* win over themes.css's non-arcade .game-tab-btn size (same guard pattern the Cards screener uses) */
+:root:not([data-theme="arcade"]) .io-games .game-tab-btn { font-size: 0.66rem; }
 .io-section { background: var(--bg-2); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; margin-bottom: 1.25rem; }
 .io-section-head { display: flex; align-items: center; gap: 0.6rem; padding: 0.8rem 1.1rem;
   border-bottom: 1px solid var(--border); box-shadow: inset 3px 0 0 var(--game-color, var(--accent)); }
@@ -1824,17 +1829,17 @@ td.addr:hover { text-decoration: underline; }
 .io-table td { padding: 0.66rem 0.9rem; white-space: nowrap; vertical-align: middle;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
 .io-table tbody tr:last-child td { border-bottom: 0; }
-.io-table td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); font-size: 0.76rem;
+.io-table td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); font-size: 0.7rem;
   font-family: var(--font-num, ui-monospace, 'JetBrains Mono', monospace); }
 .io-row { cursor: pointer; transition: background-color 110ms ease; }
 .io-row:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
 .io-row.io-row-soon { cursor: default; opacity: 0.55; }
 
-/* series subsection divider inside a game panel (GJ / G&P / Pokedaq) */
-.io-subhead td { padding: 0.7rem 0.9rem 0.25rem; border-bottom: 0; font-family: var(--font-chat); font-size: 0.56rem;
-  font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent-lit); }
+/* series subsection header inside a game panel (GJ / G&P / Pokedaq) — larger than the rows it heads */
+.io-subhead td { padding: 0.85rem 0.9rem 0.3rem; border-bottom: 0; font-family: var(--font-chat); font-size: 0.78rem;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent-lit); }
 
-.io-name { font-family: var(--font-chat); font-size: 0.8rem; font-weight: 600; color: var(--text); }
+.io-name { font-family: var(--font-chat); font-size: 0.7rem; font-weight: 600; color: var(--text); }
 .io-table td.io-price { font-weight: 700; }
 .io-table td.io-range { color: var(--text-muted); }
 .io-table td.io-delta.up { color: var(--success); }
