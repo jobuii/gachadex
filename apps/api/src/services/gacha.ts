@@ -47,13 +47,13 @@ export interface OpenResult { openId: string; status: string; card: GachaCard | 
 
 interface OpenRow {
   id: string; user_id: string; machine_code: string; price_e6: string; paid_with: string; cc_memo: string | null;
-  payment_sig: string | null; custody_pubkey: string | null; status: string;
+  payment_sig: string | null; payment_attempted_at: string | null; custody_pubkey: string | null; status: string;
   nft_mint: string | null; nft_name: string | null; nft_image: string | null; grade: string | null;
   insured_value_e6: string | null; rarity: string | null; nft_market_id: string | null; nft_year: string | null; turbo_refund_e6: string | null; created_at: string;
 }
 
 const OPEN_COLS =
-  `id, user_id, machine_code, price_e6::text AS price_e6, paid_with, cc_memo, payment_sig, custody_pubkey, status,
+  `id, user_id, machine_code, price_e6::text AS price_e6, paid_with, cc_memo, payment_sig, payment_attempted_at::text AS payment_attempted_at, custody_pubkey, status,
    nft_mint, nft_name, nft_image, grade, insured_value_e6::text AS insured_value_e6, rarity, nft_market_id, nft_year, turbo_refund_e6::text AS turbo_refund_e6, created_at::text AS created_at`;
 
 /** CC's provably-fair verify link for an open, or null before a memo exists. */
@@ -182,18 +182,26 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
   const openId = anchor.id;
 
   // Pay CC (off the tx). Never throw past the receipt — money safety is the reconciler's job.
+  let attempted = false; // flips true only once the payment_attempted_at marker is persisted (i.e. about to pay CC)
   try {
-    // generatePack has no on-chain effect, so build it FIRST: a CC failure (sold out / network — the common
-    // case) then leaves a no-memo row with no funds moved, which the reconciler refunds cleanly. Only after
-    // the memo is stored do we move money (fund → sign → submit).
+    // generatePack is the live stock gate AND has no on-chain effect, so build it FIRST: a sold-out / network
+    // failure (the common case) leaves a no-memo, no-payment row — nothing reached CC. Only after the memo is
+    // stored do we move money (fund → sign → submit), and we stamp payment_attempted_at right before submit so
+    // a failure up to that point is provably "no money reached CC".
     const gen = await cc.generatePack({ playerAddress: custodyPubkey, packType: opts.machineCode, turbo });
     await db.query(`UPDATE gacha_pack_opens SET cc_memo = $2 WHERE id = $1`, [openId, gen.memo]);
     await chain.fundCustody(custodyPubkey, price);
     const signed = chain.signTx(gen.transaction, custody);
+    await db.query(`UPDATE gacha_pack_opens SET payment_attempted_at = now() WHERE id = $1`, [openId]);
+    attempted = true; // marker persisted → submit may now broadcast → never auto-refund past here
     const submit = await cc.submitTransaction(signed);
     if (submit.signature) await db.query(`UPDATE gacha_pack_opens SET payment_sig = $2 WHERE id = $1`, [openId, submit.signature]);
   } catch {
-    return await reconcileOne(db, openId, deps); // re-checks payment_sig + CC status; refunds a no-memo buy
+    // Pre-payment failure (sold-out generatePack / fund / sign): no money reached CC → refund NOW so a sold-out
+    // machine is a clean "refunded, no funds left your balance" with no 90s wait. If the payment WAS attempted
+    // (submit may have broadcast), hand to the reconciler — it only refunds once CC confirms refunded.
+    if (!attempted) return await settleRefund(db, openId, 'failed');
+    return await reconcileOne(db, openId, deps);
   }
   return await deliverOpen(db, openId, deps);
 }
@@ -277,22 +285,28 @@ async function reconcileOne(db: Db, openId: string, deps: GachaDeps): Promise<Op
   if (row.status !== 'paid') return rowToResult(row);
   const aged = nowMs - new Date(row.created_at).getTime() >= RECONCILE_GRACE_MS;
 
+  // Never reached the CC payment (no attempt marker, no sig): a sold-out generatePack, or a pre-submit fund/sign
+  // failure that stored a memo but never paid → no money reached CC → refund. Aged-guarded so the async sweep
+  // can't refund an open that's still mid-flight (between the receipt and submit) in a live request.
+  if (!row.payment_attempted_at && !row.payment_sig) {
+    return aged ? await settleRefund(db, openId, 'failed') : rowToResult(row);
+  }
+
+  // Payment was attempted (marker or sig set) → the tx may have landed. Try to deliver; only refund if CC
+  // explicitly confirms the pack was refunded (never auto-fail a maybe-paid buy).
   if (row.cc_memo) {
     const delivered = await deliverOpen(db, openId, deps).catch(() => null);
     if (delivered && delivered.status !== 'paid') return delivered;
-    if (!aged) return rowToResult((await getOpenRow(db, openId)) ?? row);
-    try {
-      const st = await cc.getPackStatus(row.cc_memo);
-      if (st.pack?.refunded) return await settleRefund(db, openId, 'refunded');
-    } catch {
-      /* CC unreachable — leave 'paid', try again later */
+    if (aged) {
+      try {
+        const st = await cc.getPackStatus(row.cc_memo);
+        if (st.pack?.refunded) return await settleRefund(db, openId, 'refunded');
+      } catch {
+        /* CC unreachable — leave 'paid', try again later */
+      }
     }
-    return rowToResult((await getOpenRow(db, openId)) ?? row);
   }
-
-  // No memo → generatePack never ran. With no payment_sig, nothing reached CC → refund the buy.
-  if (!row.payment_sig && aged) return await settleRefund(db, openId, 'failed');
-  return rowToResult(row);
+  return rowToResult((await getOpenRow(db, openId)) ?? row);
 }
 
 async function settleRefund(db: Db, openId: string, finalStatus: 'refunded' | 'failed'): Promise<OpenResult> {

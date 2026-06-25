@@ -786,6 +786,7 @@ CREATE TABLE IF NOT EXISTS gacha_pack_opens (
   turbo            BOOLEAN NOT NULL DEFAULT false,
   cc_memo          TEXT UNIQUE,                      -- CC receipt; set after generatePack
   payment_sig      TEXT,                             -- on-chain payment signature (set ⇒ money may have moved ⇒ never auto-fail)
+  payment_attempted_at TIMESTAMPTZ,                  -- stamped right before submitTransaction ⇒ a CC payment was attempted (may have landed). NULL ⇒ sold-out generatePack / pre-submit fail ⇒ no money reached CC ⇒ safe to refund now
   custody_pubkey   TEXT,                             -- the user's dedicated NFT-custody wallet (payer + NFT recipient)
   status           TEXT NOT NULL DEFAULT 'pending',
   nft_mint         TEXT, nft_name TEXT, nft_image TEXT, grade TEXT, insured_value_e6 BIGINT, rarity TEXT,
@@ -796,6 +797,7 @@ CREATE TABLE IF NOT EXISTS gacha_pack_opens (
   opened_at        TIMESTAMPTZ,
   settled_at       TIMESTAMPTZ
 );
+ALTER TABLE IF EXISTS gacha_pack_opens ADD COLUMN IF NOT EXISTS payment_attempted_at TIMESTAMPTZ; -- additive: pre-submit "no money reached CC" marker (existing DBs)
 CREATE UNIQUE INDEX IF NOT EXISTS uq_gacha_opens_user_idem ON gacha_pack_opens(user_id, idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_gacha_opens_user ON gacha_pack_opens(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_gacha_opens_paid ON gacha_pack_opens(status) WHERE status = 'paid'; -- reconciler scan

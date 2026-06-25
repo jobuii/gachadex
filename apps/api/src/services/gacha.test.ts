@@ -61,6 +61,7 @@ function fakeCc() {
     reveals: [] as unknown[],
     generateFail: false,
     submitNoSig: false,
+    submitThrow: false,
     packRefunded: false,
     alwaysWait: false,
     buybackAmount: 40_000_000, // base units ($40)
@@ -68,7 +69,7 @@ function fakeCc() {
     async getMachines() { return { machines: [{ code: 'pokemon_50', name: 'Elite', price: cc.price, instantBuyback: 85, odds: {}, stock: {} }] }; },
     async getNfts() { return { nfts: [] }; },
     async generatePack(_p: unknown) { if (cc.generateFail) throw new Error('generatePack failed'); return { memo: `memo-${randomUUID().slice(0, 8)}`, transaction: 'unsigned' }; },
-    async submitTransaction(_s: string) { cc.submits++; return { success: !cc.submitNoSig, signature: cc.submitNoSig ? '' : `paysig-${cc.submits}`, confirmationStatus: 'finalized' }; },
+    async submitTransaction(_s: string) { cc.submits++; if (cc.submitThrow) throw new Error('simulated submit failure (broadcast-then-timeout)'); return { success: !cc.submitNoSig, signature: cc.submitNoSig ? '' : `paysig-${cc.submits}`, confirmationStatus: 'finalized' }; },
     async openPackReveal(_m: string) { if (cc.alwaysWait) return waiting() as never; return (cc.reveals.length ? cc.reveals.shift() : keptReveal()) as never; },
     async getPackStatus(m: string) { return { memo: m, pack: { refunded: cc.packRefunded }, send: null, buyback: [] }; },
     async buyback(_p: unknown) { return { success: true, serializedTransaction: 'bb', refundAmount: cc.buybackAmount, memo: 'bb' }; },
@@ -148,6 +149,54 @@ test('open: a buy that never reaches CC is refunded (no payment_sig, after grace
   const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'k' }, { chain: fakeChain(), cc, now: future, ...noWait });
   assert.equal(r.status, 'failed');
   assert.equal(await collOf(user), before); // fully refunded (GACHA_REFUND)
+});
+
+test('open: a sold-out machine (generatePack fails) refunds IMMEDIATELY — no 90s wait, no money to CC', async () => {
+  const user = await newUser();
+  const before = await collOf(user);
+  const cc = fakeCc();
+  cc.generateFail = true; // CC's build call is the stock gate; a sold-out throw moves no money
+  // NOTE: no `now: future` — the refund must happen in-request (the catch), not only after the grace window.
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'soldout' }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(r.status, 'failed');
+  assert.equal(await collOf(user), before); // made whole instantly
+  assert.equal(cc.submits, 0); // never submitted a payment to CC
+});
+
+test('open: a pre-submit fund/sign failure (memo stored, no payment) refunds immediately', async () => {
+  const user = await newUser();
+  const before = await collOf(user);
+  const chain = fakeChain();
+  chain.fundFail = true; // generatePack succeeds + stores the memo, then fundCustody throws BEFORE any CC payment
+  const cc = fakeCc();
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'fundfail' }, { chain, cc, ...noWait });
+  assert.equal(r.status, 'failed');
+  assert.equal(await collOf(user), before); // refunded — not stranded 'paid' (the pre-submit-strand fix)
+  const open = (await db.query<{ cc_memo: string | null; payment_sig: string | null; payment_attempted_at: string | null }>(
+    `SELECT cc_memo, payment_sig, payment_attempted_at FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0];
+  assert.ok(open.cc_memo); // got past generatePack
+  assert.equal(open.payment_sig, null);
+  assert.equal(open.payment_attempted_at, null); // never reached submit → marker unset → provably safe to refund
+  assert.equal(cc.submits, 0);
+});
+
+test('open: a submit that may have broadcast (marker set) is NOT auto-refunded — waits for CC', async () => {
+  const user = await newUser();
+  const before = await collOf(user);
+  const cc = fakeCc();
+  cc.submitThrow = true; // payment_attempted_at is stamped just before this → the tx may have landed
+  cc.alwaysWait = true; // CC can't confirm a reveal yet
+  const future = () => Date.now() + 120_000; // past grace
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'maybe' }, { chain: fakeChain(), cc, now: future, ...noWait });
+  assert.equal(r.status, 'paid'); // conservative: never auto-refund a maybe-paid buy
+  assert.equal(await collOf(user), before - PRICE); // still debited (money may be at CC)
+  const open = (await db.query<{ payment_attempted_at: string | null }>(`SELECT payment_attempted_at FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0];
+  assert.ok(open.payment_attempted_at); // marker set → reconciler stays conservative
+  // Only once CC confirms the refund does the buy reverse.
+  cc.packRefunded = true;
+  const rec = await reconcilePending(db, user, { chain: fakeChain(), cc, now: future, ...noWait });
+  assert.equal(rec.recovered, 1);
+  assert.equal(await collOf(user), before); // now made whole, on CC's confirmation
 });
 
 test('open: a CC-refunded pack credits the buy back', async () => {
