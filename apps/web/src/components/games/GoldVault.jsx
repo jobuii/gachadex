@@ -57,7 +57,9 @@ export function GoldVault({ refreshKey = 0 }) {
       const key = crypto.randomUUID();
       let r = await api.openGachaPack(machine25.code, key, machine25.priceE6, 'gold', false, true);
       setRevealResult(null); setRevealOpen(true); // the charge succeeded → open the reveal (charging covers the poll); a sync 403 above never flashes it
-      for (let i = 0; i < 12 && r.status === 'paid'; i++) { await new Promise((res) => setTimeout(res, 2000)); r = await api.getGachaOpen(r.openId); }
+      // A poll error must NOT bubble past the committed claim — that would push a re-click → a second claim. Keep
+      // the paid open; the reveal shows "still processing" and the reconciler finishes it.
+      try { for (let i = 0; i < 12 && r.status === 'paid'; i++) { await new Promise((res) => setTimeout(res, 2000)); r = await api.getGachaOpen(r.openId); } } catch { /* keep r paid */ }
       setRevealResult(r);
     } catch (e) { setRevealOpen(false); setErr(e?.status === 401 ? 'Sign in to claim.' : e.message); }
     finally { setBusy(false); load(); }

@@ -34,7 +34,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   const card = result?.card ?? null;
   const tier = card ? tierOf(card.rarity) : null;
   const big = tier?.fx ?? null; // 'rare' | 'epic' | null
-  const [phase, setPhase] = useState('charging'); // charging | year | grade | tier | flip | done | failed
+  const [phase, setPhase] = useState('charging'); // charging | year | grade | tier | flip | done | turbo | pending | failed
   const [muted, setMutedState] = useState(isMuted());
   const [shownE6, setShownE6] = useState(null); // EPIC value count-up
   const coinLoop = useRef(null);
@@ -60,7 +60,10 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
     started.current = true;
     if (!card) {
       if (result.status === 'turbo_sold') { setPhase('turbo'); playSound('winRare'); playSound('confetti', { volume: 0.5 }); }
-      else setPhase('failed');
+      // Honesty boundary (handoff invariant #3): a still-'paid' result means the reveal poll timed out, NOT a
+      // refund — the payment went through and the reconciler will finish it. Never tell the user "refunded" here.
+      else if (result.status === 'paid' || result.status === 'pending') setPhase('pending');
+      else setPhase('failed'); // refunded / failed → the money was genuinely returned
       return;
     }
     // Start the beats only once the rip has finished (and the card-in animation has played). If the open+poll
@@ -127,6 +130,12 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
           <div className="gacha-reveal-failed">
             <h3>The pack didn’t open</h3>
             <p className="muted">Your payment was refunded. Try again in a moment.</p>
+            <button className="btn-primary" onClick={close}>Done</button>
+          </div>
+        ) : phase === 'pending' ? (
+          <div className="gacha-reveal-failed">
+            <h3>Still opening…</h3>
+            <p className="muted">Your payment went through — the reveal is taking a moment. We’ll finish it automatically; your card will appear in your inventory shortly. You were <strong>not</strong> charged twice.</p>
             <button className="btn-primary" onClick={close}>Done</button>
           </div>
         ) : phase === 'turbo' ? (

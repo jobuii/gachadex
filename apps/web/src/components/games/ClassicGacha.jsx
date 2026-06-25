@@ -88,11 +88,18 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
   // Open one pack: charge, then poll until CC's reveal lands (the payment webhook can lag a few seconds).
   const openOne = async (m) => {
     const key = crypto.randomUUID();
-    let r = await api.openGachaPack(m.code, key, m.priceE6, payWithGold ? payWith : 'usdc', yolo); // never send 'gold' if pay-with-Gold is off
-    for (let i = 0; i < 12 && r.status === 'paid'; i++) {
-      await new Promise((res) => setTimeout(res, 2000));
-      r = await api.getGachaOpen(r.openId);
-    }
+    // The POST is the charge: a throw here is pre-payment (insufficient / sold-out / 401) → safe to surface as
+    // "no charge". Never send 'gold' if pay-with-Gold is off.
+    let r = await api.openGachaPack(m.code, key, m.priceE6, payWithGold ? payWith : 'usdc', yolo);
+    // Past the charge we only POLL the reveal. A network blip mid-poll must NOT bubble — that would push a
+    // re-click → a NEW idempotency key → a SECOND charge. Keep the paid open; the reveal shows "still processing"
+    // and the reconciler + getOpen finish it.
+    try {
+      for (let i = 0; i < 12 && r.status === 'paid'; i++) {
+        await new Promise((res) => setTimeout(res, 2000));
+        r = await api.getGachaOpen(r.openId);
+      }
+    } catch { /* keep r at its last-known (paid) state */ }
     return r;
   };
 
