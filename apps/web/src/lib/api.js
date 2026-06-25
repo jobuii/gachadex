@@ -277,6 +277,10 @@ export const adminSetGamesConfig = (body, adminKey) => adminReq('/admin/games/co
 export const adminSeedGamePool = (amountUsd, adminKey) => adminReq('/admin/games/seed-pool', adminKey, { amountUsd });
 export const adminCancelBreak = (roundId, adminKey) => adminReq('/admin/games/break/cancel', adminKey, { roundId });
 export const adminCancelArena = (roundId, adminKey) => adminReq('/admin/games/arena/cancel', adminKey, { roundId });
+// Classic Gacha: live knobs (cut %s, markup, free-pack threshold, per-machine enable) + the economics readout.
+export const adminGetGachaConfig = (adminKey) => adminGet('/admin/gacha/config', adminKey);
+export const adminSetGachaConfig = (body, adminKey) => adminReq('/admin/gacha/config', adminKey, body);
+export const adminGetGachaMonitoring = (adminKey) => adminGet('/admin/gacha/monitoring', adminKey);
 // Treasury + insurance. /admin/treasury (full PoR view incl. insurance + allocatable surplus) is
 // real-funds-only; /admin/insurance (balance) + the fee-allocation moves work in play-money too.
 export const adminGetTreasury = (adminKey) => adminGet('/admin/treasury', adminKey);

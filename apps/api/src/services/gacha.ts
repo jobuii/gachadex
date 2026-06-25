@@ -7,7 +7,7 @@ import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './led
 import { getNftCustodyKeypair } from './custody/wallet.ts';
 import { createNftWithdrawNonce, verifyNftWithdrawStepUp } from './auth.ts';
 import { spendTokens, earnTokens, tokensEarnedForOpen, tokenPriceForPack } from './tokens.ts';
-import { gachaConfig } from './gacha-config.ts';
+import { gachaConfig, gachaMarkupE6 } from './gacha-config.ts';
 import type { GachaChain } from './custody/gacha-chain.ts';
 import { defaultCcClient, ccVerifyUrl, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
 
@@ -120,10 +120,14 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
 
   const machine = (await cc.getMachines()).machines?.find((m) => m.code === opts.machineCode);
   if (!machine) throw new HttpError(404, 'unknown machine');
-  const price = usdc(machine.price); // $ → micro-USDC
+  const price = usdc(machine.price); // $ → micro-USDC (CC's base price — what we pay CC on-chain)
   if (price <= 0n) throw new HttpError(503, 'machine price unavailable');
-  // No surprise charge: reject if the live price drifted >2% above what the client displayed (spec §9).
-  if (opts.expectedPriceE6 && price > (BigInt(opts.expectedPriceE6) * 102n) / 100n) throw new HttpError(409, 'pack price changed — refresh and try again', 'price_drift');
+  // Optional GDEX markup over CC's price (USDC buys only; default 0 = no change). The user pays `allIn`; CC still
+  // gets `price`; GDEX keeps `markup` as FEE_REVENUE (spec §6 — the "turn on if sell-back drops" lever).
+  const markup = payWith === 'usdc' ? gachaMarkupE6(price, gachaConfig.markupBps.get()) : 0n;
+  const allIn = price + markup;
+  // No surprise charge: reject if the (marked-up) price drifted >2% above what the client displayed (spec §9).
+  if (opts.expectedPriceE6 && allIn > (BigInt(opts.expectedPriceE6) * 102n) / 100n) throw new HttpError(409, 'pack price changed — refresh and try again', 'price_drift');
 
   const custody = await getNftCustodyKeypair(db, userId);
   const custodyPubkey = custody.publicKey.toBase58();
@@ -134,7 +138,7 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
     const ins = await q.query<{ id: string }>(
       `INSERT INTO gacha_pack_opens(id, user_id, idempotency_key, machine_code, price_e6, custody_pubkey, paid_with, turbo, status)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,'pending') ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id`,
-      [id, userId, opts.idempotencyKey, opts.machineCode, price.toString(), custodyPubkey, payWith, turbo],
+      [id, userId, opts.idempotencyKey, opts.machineCode, (payWith === 'usdc' ? allIn : price).toString(), custodyPubkey, payWith, turbo],
     );
     if (!ins.rows[0]) {
       const ex = await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE user_id = $1 AND idempotency_key = $2`, [userId, opts.idempotencyKey]);
@@ -155,11 +159,11 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
       const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
       const lock = await q.query<{ amount_uusdc: string }>(`SELECT amount_uusdc FROM balances WHERE account_id = $1 FOR UPDATE`, [coll]);
       const avail = lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n;
-      if (avail < price) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
-      await postTxn(q, {
-        reason: 'GACHA_PACK_BUY', refType: 'gacha_open', refId: id,
-        entries: [{ accountId: coll, amount: -price }, { accountId: treasury, amount: price }],
-      });
+      if (avail < allIn) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
+      // user pays allIn; CC's base goes to treasury; any markup is GDEX revenue (entry omitted when markup=0).
+      const entries = [{ accountId: coll, amount: -allIn }, { accountId: treasury, amount: price }];
+      if (markup > 0n) entries.push({ accountId: await getOrCreateSystemAccount(q, 'FEE_REVENUE'), amount: markup });
+      await postTxn(q, { reason: 'GACHA_PACK_BUY', refType: 'gacha_open', refId: id, entries });
       // Loyalty earn — only on paid (USDC) opens (spec §6b); floored, derived from the admin threshold knob.
       await earnTokens(q, userId, tokensEarnedForOpen(price, gachaConfig.freePackThresholdUsd.get()), 'PACK_OPEN_EARN', { refType: 'gacha_open', refId: id });
     }
@@ -222,7 +226,7 @@ async function settleTurboSold(db: Db, openId: string, buybackAmount: number): P
     const row = (await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE id = $1 FOR UPDATE`, [openId])).rows[0];
     if (!row) throw new HttpError(404, 'open not found');
     if (row.status !== 'paid') return rowToResult(row); // settle once
-    const cut = (gross * BigInt(config.gachaTurboCutBps)) / 10000n; // 10% turbo cut → FEE_REVENUE
+    const cut = (gross * BigInt(gachaConfig.turboCutBps.get())) / 10000n; // 10% turbo cut → FEE_REVENUE (live knob)
     const payout = gross - cut;
     const coll = await getOrCreateUserAccount(q, row.user_id, 'USER_COLLATERAL');
     const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
@@ -350,7 +354,7 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
   if (!config.classicGachaEnabled) throw GACHA_OFF();
   const cc = deps.cc ?? defaultCcClient;
   const { chain } = deps;
-  const cutBps = BigInt(opts.instant ? config.gachaTurboCutBps : config.gachaBuybackCutBps); // 10% instant (sell-on-reveal) vs 5% manual
+  const cutBps = BigInt(opts.instant ? gachaConfig.turboCutBps.get() : gachaConfig.buybackCutBps.get()); // 10% instant vs 5% manual (live knobs)
 
   // Claim the prize (held → selling) under a row lock BEFORE the irreversible on-chain buyback, so two
   // concurrent sell-backs can't both submit it (the second sees 'selling', not 'held').

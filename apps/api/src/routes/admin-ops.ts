@@ -1,9 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, WithdrawalAutoProcessRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest, GameConfigRequest, GamePoolSeedRequest, BreakCancelRequest, ArenaCancelRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
+import { HttpError } from '../errors.ts';
 import { getDb } from '../db/client.ts';
 import { rl } from './_ratelimit.ts';
 import { requireAdminKey } from './admin.ts';
+import { gachaAdminConfig, setGachaConfig } from '../services/gacha-config.ts';
+import { gachaMonitoring } from '../services/gacha-monitoring.ts';
+import { getMachines, toLobbyMachine } from '../services/providers/collectorcrypt.ts';
 import { setManualPrice, setPricePin } from '../services/admin-pricing.ts';
 import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from '../services/insurance.ts';
 import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFactor } from '../services/fees.ts';
@@ -272,5 +276,31 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   app.post('/admin/games/seed-pool', rl(config.routeRateLimits.admin), async (req) => {
     const { amountUsd } = GamePoolSeedRequest.parse(req.body);
     return seedGamePool(await getDb(), amountUsd);
+  });
+
+  // --- CLASSIC GACHA admin (docs/classic-gacha-cc-packs-spec.md §12). Live knobs (cut %s, markup, free-pack
+  // threshold, per-machine enable) + the economics readout (cut revenue vs Token-rebate cost + sell-back rate).
+
+  // Current knobs + the live CC machine list (each flagged enabled/disabled for the per-machine toggles).
+  app.get('/admin/gacha/config', rl(config.routeRateLimits.admin), async () => {
+    const cfg = gachaAdminConfig();
+    const disabled = new Set(cfg.disabledMachines);
+    let machines: Array<{ code: string; name: string; game: string; priceE6: string; disabled: boolean }> = [];
+    try {
+      const { machines: ccm } = await getMachines();
+      machines = (ccm ?? []).map(toLobbyMachine).map((m) => ({ code: m.code, name: m.name, game: m.game, priceE6: m.priceE6, disabled: disabled.has(m.code) }));
+    } catch { /* CC unreachable → still return the knobs (the machine toggles just won't list this load) */ }
+    return { config: cfg, machines };
+  });
+  // Apply a partial gacha knob patch (each field validated by its own live knob).
+  app.post('/admin/gacha/config', rl(config.routeRateLimits.admin), async (req) => {
+    const b = req.body;
+    if (typeof b !== 'object' || b === null || Array.isArray(b)) throw new HttpError(400, 'bad config body');
+    return { config: await setGachaConfig(await getDb(), b as Record<string, unknown>) };
+  });
+  // Economics readout: cut revenue (+ markup) vs Token-rebate cost, net, and the live sell-back rate.
+  app.get('/admin/gacha/monitoring', rl(config.routeRateLimits.admin), async () => {
+    const db = await getDb();
+    return { ...(await gachaMonitoring(db)), config: gachaAdminConfig() };
   });
 }

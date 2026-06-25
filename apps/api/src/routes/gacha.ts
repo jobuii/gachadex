@@ -6,6 +6,7 @@ import { authenticate } from '../plugins/auth.ts';
 import { getDb } from '../db/client.ts';
 import { getMachines, getNfts, getAllWinners, toLobbyMachine, toLobbyCard, toLobbyWinner, defaultCcClient } from '../services/providers/collectorcrypt.ts';
 import { getTokenSummary, getTokenHistory } from '../services/tokens.ts'; // no @solana/web3.js dep → safe to load eagerly (unlike gacha.ts)
+import { gachaConfig, gachaMarkupE6 } from '../services/gacha-config.ts'; // settings-only, no web3 dep → eager-safe
 import type { GachaChain } from '../services/custody/gacha-chain.ts';
 
 /**
@@ -33,11 +34,18 @@ export async function gachaRoutes(app: FastifyInstance): Promise<void> {
     if (!config.classicGachaEnabled) throw new HttpError(404, 'not found');
   };
 
-  // Lobby tiles: the available CC machines (price, tier legend, buyback %, stock).
+  // Lobby tiles: the available CC machines (price, tier legend, buyback %, stock). Operator-disabled machines are
+  // hidden, and the displayed price carries any GDEX markup so the client sends it back as the expected price.
   app.get('/gacha/machines', rl(config.routeRateLimits.gameFairness), async () => {
     gate();
     const { machines } = await getMachines();
-    return { machines: (machines ?? []).map(toLobbyMachine) };
+    const disabled = new Set(gachaConfig.disabledMachines.get());
+    const markupBps = gachaConfig.markupBps.get();
+    const out = (machines ?? [])
+      .filter((m) => !disabled.has(m.code))
+      .map(toLobbyMachine)
+      .map((m) => (markupBps > 0 ? { ...m, priceE6: (BigInt(m.priceE6) + gachaMarkupE6(m.priceE6, markupBps)).toString() } : m));
+    return { machines: out };
   });
 
   // The real graded cards in a machine's pool.

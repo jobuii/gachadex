@@ -316,6 +316,9 @@
 .games-admin-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.6rem 0; }
 .games-admin-fields { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
 .games-admin-fields .field-label { flex: 1; min-width: 140px; }
+/* gacha admin: the per-machine enable list (scrollable, two-up on wide screens) */
+.gacha-admin-machines { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.1rem 1rem; max-height: 340px; overflow-y: auto; padding: 0.4rem 0.2rem; border: 1px solid var(--border); border-radius: 8px; }
+.gacha-admin-machines .games-admin-row { margin: 0.3rem 0; font-size: 0.84rem; }
 .games-admin-json {
   width: 100%; font-family: monospace; font-size: 0.78rem; background: var(--bg-3); color: var(--text);
   border: var(--border-w) solid var(--border); border-radius: var(--radius); padding: 0.6rem; margin-bottom: 0.8rem;

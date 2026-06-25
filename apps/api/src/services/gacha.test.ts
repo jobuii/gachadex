@@ -19,6 +19,8 @@ const { usdc } = await import('../money.ts');
 const { fund, sign } = await import('../test-helpers.ts');
 const { openPack, sellBack, reconcilePending, nftWithdrawNonce, requestNftWithdraw } = await import('./gacha.ts');
 const { tokensEarnedForOpen, tokenPriceForPack, earnTokens, getTokenSummary } = await import('./tokens.ts');
+const { setGachaConfig, gachaAdminConfig } = await import('./gacha-config.ts');
+const { gachaMonitoring } = await import('./gacha-monitoring.ts');
 
 const db = await getDb();
 await migrate();
@@ -330,4 +332,57 @@ test('tokens: a refunded token-bought open returns Tokens (not USDC) and reverse
   assert.equal(await tokenBal(user), 100_000n);                  // Tokens fully returned
   assert.equal(await collOf(user), collBefore);                 // NO USDC credited (no money minted)
   assert.equal(await rewardsBudget(), budgetAfterBuy + PRICE);   // rewards budget reversed
+});
+
+// ── §12 admin: markup money-path + knob validation + the economics readout ──
+
+test('open: a purchase markup charges the user more, banks it to FEE_REVENUE; CC still gets the base', async () => {
+  await setGachaConfig(db, { markupBps: 200 }); // +2% over CC's $50 price
+  try {
+    const user = await newUser();
+    const before = await collOf(user);
+    const feeBefore = await feeRev();
+    const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'mk' }, { chain: fakeChain(), cc: fakeCc(), ...noWait });
+    assert.equal(r.status, 'opened');
+    assert.equal(await collOf(user), before - usdc(51));   // user paid $51 (all-in)
+    assert.equal((await feeRev()) - feeBefore, usdc(1));    // GDEX kept the $1 markup
+    assert.equal((await db.query<{ p: string }>(`SELECT price_e6::text AS p FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0].p, usdc(51).toString());
+  } finally {
+    await setGachaConfig(db, { markupBps: 0 }); // reset so later tests see the default
+  }
+});
+
+test('open: markup=0 is byte-identical to no markup (no FEE_REVENUE leg)', async () => {
+  const user = await newUser();
+  const before = await collOf(user);
+  const feeBefore = await feeRev();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'nomk' }, { chain: fakeChain(), cc: fakeCc(), ...noWait });
+  assert.equal(await collOf(user), before - PRICE);  // exactly the base price
+  assert.equal((await feeRev()) - feeBefore, 0n);    // no markup fee posted
+});
+
+test('gacha config: knobs validate + round-trip; out-of-range + bad codes rejected', async () => {
+  await setGachaConfig(db, { buybackCutBps: 700, turboCutBps: 1200, freePackThresholdUsd: 500 });
+  const c = gachaAdminConfig();
+  assert.equal(c.buybackCutBps, 700);
+  assert.equal(c.turboCutBps, 1200);
+  assert.equal(c.freePackThresholdUsd, 500);
+  await assert.rejects(setGachaConfig(db, { buybackCutBps: 99999 }), /0–5000 bps/);
+  await assert.rejects(setGachaConfig(db, { disabledMachines: ['bad code!'] }), /bad machine code/);
+  await setGachaConfig(db, { disabledMachines: 'pokemon_25, pokemon_50' }); // csv string parses + dedups
+  assert.deepEqual(gachaAdminConfig().disabledMachines, ['pokemon_25', 'pokemon_50']);
+  await setGachaConfig(db, { buybackCutBps: 500, turboCutBps: 1000, freePackThresholdUsd: 1000, disabledMachines: [] }); // reset
+});
+
+test('monitoring: a sell-back grows the cut revenue + the sell-back rate', async () => {
+  const m0 = await gachaMonitoring(db);
+  const user = await newUser();
+  const cc = fakeCc();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'mon1' }, { chain: fakeChain(), cc, ...noWait }); // delivered, held
+  const prize = (await db.query<{ id: string }>(`SELECT id FROM gacha_nft_inventory WHERE user_id = $1 ORDER BY acquired_at DESC LIMIT 1`, [user])).rows[0].id;
+  await sellBack(db, user, prize, { chain: fakeChain(), cc, ...noWait }); // 5% cut of the $40 buyback → FEE_REVENUE
+  const m = await gachaMonitoring(db);
+  assert.ok(BigInt(m.sellBackCutE6) > BigInt(m0.sellBackCutE6)); // cut revenue grew
+  assert.ok(m.deliveredCards >= 1 && m.soldBack >= 1);
+  assert.ok(m.sellBackRatePct > 0);
 });

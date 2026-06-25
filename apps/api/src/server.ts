@@ -13,6 +13,7 @@ import { historyRoutes } from './routes/history.ts';
 import { chatRoutes } from './routes/chat.ts';
 import { gameRoutes } from './routes/games.ts';
 import { gachaRoutes } from './routes/gacha.ts';
+import { gachaConfig } from './services/gacha-config.ts';
 import { walletRoutes } from './routes/wallet.ts';
 import { scrydexWebhookRoutes } from './routes/scrydex-webhook.ts';
 import { imageProxyRoutes } from './routes/image-proxy.ts';
@@ -104,8 +105,8 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
     gamesEnabled: config.gamesEnabled, // the web hides the Games nav tab + page entirely until this flips on
     classicGachaEnabled: config.classicGachaEnabled, // the web hides the Classic Gacha entry until this flips on
     tokensEnabled: config.tokensEnabled, // pay-with-Tokens toggle (loyalty earn always accrues; only spending is gated)
-    gachaInstantCutBps: config.gachaTurboCutBps, // GDEX's cut on an instant (sell-on-reveal) sell-back → the web shows the net payout
-    gachaBuybackCutBps: config.gachaBuybackCutBps, // GDEX's cut on a later manual sell-back
+    gachaInstantCutBps: gachaConfig.turboCutBps.get(), // GDEX's cut on an instant (sell-on-reveal) sell-back → the web shows the net payout (live knob)
+    gachaBuybackCutBps: gachaConfig.buybackCutBps.get(), // GDEX's cut on a later manual sell-back (live knob)
     apiVersion: API_VERSION,
     time: new Date().toISOString(),
   }));
