@@ -40,7 +40,7 @@ export const SYSTEM_ACCOUNT_TYPES: AccountType[] = [
   // from FAUCET_SOURCE; real-funds from treasury/fees) — a single prize can exceed its play's wager.
   'GAME_POOL',
   // Classic Gacha loyalty budget (docs/classic-gacha-cc-packs-spec.md §6b). Pre-funded by the operator; a
-  // token-bought pack debits it to pay CC real USDC (Tokens are a cost, not revenue — kept OUT of FEE_REVENUE,
+  // gold-bought pack debits it to pay CC real USDC (Gold is a cost, not revenue — kept OUT of FEE_REVENUE,
   // which is shared with LP fees + affiliate cashback). Its negative balance = outstanding deferred liability.
   'GACHA_REWARDS_BUDGET',
   // Real-funds custody mirror (docs/real-funds-custody-plan.md): the only account real deposits/

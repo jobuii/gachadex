@@ -6,7 +6,7 @@ import { usdc } from '../money.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './ledger.ts';
 import { getNftCustodyKeypair } from './custody/wallet.ts';
 import { createNftWithdrawNonce, verifyNftWithdrawStepUp } from './auth.ts';
-import { spendTokens, earnTokens, tokensEarnedForOpen, tokenPriceForPack } from './tokens.ts';
+import { spendGold, earnGold, goldEarnedForOpen, goldPriceForPack } from './gold.ts';
 import { openPosition } from './engine.ts';
 import { lastMarkE6 } from './marks.ts';
 import { gachaConfig, gachaMarkupE6 } from './gacha-config.ts';
@@ -15,7 +15,7 @@ import { defaultCcClient, ccVerifyUrl, type CcClient, type CcOpenResult } from '
 
 /**
  * Classic Gacha service (docs/classic-gacha-cc-packs-spec.md, P1–P4 — buy → open → sell-back / withdraw,
- * pay with USDC or loyalty Tokens).
+ * pay with USDC or loyalty Gold).
  *
  * Custodial + real-money: the user pays from their GDEX balance (the USDC ledger is the spend gate), the hot
  * wallet JIT-funds a per-user NFT-custody wallet, that wallet pays CC + receives the real graded-card NFT,
@@ -112,10 +112,10 @@ async function getOpenRow(db: Db, openId: string): Promise<OpenRow | null> {
 }
 
 // ─────────────────────────────── open ───────────────────────────────
-export async function openPack(db: Db, userId: string, opts: { machineCode: string; idempotencyKey: string; expectedPriceE6?: string; payWith?: 'usdc' | 'tokens'; turbo?: boolean }, deps: GachaDeps): Promise<OpenResult> {
+export async function openPack(db: Db, userId: string, opts: { machineCode: string; idempotencyKey: string; expectedPriceE6?: string; payWith?: 'usdc' | 'gold'; turbo?: boolean }, deps: GachaDeps): Promise<OpenResult> {
   if (!config.classicGachaEnabled) throw GACHA_OFF();
-  const payWith = opts.payWith === 'tokens' ? 'tokens' : 'usdc';
-  if (payWith === 'tokens' && !config.tokensEnabled) throw new HttpError(403, 'paying with Tokens is not available');
+  const payWith = opts.payWith === 'gold' ? 'gold' : 'usdc';
+  if (payWith === 'gold' && !config.goldEnabled) throw new HttpError(403, 'paying with Gold is not available');
   const turbo = opts.turbo === true; // YOLO: CC auto-sells a Common for instant USDC instead of delivering the slab
   const cc = deps.cc ?? defaultCcClient;
   const { chain } = deps;
@@ -148,13 +148,13 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
       return { duplicate: true as const, row: ex.rows[0] };
     }
     const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
-    if (payWith === 'tokens') {
-      // Token-bought pack: debit the player's loyalty Tokens; GDEX still pays CC real USDC — from the rewards
-      // budget (NOT USER_COLLATERAL, NOT FEE_REVENUE). Token opens earn nothing (anti-abuse, spec §6b).
-      await spendTokens(q, userId, tokenPriceForPack(price), { refType: 'gacha_open', refId: id });
+    if (payWith === 'gold') {
+      // Gold-bought pack: debit the player's loyalty Gold; GDEX still pays CC real USDC — from the rewards
+      // budget (NOT USER_COLLATERAL, NOT FEE_REVENUE). Gold opens earn nothing (anti-abuse, spec §6b).
+      await spendGold(q, userId, goldPriceForPack(price), { refType: 'gacha_open', refId: id });
       const budget = await getOrCreateSystemAccount(q, 'GACHA_REWARDS_BUDGET');
       await postTxn(q, {
-        reason: 'PACK_BUY_TOKENS_FUND', refType: 'gacha_open', refId: id,
+        reason: 'PACK_BUY_GOLD_FUND', refType: 'gacha_open', refId: id,
         entries: [{ accountId: budget, amount: -price }, { accountId: treasury, amount: price }],
       });
     } else {
@@ -167,7 +167,7 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
       if (markup > 0n) entries.push({ accountId: await getOrCreateSystemAccount(q, 'FEE_REVENUE'), amount: markup });
       await postTxn(q, { reason: 'GACHA_PACK_BUY', refType: 'gacha_open', refId: id, entries });
       // Loyalty earn — only on paid (USDC) opens (spec §6b); floored, derived from the admin threshold knob.
-      await earnTokens(q, userId, tokensEarnedForOpen(price, gachaConfig.freePackThresholdUsd.get()), 'PACK_OPEN_EARN', { refType: 'gacha_open', refId: id });
+      await earnGold(q, userId, goldEarnedForOpen(price, gachaConfig.freePackThresholdUsd.get()), 'PACK_OPEN_EARN', { refType: 'gacha_open', refId: id });
     }
     await q.query(`UPDATE gacha_pack_opens SET status = 'paid' WHERE id = $1`, [id]);
     return { duplicate: false as const, id };
@@ -296,10 +296,10 @@ async function settleRefund(db: Db, openId: string, finalStatus: 'refunded' | 'f
     if (row.status !== 'paid') return rowToResult(row); // refund only ONCE, from 'paid' (idempotent)
     const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
     const price = BigInt(row.price_e6);
-    if (row.paid_with === 'tokens') {
-      // Token-bought pack: return the Tokens the user spent + reverse the rewards-budget funding. NEVER credit
-      // USDC for a Token purchase (that would mint money). Mirrors the PACK_BUY_TOKENS_FUND posting in reverse.
-      await earnTokens(q, row.user_id, tokenPriceForPack(price), 'PACK_REFUND_TOKENS', { refType: 'gacha_open', refId: openId });
+    if (row.paid_with === 'gold') {
+      // Gold-bought pack: return the Gold the user spent + reverse the rewards-budget funding. NEVER credit
+      // USDC for a Gold purchase (that would mint money). Mirrors the PACK_BUY_GOLD_FUND posting in reverse.
+      await earnGold(q, row.user_id, goldPriceForPack(price), 'PACK_REFUND_GOLD', { refType: 'gacha_open', refId: openId });
       const budget = await getOrCreateSystemAccount(q, 'GACHA_REWARDS_BUDGET');
       await postTxn(q, {
         reason: 'GACHA_REFUND', refType: 'gacha_open', refId: openId,

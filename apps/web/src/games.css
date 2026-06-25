@@ -145,10 +145,10 @@
 .gacha-verify { display: inline-block; margin-top: 0.7rem; font-size: 0.76rem; color: var(--muted, #8b8b9a); text-decoration: none; opacity: 0.85; }
 .gacha-verify:hover { opacity: 1; text-decoration: underline; }
 
-/* Loyalty Tokens (P4): balance chip + pay-with toggle. */
-.gacha-token-bal { display: inline-flex; align-items: center; gap: 0.35rem; margin-top: 0.5rem; padding: 0.3rem 0.7rem; border-radius: 999px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); font-size: 0.82rem; color: var(--cg, #f59e0b); }
+/* Loyalty Gold (P4): balance chip + pay-with toggle. */
+.gacha-gold-bal { display: inline-flex; align-items: center; gap: 0.35rem; margin-top: 0.5rem; padding: 0.3rem 0.7rem; border-radius: 999px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); font-size: 0.82rem; color: var(--cg, #f59e0b); }
 .gacha-coin { font-size: 1rem; }
-.gacha-token-until { color: var(--muted, #8b8b9a); font-size: 0.74rem; margin-left: 0.2rem; }
+.gacha-gold-until { color: var(--muted, #8b8b9a); font-size: 0.74rem; margin-left: 0.2rem; }
 .gacha-paywith { display: flex; gap: 0.4rem; margin: 0 0 0.5rem; }
 .gacha-pay { flex: 1; padding: 0.35rem 0.5rem; border-radius: 8px; border: 1px solid var(--border, #2a2a35); background: transparent; color: var(--muted, #8b8b9a); font-size: 0.8rem; cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s; }
 .gacha-pay.active { border-color: var(--cg, #f59e0b); color: var(--cg, #f59e0b); background: rgba(245, 158, 11, 0.1); }

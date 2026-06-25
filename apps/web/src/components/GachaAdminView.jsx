@@ -21,7 +21,7 @@ const ago = (iso) => {
 
 /**
  * Operator Classic Gacha view (docs/classic-gacha-cc-packs-spec.md §12). The economics readout (cut revenue vs
- * Token-rebate cost + the live sell-back rate, so the operator can watch the §6 net — break-even ≈ 57%) plus the
+ * Gold-rebate cost + the live sell-back rate, so the operator can watch the §6 net — break-even ≈ 57%) plus the
  * live knobs (free-pack threshold, sell-back cut %s, optional purchase markup) and per-machine enable. Mirrors
  * GamesAdminView: accepts the adminKey, polls config + monitoring, posts partial knob patches.
  */
@@ -121,7 +121,7 @@ export function GachaAdminView({ adminKey }) {
           <div className="admin-stats">
             <Stat label="Sell-back cut revenue" value={mon.sellBackCutE6} />
             <Stat label="Markup revenue" value={mon.markupE6} />
-            <Stat label="Rebate cost (Tokens)" value={mon.rebateCostE6} />
+            <Stat label="Rebate cost (Gold)" value={mon.rebateCostE6} />
             <PnlStat label="Net" value={mon.netE6} />
           </div>
           <div className="admin-stats">
@@ -129,7 +129,7 @@ export function GachaAdminView({ adminKey }) {
             <div className="stat-card"><span className="sc-label">Delivered / sold / kept</span><span className="sc-val">{mon.deliveredCards} / {mon.soldBack} / {mon.kept}</span></div>
             <Stat label="Rewards budget" value={mon.rewardsBudgetE6} />
           </div>
-          <p className="muted">Break-even ≈ 57% sell-back at the default 5% cut. If the rate drifts toward it, raise the cut or turn on the purchase markup below. Pre-fund the rewards budget before enabling Tokens.</p>
+          <p className="muted">Break-even ≈ 57% sell-back at the default 5% cut. If the rate drifts toward it, raise the cut or turn on the purchase markup below. Pre-fund the rewards budget before enabling Gold.</p>
 
           <h4 style={{ margin: '1.2rem 0 0.4rem' }}>Activity</h4>
           <div className="admin-stats">
@@ -140,7 +140,7 @@ export function GachaAdminView({ adminKey }) {
           </div>
           <div className="admin-stats">
             <div className="stat-card"><span className="sc-label">Players</span><span className="sc-val">{mon.players}</span></div>
-            <div className="stat-card"><span className="sc-label">Token packs</span><span className="sc-val">{mon.tokenPacks}</span></div>
+            <div className="stat-card"><span className="sc-label">Gold packs</span><span className="sc-val">{mon.goldPacks}</span></div>
             <div className="stat-card"><span className="sc-label">Withdraws</span><span className="sc-val">{mon.withdraws}</span></div>
             <div className="stat-card"><span className="sc-label">Realized odds — all-time (24h)</span><span className="sc-val" style={{ fontSize: '0.78rem' }}>{oddsStr(mon.rarity, mon.packsOpened)} <span className="muted">({oddsStr(mon.rarity24h, mon.packsOpened24h)})</span></span></div>
           </div>

@@ -4,15 +4,16 @@ import * as api from '../../lib/api.js';
 import { GachaReveal } from './GachaReveal.jsx';
 import { GachaSummary } from './GachaSummary.jsx';
 import { GachaInventory } from './GachaInventory.jsx';
+import { GoldBar } from './GoldBar.jsx';
 import { RARITY_COLORS, usd, usdWhole } from './gacha-util.js';
 
 // Classic Gacha (docs/classic-gacha-cc-packs-spec.md, P0–P4). Browses the live Collector Crypt machines (a
 // game-filter, a machine strip, the selected machine's detail = price + tier legend + buyback %, the real
-// top cards in its pool by value), rips a pack (pay USDC or loyalty Tokens) and reveals
+// top cards in its pool by value), rips a pack (pay USDC or loyalty Gold) and reveals
 // the won card, and manages pulls in inventory: sell back, trade the matched GDEX market, or withdraw the NFT.
 
-const tokenPrice = (e6) => Math.floor(Number(e6 || 0) / 1000).toLocaleString(); // a pack's Token price = USD×1000 = priceE6/1000
-const fmtTokens = (n) => Number(n || 0).toLocaleString();
+const goldPrice = (e6) => Math.floor(Number(e6 || 0) / 1000).toLocaleString(); // a pack's Gold price = USD×1000 = priceE6/1000
+const fmtGold = (n) => Number(n || 0).toLocaleString();
 const tierColor = (label, i) => RARITY_COLORS[(label ?? '').toLowerCase()] ?? Object.values(RARITY_COLORS)[i] ?? '#ef4444';
 const GAMES = [['all', 'All'], ['pokemon', 'Pokémon'], ['onepiece', 'One Piece']];
 const ALLOWED_GAMES = new Set(['pokemon', 'onepiece']);
@@ -53,8 +54,8 @@ export function ClassicGacha({ onTradeMarket }) {
   const [previewSell, setPreviewSell] = useState(false); // dev preview: stub the summary's onSell so the mock can show "Sold ✓"
   const [previewSellable, setPreviewSellable] = useState(false); // dev preview: force the single-reveal Sell-back button on
   const [instantCutBps, setInstantCutBps] = useState(1000); // GDEX cut on an instant sell-back (from /health); drives the net shown
-  const [tokens, setTokens] = useState(null); // { balance, untilFreePackTokens }
-  const [tokensEnabled, setTokensEnabled] = useState(false);
+  const [gold, setGold] = useState(null); // { balance, untilFreePackGold }
+  const [goldEnabled, setGoldEnabled] = useState(false);
   const [invVersion, setInvVersion] = useState(0); // bump → the <GachaInventory> panel reloads (after a pull/sell)
 
   useEffect(() => {
@@ -81,9 +82,9 @@ export function ClassicGacha({ onTradeMarket }) {
 
   const loadInventory = () => { setInvVersion((v) => v + 1); if (!api.hasSession()) return; api.getGachaInventory().then((r) => setInventory(r.inventory ?? [])).catch(() => {}); };
   useEffect(() => { loadInventory(); }, []);
-  // Loyalty Tokens: the balance/progress, and whether spending Tokens is enabled (earn always accrues).
-  const loadTokens = () => { if (!api.hasSession()) return; api.getTokenBalance().then(setTokens).catch(() => {}); };
-  useEffect(() => { loadTokens(); api.getHealth().then((h) => { setTokensEnabled(!!h.tokensEnabled); if (h.gachaInstantCutBps != null) setInstantCutBps(Number(h.gachaInstantCutBps)); }).catch(() => {}); }, []);
+  // Loyalty Gold: the balance/progress, and whether spending Gold is enabled (earn always accrues).
+  const loadGold = () => { if (!api.hasSession()) return; api.getGoldBalance().then(setGold).catch(() => {}); };
+  useEffect(() => { loadGold(); api.getHealth().then((h) => { setGoldEnabled(!!h.goldEnabled); if (h.gachaInstantCutBps != null) setInstantCutBps(Number(h.gachaInstantCutBps)); }).catch(() => {}); }, []);
 
   const requestRip = (m) => { setRipErr(null); setConfirmMachine(m); }; // → buy-confirm modal
 
@@ -124,7 +125,7 @@ export function ClassicGacha({ onTradeMarket }) {
       setRipErr(e?.status === 401 ? 'Sign in to rip a pack.' : e.message);
     } finally {
       setRipping(false);
-      loadTokens(); // earn (USDC) or spend (Tokens) changed the balance
+      loadGold(); // earn (USDC) or spend (Gold) changed the balance
     }
   };
 
@@ -196,11 +197,11 @@ export function ClassicGacha({ onTradeMarket }) {
       <div className="games-hero">
         <h2>Classic Gacha</h2>
         <p className="muted">Real graded-card packs from Collector Crypt — win a genuine slab, sell it back or keep it.</p>
-        {tokens && (
-          <div className="gacha-token-bal" title="Loyalty Tokens — earned on every USDC open">
-            <span className="gacha-coin" aria-hidden="true">🪙</span>
-            <strong>{fmtTokens(tokens.balance)}</strong>&nbsp;Tokens
-            {Number(tokens.untilFreePackTokens) > 0 && <span className="gacha-token-until">· {fmtTokens(tokens.untilFreePackTokens)} to your next free $25 pack</span>}
+        {gold && (
+          <div className="gacha-gold-bal" title="Loyalty Gold — earned on every USDC open">
+            <GoldBar size={16} />
+            <strong>{fmtGold(gold.balance)}</strong>&nbsp;Gold
+            {Number(gold.untilFreePackGold) > 0 && <span className="gacha-gold-until">· {fmtGold(gold.untilFreePackGold)} to your next free $25 pack</span>}
           </div>
         )}
       </div>
@@ -262,10 +263,10 @@ export function ClassicGacha({ onTradeMarket }) {
               <button type="button" onClick={() => setQty((q) => Math.min(10, q + 1))} disabled={qty >= 10} aria-label="More packs">+</button>
             </div>
           </div>
-          {tokensEnabled && (
+          {goldEnabled && (
             <div className="gacha-paywith" role="group" aria-label="Pay with">
               <button className={`gacha-pay ${payWith === 'usdc' ? 'active' : ''}`} onClick={() => setPayWith('usdc')}>USDC</button>
-              <button className={`gacha-pay ${payWith === 'tokens' ? 'active' : ''}`} onClick={() => setPayWith('tokens')}>🪙 Tokens</button>
+              <button className={`gacha-pay ${payWith === 'gold' ? 'active' : ''}`} onClick={() => setPayWith('gold')}><GoldBar size={15} /> Gold</button>
             </div>
           )}
           <button className="btn-primary gacha-open-btn" disabled={ripping} onClick={() => requestRip(machine)}>
@@ -273,7 +274,7 @@ export function ClassicGacha({ onTradeMarket }) {
               <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" /></svg>
               {ripping ? 'Opening…' : 'Open Now'}
             </span>
-            <span className="gacha-open-price">{payWith === 'tokens' ? `${tokenPrice(totalE6)} 🪙` : usd(totalE6)}</span>
+            <span className="gacha-open-price">{payWith === 'gold' ? <>{goldPrice(totalE6)} <GoldBar size={13} /></> : usd(totalE6)}</span>
           </button>
           <button className={`gacha-yolo ${yolo ? 'on' : ''}`} type="button" aria-pressed={yolo} onClick={() => setYolo((v) => !v)}>
             <span className="gacha-yolo-label">⚡ YOLO Mode</span>
@@ -335,7 +336,7 @@ export function ClassicGacha({ onTradeMarket }) {
             <p className="muted">{confirmMachine.name}{qty > 1 ? ` × ${qty}` : ''}{yolo ? ' · ⚡ YOLO' : ''}</p>
             <div className="gacha-confirm-total">
               <span>Total</span>
-              <strong>{payWith === 'tokens' ? `${tokenPrice(String(Number(confirmMachine.priceE6) * qty))} 🪙 Tokens` : usd(String(Number(confirmMachine.priceE6) * qty))}</strong>
+              <strong>{payWith === 'gold' ? <>{goldPrice(String(Number(confirmMachine.priceE6) * qty))} <GoldBar size={14} /> Gold</> : usd(String(Number(confirmMachine.priceE6) * qty))}</strong>
             </div>
             <p className="gacha-confirm-final">This action is final</p>
             <div className="gacha-modal-actions">

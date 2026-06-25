@@ -206,7 +206,7 @@ export const getArena = () => req('/games/arena', { auth: true }); // { arena: A
 export const getArenaById = (roundId) => req(`/games/arena/${roundId}`, { auth: true });
 export const arenaJoin = (wishlist, idempotencyKey) => req('/games/arena/join', { method: 'POST', auth: true, body: { wishlist, idempotencyKey } });
 
-// --- classic gacha (docs/classic-gacha-cc-packs-spec.md) — public Collector Crypt lobby reads (P0) below; authed buy/sell/withdraw/Tokens (P1–P4) further down ---
+// --- classic gacha (docs/classic-gacha-cc-packs-spec.md) — public Collector Crypt lobby reads (P0) below; authed buy/sell/withdraw/Gold (P1–P4) further down ---
 export const getCcMachines = () => req('/gacha/machines'); // { machines: [{ code, name, game, priceE6, buybackPct, tiers, stock, image }] }
 export const getCcMachineCards = (code) => req(`/gacha/machines/${encodeURIComponent(code)}/cards`); // { cards: [{ mint, name, imageUrl, valueE6, rarity }] }
 export const getCcWinners = (count = 50) => req(`/gacha/winners?count=${count}`); // { winners: [{ winner, mint, name, imageUrl, valueE6, tier, packType }] }
@@ -221,9 +221,9 @@ export const convertGachaPrize = (id, { side = 'long', leverage = 2 } = {}) => r
 // Withdraw the real NFT to an external wallet (P2; full scope + step-up). Step 1: nonce/message over (mint, dest).
 export const gachaWithdrawNonce = (prizeId, dest) => req(`/gacha/prizes/${prizeId}/withdraw/nonce`, { method: 'POST', auth: true, body: { dest } });
 export const gachaWithdraw = (prizeId, body) => req(`/gacha/prizes/${prizeId}/withdraw`, { method: 'POST', auth: true, body }); // { dest, message, signature }
-// P4 — loyalty Tokens.
-export const getTokenBalance = () => req('/tokens/balance', { auth: true }); // { balance, perUsd, untilFreePackTokens }
-export const getTokenHistory = () => req('/tokens/history', { auth: true }); // { history: [{ delta, reason, createdAt }] }
+// P4 — loyalty Gold.
+export const getGoldBalance = () => req('/gold/balance', { auth: true }); // { balance, perUsd, untilFreePackGold }
+export const getGoldHistory = () => req('/gold/history', { auth: true }); // { history: [{ delta, reason, createdAt }] }
 
 // --- LP ---
 export const getPool = () => req('/lp/pool');
