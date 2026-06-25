@@ -149,6 +149,28 @@
 .gacha-gold-bal { display: inline-flex; align-items: center; gap: 0.35rem; margin-top: 0.5rem; padding: 0.3rem 0.7rem; border-radius: 999px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); font-size: 0.82rem; color: var(--cg, #f59e0b); }
 .gacha-coin { font-size: 1rem; }
 .gacha-gold-until { color: var(--muted, #8b8b9a); font-size: 0.74rem; margin-left: 0.2rem; }
+
+/* Gold vault (Option A) — top-right of the Games page */
+.games-topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+.gold-vault { flex: 0 0 auto; width: 200px; background: linear-gradient(165deg, #1c1726, #161320 60%, #120f1a); border: 1px solid #322a16; border-radius: 14px; padding: 10px 12px 11px; box-shadow: 0 14px 32px -16px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,212,90,.06); }
+.gold-vault.ready { border-color: #7a5a0e; animation: gv-pulse 2.2s ease-in-out infinite; }
+@keyframes gv-pulse { 0%,100% { box-shadow: 0 0 0 1px rgba(255,212,90,.30), 0 12px 30px -12px rgba(245,181,10,.40); } 50% { box-shadow: 0 0 0 1px rgba(255,212,90,.55), 0 16px 40px -8px rgba(245,181,10,.60); } }
+.gv-label { font-family: var(--font-display, inherit); font-weight: 700; font-size: 10px; letter-spacing: .22em; color: #ffd45a; }
+.gv-mid { display: flex; align-items: center; gap: 8px; margin: 5px 0 9px; }
+.gv-bar .shine { animation: gv-gleam 3.4s ease-in-out infinite; }
+@keyframes gv-gleam { 0%,72%,100% { opacity: 0; transform: translateX(-9px); } 82% { opacity: .85; transform: translateX(9px); } }
+.gv-amt { font-family: var(--font-display, inherit); font-weight: 700; font-size: 23px; letter-spacing: -.01em; background: linear-gradient(180deg, #fff5d6, #ffcf52); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.gv-prog { display: flex; align-items: center; gap: 10px; }
+.gv-ring { width: 42px; height: 42px; flex: none; }
+.gv-ring circle { fill: none; stroke-width: 5; }
+.gv-ring-bg { stroke: #2a2438; }
+.gv-ring-fg { stroke: #ffd45a; stroke-linecap: round; transform: rotate(-90deg); transform-origin: center; transition: stroke-dasharray .9s ease; }
+.gv-goal { font-size: 11px; color: var(--muted, #8b8b9a); line-height: 1.3; }
+.gv-goal b { color: #e9ddc2; font-weight: 600; }
+.gv-claim { width: 100%; border: 0; border-radius: 9px; padding: 7px; font-family: var(--font-display, inherit); font-weight: 700; font-size: 12.5px; color: #2a1d00; cursor: pointer; background: linear-gradient(110deg, #b9810a, #ffe27a 45%, #fff7e0 52%, #ffe27a 60%, #b9810a); background-size: 220% 100%; animation: gr-gold-shine 2.4s linear infinite; }
+.gv-claim:disabled { opacity: .7; cursor: default; }
+.gv-err { font-size: 10.5px; color: var(--down, #ef4444); margin-top: 5px; }
+@media (prefers-reduced-motion: reduce) { .gold-vault.ready, .gv-bar .shine, .gv-claim, .gv-ring-fg { animation: none; transition: none; } }
 .gacha-paywith { display: flex; gap: 0.4rem; margin: 0 0 0.5rem; }
 .gacha-pay { flex: 1; padding: 0.35rem 0.5rem; border-radius: 8px; border: 1px solid var(--border, #2a2a35); background: transparent; color: var(--muted, #8b8b9a); font-size: 0.8rem; cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s; }
 .gacha-pay.active { border-color: var(--cg, #f59e0b); color: var(--cg, #f59e0b); background: rgba(245, 158, 11, 0.1); }

@@ -9,6 +9,7 @@ import { PriceDuel } from './games/PriceDuel.jsx';
 import { CardFantasy } from './games/CardFantasy.jsx';
 import { DraftArena } from './games/DraftArena.jsx';
 import { ClassicGacha } from './games/ClassicGacha.jsx';
+import { GoldVault } from './games/GoldVault.jsx';
 
 // The playable game panels, keyed by the lobby/server id.
 const PANELS = { 'classic-gacha': ClassicGacha, 'pack-rip': PackRip, 'set-poker': SetPoker, 'grade-gamble': GradeGamble, 'the-break': TheBreak, 'price-duel': PriceDuel, fantasy: CardFantasy, 'draft-arena': DraftArena };
@@ -36,6 +37,7 @@ const SECTIONS = [
 export function GamesView({ onTradeMarket, gamesVisible, classicGachaVisible }) {
   const [config, setConfig] = useState(null); // server games list (enabled flags + tiers)
   const [selected, setSelected] = useState(null);
+  const [goldVersion, setGoldVersion] = useState(0); // bump → the Gold vault reloads (after a pack open)
   const startFeed = useGames((s) => s.start);
 
   useEffect(() => {
@@ -50,19 +52,25 @@ export function GamesView({ onTradeMarket, gamesVisible, classicGachaVisible }) 
   if (Panel) {
     return (
       <div className="page games">
-        <button className="link games-back" onClick={() => setSelected(null)}>← All games</button>
-        <Panel config={serverGame(selected)} onTradeMarket={onTradeMarket} />
+        <div className="games-topbar">
+          <button className="link games-back" onClick={() => setSelected(null)}>← All games</button>
+          <GoldVault refreshKey={goldVersion} />
+        </div>
+        <Panel config={serverGame(selected)} onTradeMarket={onTradeMarket} onGoldChanged={() => setGoldVersion((v) => v + 1)} />
       </div>
     );
   }
 
   return (
     <div className="page games">
-      <div className="games-hero">
-        <h2>Games</h2>
-        <p className="muted">
-          Provably-fair card games. Win a card, sell it back for USDC at its live oracle price — or keep it and trade the market.
-        </p>
+      <div className="games-topbar">
+        <div className="games-hero">
+          <h2>Games</h2>
+          <p className="muted">
+            Provably-fair card games. Win a card, sell it back for USDC at its live oracle price — or keep it and trade the market.
+          </p>
+        </div>
+        <GoldVault refreshKey={goldVersion} />
       </div>
       {gamesVisible && masterOff && !classicGachaVisible && <div className="games-banner">Games are not live yet — check back soon.</div>}
       {SECTIONS.map((s) => {

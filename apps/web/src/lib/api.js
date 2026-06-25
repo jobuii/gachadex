@@ -211,7 +211,7 @@ export const getCcMachines = () => req('/gacha/machines'); // { machines: [{ cod
 export const getCcMachineCards = (code) => req(`/gacha/machines/${encodeURIComponent(code)}/cards`); // { cards: [{ mint, name, imageUrl, valueE6, rarity }] }
 export const getCcWinners = (count = 50) => req(`/gacha/winners?count=${count}`); // { winners: [{ winner, mint, name, imageUrl, valueE6, tier, packType }] }
 // P1 — buy → open → sell-back (real-funds; trade-scoped). open returns {openId, status, card}; poll opens/:id until status='opened'.
-export const openGachaPack = (machineCode, idempotencyKey, expectedPriceE6, payWith = 'usdc', turbo = false) => req('/gacha/open', { method: 'POST', auth: true, body: { machineCode, idempotencyKey, expectedPriceE6, payWith, turbo } });
+export const openGachaPack = (machineCode, idempotencyKey, expectedPriceE6, payWith = 'usdc', turbo = false, claim = false) => req('/gacha/open', { method: 'POST', auth: true, body: { machineCode, idempotencyKey, expectedPriceE6, payWith, turbo, claim } });
 export const getGachaOpen = (id) => req(`/gacha/opens/${id}`, { auth: true });
 export const gachaReconcile = () => req('/gacha/reconcile', { method: 'POST', auth: true });
 export const getGachaInventory = () => req('/gacha/inventory', { auth: true }); // { inventory: [{ id, mint, name, grade, imageUrl, valueE6, marketId, status }] }

@@ -13,7 +13,6 @@ import { RARITY_COLORS, usd, usdWhole } from './gacha-util.js';
 // the won card, and manages pulls in inventory: sell back, trade the matched GDEX market, or withdraw the NFT.
 
 const goldPrice = (e6) => Math.floor(Number(e6 || 0) / 1000).toLocaleString(); // a pack's Gold price = USD×1000 = priceE6/1000
-const fmtGold = (n) => Number(n || 0).toLocaleString();
 const tierColor = (label, i) => RARITY_COLORS[(label ?? '').toLowerCase()] ?? Object.values(RARITY_COLORS)[i] ?? '#ef4444';
 const GAMES = [['all', 'All'], ['pokemon', 'Pokémon'], ['onepiece', 'One Piece']];
 const ALLOWED_GAMES = new Set(['pokemon', 'onepiece']);
@@ -33,7 +32,7 @@ const PREVIEW_IMG = 'https://d1xpxki1g4htqu.cloudfront.net/_nIGwpul5IF9JxQ3La5uK
 const titleCase = (s) => (s ?? '').replace(/\b\w/g, (c) => c.toUpperCase());
 const hideBrokenImg = (e) => { e.currentTarget.style.visibility = 'hidden'; }; // CC image 404 → hide, keep the card
 
-export function ClassicGacha({ onTradeMarket }) {
+export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
   const [machines, setMachines] = useState([]);
   const [game, setGame] = useState('all');
   const [selected, setSelected] = useState(null); // selected machine code
@@ -54,8 +53,6 @@ export function ClassicGacha({ onTradeMarket }) {
   const [previewSell, setPreviewSell] = useState(false); // dev preview: stub the summary's onSell so the mock can show "Sold ✓"
   const [previewSellable, setPreviewSellable] = useState(false); // dev preview: force the single-reveal Sell-back button on
   const [instantCutBps, setInstantCutBps] = useState(1000); // GDEX cut on an instant sell-back (from /health); drives the net shown
-  const [gold, setGold] = useState(null); // { balance, untilFreePackGold }
-  const [goldEnabled, setGoldEnabled] = useState(false); // master: show Gold in the UI (earn always accrues)
   const [payWithGold, setPayWithGold] = useState(false); // gates the USDC/Gold pay choice on machines
   const [invVersion, setInvVersion] = useState(0); // bump → the <GachaInventory> panel reloads (after a pull/sell)
 
@@ -84,8 +81,7 @@ export function ClassicGacha({ onTradeMarket }) {
   const loadInventory = () => { setInvVersion((v) => v + 1); if (!api.hasSession()) return; api.getGachaInventory().then((r) => setInventory(r.inventory ?? [])).catch(() => {}); };
   useEffect(() => { loadInventory(); }, []);
   // Loyalty Gold: the balance/progress, and whether spending Gold is enabled (earn always accrues).
-  const loadGold = () => { if (!api.hasSession()) return; api.getGoldBalance().then(setGold).catch(() => {}); };
-  useEffect(() => { loadGold(); api.getHealth().then((h) => { setGoldEnabled(!!h.goldEnabled); setPayWithGold(!!h.payWithGoldEnabled); if (h.gachaInstantCutBps != null) setInstantCutBps(Number(h.gachaInstantCutBps)); }).catch(() => {}); }, []);
+  useEffect(() => { api.getHealth().then((h) => { setPayWithGold(!!h.payWithGoldEnabled); if (h.gachaInstantCutBps != null) setInstantCutBps(Number(h.gachaInstantCutBps)); }).catch(() => {}); }, []);
 
   const requestRip = (m) => { setRipErr(null); setConfirmMachine(m); }; // → buy-confirm modal
 
@@ -126,7 +122,7 @@ export function ClassicGacha({ onTradeMarket }) {
       setRipErr(e?.status === 401 ? 'Sign in to rip a pack.' : e.message);
     } finally {
       setRipping(false);
-      loadGold(); // earn (USDC) or spend (Gold) changed the balance
+      onGoldChanged?.(); // earn (USDC) or spend (Gold) changed the balance → refresh the Games-page Gold vault
     }
   };
 
@@ -198,13 +194,6 @@ export function ClassicGacha({ onTradeMarket }) {
       <div className="games-hero">
         <h2>Classic Gacha</h2>
         <p className="muted">Real graded-card packs from Collector Crypt — win a genuine slab, sell it back or keep it.</p>
-        {goldEnabled && gold && (
-          <div className="gacha-gold-bal" title="Loyalty Gold — earned on every USDC open">
-            <GoldBar size={16} />
-            <strong>{fmtGold(gold.balance)}</strong>&nbsp;Gold
-            {Number(gold.untilFreePackGold) > 0 && <span className="gacha-gold-until">· {fmtGold(gold.untilFreePackGold)} to your next free $25 pack</span>}
-          </div>
-        )}
       </div>
 
       {import.meta.env.DEV && (
