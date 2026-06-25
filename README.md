@@ -36,9 +36,13 @@ chat & social layer** (reactions, rank badges, presence, moderation, and a **DRO
   tabs, a game filter, a rarity filter, and a **JPY** toggle for Japanese-market cards.
 - **Provide liquidity** to the LP pool (the counterparty to all trades) and earn fees + trader PnL.
 - **Leaderboard** — traders ranked by net realized PnL (with equity + volume).
+- **Set up your profile** — a Portfolio banner with a **Pokémon avatar** (gen 1–5, default or shiny),
+  an editable **username**, and an at-a-glance **DEX stat strip** (equity · realized PnL · volume · rank);
+  your avatar + name follow you into chat.
 - **Referrals & affiliate codes** — every account gets a shareable code (auto-redeemed on sign-in);
   redeeming pays both sides a play-USDC bonus. Operators can give KOL/affiliate codes a **cashback %**
-  (a cut of their referees' trading fees, paid as real USDC) + a **fee-discount %** on their own trades.
+  (a cut of their referees' trading fees, paid as real USDC) + a **fee-discount %** on their own trades —
+  per code, or as a **platform-wide default** applied to every code.
 - **Chat & socialize** — a live chat rail with emoji reactions, leaderboard **rank badges**, an
   online-presence count, and **BIG BET / BIG WIN** action bars that broadcast notable trades; moderated
   (mods + operator can delete / mute / ban).
@@ -316,6 +320,9 @@ Deep dives: **[docs/real-funds-custody-plan.md](docs/real-funds-custody-plan.md)
   on the affiliate's own trades (open + close; liquidation fees excluded). Cashback is capped at the house
   fee share (`100% − FEE_LP_SHARE_PCT`) and clamped at charge time so platform revenue can't go negative.
   An affiliate's lifetime cashback shows as a **Cashback** card in their Portfolio and the referral panel.
+  **Platform-wide defaults** (operator-set, default 0) extend both knobs to *every* code with no active
+  per-wallet terms, so a baseline cashback/discount can apply site-wide; an active `affiliate_terms` row
+  overrides per wallet, and a deactivated row falls back to the default (resolved in one indexed lookup).
 
 ---
 
@@ -331,8 +338,9 @@ streamed over the public `chat` WebSocket channel; the browser only renders. Bui
   trade), broadcasts a chat event when an open's notional clears `CHAT_BIG_BET_USD` (gold) or a close's
   realized profit clears `CHAT_BIG_WIN_USD` (green). Both are live-editable operator knobs.
 - **Reactions.** Emoji reactions on messages (`chat_reactions`), broadcast as authoritative counts.
-- **Identity.** A leaderboard **rank badge** (👑#1 / 🥈 / 🥉 / TOP 10 / TOP 100) sits next to each handle,
-  from a ~60s-cached rank map; cumulative-volume **levels** back it (L1–L6).
+- **Identity.** Each handle shows the user's chosen **profile avatar** (a gen 1–5 Pokémon sprite set in the
+  Portfolio banner; a deterministic default until they pick one) plus a leaderboard **rank badge** (👑#1 /
+  🥈 / 🥉 / TOP 10 / TOP 100) from a ~60s-cached rank map; cumulative-volume **levels** back it (L1–L6).
 - **Presence.** A live "● N online" count (connected sockets, including anonymous viewers).
 - **Moderation.** Mods (and the operator via the admin key) soft-delete messages and mute/ban users;
   every action is an append-only audit row (`chat_mod_actions`). Mods act in-chat; the operator manages
@@ -384,6 +392,13 @@ Manage KOL / affiliate codes (a 4th operator tab). Lists every affiliate — cod
 optional branded code + the two %s + a label) and an activate/deactivate toggle. Percentages in the UI,
 basis points over the wire; cashback is capped at the house fee share (`100% − FEE_LP_SHARE_PCT`), enforced
 both client-side and in the service. Linking a code creates the wallet's account if it has never signed in.
+
+A **Platform defaults** form (same tab) sets a baseline **cashback %** + **fee-discount %** that apply to
+*every* referral code without its own active terms — so a site-wide baseline can apply without touching
+each wallet. An active per-wallet row **overrides** the default (set one to **0%** to zero a specific wallet
+out); a **deactivated** row reverts to the platform default, not to zero. Both default to **0** (the feature
+is dormant — no behavior change until set), stored as live knobs (`platform_cashback_bps` /
+`platform_fee_discount_bps`), so they tune without a deploy and respect the same cashback ceiling.
 
 ---
 
@@ -642,8 +657,9 @@ series** (GJ / G&P / Pokedaq), the **Scrydex-primary** feed (tcgpl eBay cross-ch
 with a **Scrydex graded** ladder, a sidebar **game switcher**, a sortable **markets screener** (with a
 JPY toggle), and **7 UI skins**. **Delegated trading keys** (scoped, revocable) back the official
 `gachadex` CLI / SDK and **search-and-bet** (on-demand market listing). A **chat & social layer** ships
-alongside — live chat with reactions, leaderboard rank badges, presence, and moderation, plus the
-**DROP** giveaway-pot teaser with real-USDC player tipping (flag-gated, **off by default**).
+alongside — live chat with reactions, **profile avatars** + a Portfolio identity banner, leaderboard rank
+badges, presence, and moderation, plus the **DROP** giveaway-pot teaser with real-USDC player tipping
+(flag-gated, **off by default**).
 
 Two **flag-gated surfaces** ship **dark** alongside the live engine: **Limit / Stop-Loss / Take-Profit**
 resting orders (`RESTING_ORDERS_ENABLED` — all fill at the mark; SL/TP are reduce-only position brackets,
