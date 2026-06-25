@@ -665,8 +665,9 @@ pool-protection engine (adaptive depth, NAV-relative OI caps, pool-health gate, 
 marketing landing page is the public entry point. The platform is **multi-game and live across all
 three** — `markets.game` (Pokémon / One Piece / Magic), a per-game index catalogue in **three weighting
 series** (GJ / G&P / Pokedaq), the **Scrydex-primary** feed (tcgpl eBay cross-check + One Piece fallback)
-with a **Scrydex graded** ladder, a sidebar **game switcher**, a sortable **markets screener** (with a
-JPY toggle), and **7 UI skins**. **Delegated trading keys** (scoped, revocable) back the official
+with a **Scrydex graded** ladder, a sidebar **game switcher**, a Markets page with an **Indices | Cards**
+toggle (a financial **Index Overview** table — per-game, per-series, with 1D/1W/1M/YTD + 52W — alongside a
+sortable card screener with a JPY toggle), and **7 UI skins**. **Delegated trading keys** (scoped, revocable) back the official
 `gachadex` CLI / SDK and **search-and-bet** (on-demand market listing). A **chat & social layer** ships
 alongside — live chat with reactions, **profile avatars** + a Portfolio identity banner, leaderboard rank
 badges, presence, and moderation, plus the **DROP** giveaway-pot teaser with real-USDC player tipping
