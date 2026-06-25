@@ -2,19 +2,13 @@ import { useState, useMemo, useEffect } from 'react';
 import { formatUsd } from '@pokex/pricing';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { useStickyState } from '../lib/useStickyState';
+import { GAME_TABS as GAMES } from '../lib/games.js';
 
 // Dedicated "Markets" screener (the filters/Option-C page): a sortable table of every card market with
 // top-mover tabs (Top/Volume/Gainers/Losers), a game filter, a rarity filter, and search. Sorting keys
 // off the 30s REST snapshot (markE6 / volume24hUsd / change24hPct) so the order doesn't thrash on every
 // live tick; the price cell subscribes to the live mark so only it re-renders. Row click → trade view.
 
-// Fixed brand dot colours, matching SidebarMarkets' game tabs (gold/red/violet); 'All' = neutral.
-const GAMES = [
-  { id: 'all', label: 'All', color: '#8b949e' },
-  { id: 'pokemon', label: 'Pokémon', color: '#f0c040' },
-  { id: 'onepiece', label: 'One Piece', color: '#d4202a' },
-  { id: 'mtg', label: 'Magic', color: '#7c5cff' },
-];
 const SORTS = [
   { id: 'top', label: 'Top' },
   { id: 'volume', label: 'Volume' },

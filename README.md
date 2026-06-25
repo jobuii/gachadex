@@ -32,8 +32,10 @@ chat & social layer** (reactions, rank badges, presence, moderation, and a **DRO
   Top 250 across all three games, plus Pokémon Graded; each in the GJ / G&P / Pokedaq series.
 - **Manage positions** — partial or full close, live unrealized PnL, liquidation price, and a one-click
   **shareable PnL card** (the traded card's art + your ROE %) you can copy or download.
-- **Browse the markets screener** — a sortable table (price · 24h % · volume · rarity) with top-mover
-  tabs, a game filter, a rarity filter, and a **JPY** toggle for Japanese-market cards.
+- **Browse the markets** — toggle between **Indices** and **Cards**. *Indices* is a financial-style
+  overview (price · 1D / 1W / 1M / YTD · 52-week low/high · **View → trade**), grouped by game then by
+  methodology (GJ / G&P / Pokedaq), with a per-game filter. *Cards* is a sortable screener (price · 24h % ·
+  volume · rarity) with top-mover tabs, a game filter, a rarity filter, and a **JPY** toggle.
 - **Provide liquidity** to the LP pool (the counterparty to all trades) and earn fees + trader PnL.
 - **Leaderboard** — traders ranked by net realized PnL (with equity + volume).
 - **Set up your profile** — a Portfolio banner with a **Pokémon avatar** (gen 1–5, default or shiny),
@@ -110,6 +112,15 @@ G&P prefixes `gp-`, Pokedaq `pdq-`.
 | **Top 100 / Top 250** — Pokémon, One Piece, Magic | In-house basket from card prices (Scrydex for Pokémon/Magic, tcgpl for One Piece) | ✅ Live (all three games) |
 | **Graded (PSA-10)** — Pokémon | **Scrydex graded** PSA-10 → in-house basket (tcgpl eBay / JustTCG as fallback) | ✅ Live |
 | **Sealed** — Pokémon | needs a sealed-product feed (TCGplayer Sealed / PriceCharting) | 🔒 Gated — no source wired; shows "Soon" |
+
+**Index Overview (Markets → Indices).** The Markets page opens on an **Indices** tab: every index in a boxed
+table **per game** (Pokémon / One Piece / Magic, with a per-game filter), grouped inside each box by series
+(GJ / G&P / Pokedaq). Each row shows the live price, **1D / 1W / 1M / YTD** change, the **52-week low & high**,
+and a **View → Exchange** action. Price + 1D stream from the live `/markets` feed; the slower windows come
+from `GET /markets/index-overview` (`indexOverview` in `services/markets.ts`), computed off the same `marks`
+series as the chart + 24h change. YTD and 52W are measured over each index's **available history** (indices
+are young, so YTD falls back to since-launch and 52W to the window that exists). Toggle to **Cards** for the
+per-card screener.
 
 We deliberately do **not** scrape TCGFish: their pages and embed badges are Cloudflare bot-challenged and
 the badges are rendered images, not an API. Enabling the **Sealed** index for real is a data decision (a

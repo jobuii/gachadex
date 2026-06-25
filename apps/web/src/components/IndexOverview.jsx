@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, Fragment } from 'react';
 import { formatUsd } from '@pokex/pricing';
 import { indexSeries, INDEX_SERIES_LABELS } from '@pokex/shared-types';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
+import { GAME_ORDER, gameBrand } from '../lib/games.js';
 import * as api from '../lib/api.js';
 
 // The Markets "Indices" sub-tab: a financial-style overview of every index. Top-level sections are the GAMES
@@ -9,12 +10,6 @@ import * as api from '../lib/api.js';
 // (GJ / G&P / Pokedaq). Per index: price, 1D/1W/1M/YTD change, 52-week low & high, and View → Exchange.
 // Price + 1D come live from the markets feed; the slower windows come from /markets/index-overview.
 
-const GAME_ORDER = ['pokemon', 'onepiece', 'mtg'];
-const GAME_META = {
-  pokemon: { label: 'Pokémon', color: '#f0c040' },
-  onepiece: { label: 'One Piece', color: '#d4202a' },
-  mtg: { label: 'Magic', color: '#7c5cff' },
-};
 const SERIES_ORDER = Object.fromEntries(Object.keys(INDEX_SERIES_LABELS).map((k, i) => [k, i]));
 
 const fmtE6 = (e6) => (e6 ? formatUsd(BigInt(e6)) : '—');
@@ -101,7 +96,7 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
             All
           </button>
           {allSections.map(([g]) => {
-            const meta = GAME_META[g] || { label: g, color: 'var(--accent)' };
+            const meta = gameBrand(g);
             return (
               <button
                 key={g}
@@ -120,7 +115,7 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
       )}
 
       {visible.map(([game, list]) => {
-        const meta = GAME_META[game] || { label: game, color: 'var(--accent)' };
+        const meta = gameBrand(game);
         return (
           <section className="io-section" key={game} style={{ '--game-color': meta.color }}>
             <header className="io-section-head">
