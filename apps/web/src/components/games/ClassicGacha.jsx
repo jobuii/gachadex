@@ -1,22 +1,20 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { formatUsd } from '@pokex/pricing';
 import { useWallet } from '@solana/wallet-adapter-react';
 import * as api from '../../lib/api.js';
 import { signAndSubmitNftWithdrawal } from '../../lib/withdraw.js';
 import { GachaReveal } from './GachaReveal.jsx';
 import { GachaSummary } from './GachaSummary.jsx';
+import { RARITY_COLORS, usd } from './gacha-util.js';
 
 // Classic Gacha (docs/classic-gacha-cc-packs-spec.md, P0–P4). Browses the live Collector Crypt machines (a
 // game-filter, a machine strip, the selected machine's detail = price + tier legend + buyback %, the real
 // top cards in its pool by value), rips a pack (pay USDC or loyalty Tokens) and reveals
 // the won card, and manages pulls in inventory: sell back, trade the matched GDEX market, or withdraw the NFT.
 
-const usd = (e6) => formatUsd(BigInt(e6 || 0)); // `|| 0` guards '', null, undefined (e6 is always an integer string)
 const tokenPrice = (e6) => Math.floor(Number(e6 || 0) / 1000).toLocaleString(); // a pack's Token price = USD×1000 = priceE6/1000
 const fmtTokens = (n) => Number(n || 0).toLocaleString();
-const TIER_COLOR = { common: '#ef4444', uncommon: '#22c55e', rare: '#a855f7', epic: '#ffc93c' }; // red · green · violet · gold
-const tierColor = (label, i) => TIER_COLOR[(label ?? '').toLowerCase()] ?? ['#ef4444', '#22c55e', '#a855f7', '#ffc93c'][i] ?? '#ef4444';
+const tierColor = (label, i) => RARITY_COLORS[(label ?? '').toLowerCase()] ?? Object.values(RARITY_COLORS)[i] ?? '#ef4444';
 const GAMES = [['all', 'All'], ['pokemon', 'Pokémon'], ['onepiece', 'One Piece']];
 const ALLOWED_GAMES = new Set(['pokemon', 'onepiece']);
 const HIDDEN_MACHINES = new Set(['pokemon_2500', 'pokemon_5000', 'pokemon_151']); // hidden per operator
@@ -154,7 +152,7 @@ export function ClassicGacha({ onTradeMarket }) {
   const previewMulti = () => {
     const c = cards?.[0];
     let n = 0;
-    const mk = (rarity, value) => ({ openId: `p${n}`, status: 'opened', verifyUrl: null, turboRefundE6: null, card: { mint: `p${n++}`, name: c?.name ?? 'Card', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? PREVIEW_IMG, valueE6: value, rarity, marketId: null, year: '2000' } });
+    const mk = (rarity, value) => { const id = `p${n++}`; return { openId: id, status: 'opened', verifyUrl: null, turboRefundE6: null, card: { mint: id, name: c?.name ?? 'Card', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? PREVIEW_IMG, valueE6: value, rarity, marketId: null, year: '2000' } }; };
     setRevealSpentE6('50000000');
     setSummaryResults([mk('common', '12000000'), mk('rare', '85000000'), mk('epic', '4475000000'), { openId: 'pt', status: 'turbo_sold', card: null, verifyUrl: null, turboRefundE6: '27000000' }, mk('uncommon', '28000000')]);
     setPreviewSell(true); setPreviewSellable(false); // mock: let the summary's Sell buttons resolve so the sell-all / sell-some flow is demoable

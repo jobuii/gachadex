@@ -1,23 +1,20 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { formatUsd } from '@pokex/pricing';
+import { RARITY_COLORS, usd, netAfterCutE6 } from './gacha-util.js';
 
 // Multi-open summary (docs/classic-gacha-cc-packs-spec.md). After opening more than one pack: a net line
 // (spent vs value) + a grid of every pull. Mirrors rare.win's PackOpen summary. Tap any pull to select it
 // (multi-select) — a "Sell (N)" button plus the exact USDC payout appear above the actions; or "Sell All",
 // or "Keep / Done". `onSell(mint)` resolves the held row + sells it instantly (cut applied); true on success.
 
-const usd = (e6) => formatUsd(BigInt(e6 || 0));
-const TIER = { common: '#ef4444', uncommon: '#22c55e', rare: '#a855f7', epic: '#ffc93c' };
-const tierColor = (r) => TIER[(r || '').toLowerCase()] ?? '#9aa0aa';
+const tierColor = (r) => RARITY_COLORS[(r || '').toLowerCase()] ?? '#9aa0aa';
 
 export function GachaSummary({ results, spentE6, onSell, onClose, instantCutBps = 1000 }) {
   const [sold, setSold] = useState({}); // mint → true
   const [selected, setSelected] = useState({}); // mint → true
   const [busy, setBusy] = useState(false);
 
-  const cut = BigInt(instantCutBps);
-  const netE6 = (v) => (BigInt(v || 0) * (10_000n - cut)) / 10_000n; // USDC the player nets selling this slab back now
+  const netE6 = (v) => netAfterCutE6(v, instantCutBps); // USDC the player nets selling this slab back now
 
   const isSellable = (r) => r.card?.mint && Number(r.card.valueE6) > 0 && !sold[r.card.mint];
   const sellable = results.filter(isSellable);

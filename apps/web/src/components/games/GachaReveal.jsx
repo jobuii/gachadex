@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { formatUsd } from '@pokex/pricing';
 import { playSound, stopSound, isMuted, toggleMuted } from '../../lib/sound.js';
 import { RevealFX } from './RevealFX.jsx';
+import { RARITY_COLORS, usd, netAfterCutE6 } from './gacha-util.js';
 
 // The Classic Gacha reveal "moment" (docs/classic-gacha-cc-packs-spec.md). A full-screen overlay that opens in
 // a charging/suspense state (covering the open+poll latency), then runs a rarity-escalating beat sequence
@@ -11,13 +11,11 @@ import { RevealFX } from './RevealFX.jsx';
 // slot-machine cash jingle + screen shake). CSS-only visuals; particles via RevealFX; sounds via lib/sound
 // (on by default, mute toggle). Beats/effects auto-skip under prefers-reduced-motion via the FX layer + CSS.
 
-const usd = (e6) => formatUsd(BigInt(e6 || 0));
-
 const RARITY = {
-  common: { color: '#ef4444', label: 'Common', fx: null, sound: 'winCommon' }, // red
-  uncommon: { color: '#22c55e', label: 'Uncommon', fx: null, sound: 'winCommon' }, // green
-  rare: { color: '#a855f7', label: 'Rare', fx: 'rare', sound: 'winRare' }, // violet — lighter celebration
-  epic: { color: '#ffc93c', label: 'Epic', fx: 'epic', sound: 'winEpic' }, // gold — the full jackpot
+  common: { color: RARITY_COLORS.common, label: 'Common', fx: null, sound: 'winCommon' }, // red
+  uncommon: { color: RARITY_COLORS.uncommon, label: 'Uncommon', fx: null, sound: 'winCommon' }, // green
+  rare: { color: RARITY_COLORS.rare, label: 'Rare', fx: 'rare', sound: 'winRare' }, // violet — lighter celebration
+  epic: { color: RARITY_COLORS.epic, label: 'Epic', fx: 'epic', sound: 'winEpic' }, // gold — the full jackpot
 };
 const tierOf = (r) => RARITY[(r || '').toLowerCase()] ?? RARITY.common;
 
@@ -92,7 +90,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   const done = phase === 'done';
   const valE6 = shownE6 != null ? String(shownE6) : (card?.valueE6 ?? '0');
   // What the player nets selling this slab straight back to CC now (instant cut, e.g. 10%). Shown on the button.
-  const sellNetE6 = card?.valueE6 ? (BigInt(card.valueE6) * (10_000n - BigInt(instantCutBps))) / 10_000n : 0n;
+  const sellNetE6 = card?.valueE6 ? netAfterCutE6(card.valueE6, instantCutBps) : 0n;
   // P&L of this pull: the slab's value vs what the pack cost. Negative = paid more than it's worth.
   const pnlE6 = (card?.valueE6 ? BigInt(card.valueE6) : 0n) - BigInt(spentE6 || 0);
 

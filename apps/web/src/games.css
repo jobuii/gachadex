@@ -1,6 +1,8 @@
 /* Games surface (docs/games-spec.md). Token-driven — colors/shape come from the active skin
    (--bg, --gold, --accent, --radius, --pill, --border-w). Mobile rules live in mobile.css. */
 
+/* the EPIC / Grail metallic-gold sweep, shared by the reveal Type text, the EPIC PULL banner + the Grail badge */
+:root { --gacha-gold-grad: linear-gradient(100deg, #a9780a 0%, #ffe27a 24%, #fffdf2 50%, #ffe27a 76%, #a9780a 100%); }
 .page.games { max-width: none; } /* full-width lobby (was capped + left-aligned) */
 .games-back { display: inline-block; margin-bottom: 0.75rem; background: none; border: none; color: var(--accent-lit); cursor: pointer; }
 .games-hero { margin-bottom: 0.4rem; }
@@ -347,7 +349,7 @@
 
 /* the EPIC banner */
 .gacha-reveal-banner { font-size: clamp(1.7rem, 6.5vw, 2.9rem); font-weight: 900; letter-spacing: 0.06em;
-  background: linear-gradient(100deg, #a9780a 0%, #ffe27a 24%, #fffdf2 50%, #ffe27a 76%, #a9780a 100%);
+  background: var(--gacha-gold-grad);
   background-size: 250% 100%; background-position: 50% 0;
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent;
   filter: drop-shadow(0 0 24px rgba(255,201,60,0.65)) drop-shadow(0 2px 1px rgba(0,0,0,0.4));
@@ -384,7 +386,7 @@
 /* EPIC is special — real metallic gold with a moving shine sweep (overrides the flat colour/stroke/glow) */
 .gacha-beat-tier-epic {
   -webkit-text-stroke: 0; text-shadow: none;
-  background: linear-gradient(100deg, #a9780a 0%, #ffe27a 24%, #fffdf2 50%, #ffe27a 76%, #a9780a 100%);
+  background: var(--gacha-gold-grad);
   background-size: 250% 100%; background-position: 50% 0;
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent;
   filter: drop-shadow(0 0 16px rgba(255,201,60,0.8)) drop-shadow(0 3px 5px rgba(0,0,0,0.55));

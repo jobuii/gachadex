@@ -16,7 +16,7 @@ const PANELS = { 'classic-gacha': ClassicGacha, 'pack-rip': PackRip, 'set-poker'
 // The full 7-game lineup (docs/games-spec.md) — all live. id matches the server's games list; cat groups
 // the lobby into sections (like flip.gg's "Originals" rows).
 const LINEUP = [
-  { id: 'classic-gacha', name: 'Classic Gacha', icon: '💎', blurb: 'Open real graded-card packs from Collector Crypt.', live: true, cat: 'gacha', img: '/games/classic-gacha.png' },
+  { id: 'classic-gacha', name: 'Classic Gacha', icon: '💎', blurb: 'Open real graded-card packs from Collector Crypt.', live: true, cat: 'gacha', img: '/games/classic-gacha.png', gated: 'classicGacha' },
   { id: 'pack-rip', name: 'Pack Rip', icon: '🎴', blurb: 'Open a pack, reveal a card, sell it back for USDC.', live: true, cat: 'gacha' },
   { id: 'set-poker', name: 'Set Poker', icon: '🃏', blurb: 'Five-card draw — your cards’ value beats the house.', live: true, cat: 'casino' },
   { id: 'grade-gamble', name: 'Grade Gamble', icon: '🔍', blurb: 'Gamble a raw card up the grade ladder.', live: true, cat: 'casino' },
@@ -74,7 +74,8 @@ export function GamesView({ onTradeMarket, gamesVisible, classicGachaVisible }) 
             <h3 className="games-section-head"><span className="games-section-icon" aria-hidden="true">{s.icon}</span>{s.label}</h3>
             <div className="games-grid">
               {games.map((g) => {
-                const enabled = g.id === 'classic-gacha' ? classicGachaVisible : g.live && serverGame(g.id)?.enabled;
+                // gated entries ride their own surface flag; everything else rides the game's server toggle
+                const enabled = g.gated === 'classicGacha' ? classicGachaVisible : g.live && serverGame(g.id)?.enabled;
                 return (
                   <button
                     key={g.id}
