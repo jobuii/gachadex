@@ -835,3 +835,23 @@ CREATE TABLE IF NOT EXISTS token_ledger (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_token_ledger_user ON token_ledger(user_id, created_at DESC);
+
+-- Classic Gacha: persisted CC machine stock + a restock log, so the operator sees restocks that happened
+-- while no admin tab was open (a poll worker upserts the latest stock and appends an event on any increase).
+CREATE TABLE IF NOT EXISTS gacha_machine_stock (
+  machine_code TEXT NOT NULL,
+  tier         TEXT NOT NULL,
+  stock        INT  NOT NULL,                          -- latest CC count (updated every poll, incl. decreases)
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (machine_code, tier)
+);
+CREATE TABLE IF NOT EXISTS gacha_restock_events (
+  id           BIGSERIAL PRIMARY KEY,
+  machine_code TEXT NOT NULL,
+  tier         TEXT NOT NULL,
+  from_stock   INT  NOT NULL,
+  to_stock     INT  NOT NULL,
+  delta        INT  NOT NULL,                          -- to_stock − from_stock, always > 0 (an increase = a restock)
+  detected_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_gacha_restock_recent ON gacha_restock_events(detected_at DESC);

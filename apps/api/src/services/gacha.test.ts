@@ -19,6 +19,7 @@ const { usdc } = await import('../money.ts');
 const { fund, sign } = await import('../test-helpers.ts');
 const { openPack, sellBack, convert, reconcilePending, nftWithdrawNonce, requestNftWithdraw } = await import('./gacha.ts');
 const { reconcileStuckPrizes } = await import('./gacha-reconcile.ts');
+const { pollMachineStock, recentRestocks } = await import('./gacha-stock.ts');
 const { tokensEarnedForOpen, tokenPriceForPack, earnTokens, getTokenSummary } = await import('./tokens.ts');
 const { setGachaConfig, gachaAdminConfig } = await import('./gacha-config.ts');
 const { gachaMonitoring } = await import('./gacha-monitoring.ts');
@@ -503,4 +504,37 @@ test('reconcile-stuck: DAS unavailable (null) → row left untouched, counted sk
   const r = await reconcileStuckPrizes(db, { getAssetInfo: async () => null });
   assert.ok(r.skipped >= 1);
   assert.equal(await statusOf(id), 'selling');
+});
+
+// ── stock worker: persist CC stock + log restocks (so they survive a closed admin tab) ──
+const machinesFn = (code: string, stock: Record<string, number>) => async () => ({ machines: [{ code, stock }] });
+const stockOf = async (code: string, tier: string) =>
+  (await db.query<{ stock: number }>(`SELECT stock FROM gacha_machine_stock WHERE machine_code = $1 AND tier = $2`, [code, tier])).rows[0]?.stock;
+const restocksOf = async (code: string) => (await recentRestocks(db)).filter((e) => e.machineCode === code);
+
+test('stock poll: first sighting records the stock with no restock event', async () => {
+  const code = 'rcA-' + randomUUID().slice(0, 6);
+  const r = await pollMachineStock(db, { getMachinesFn: machinesFn(code, { common: 100, epic: 5 }) });
+  assert.equal(r.restocks, 0);
+  assert.equal(await stockOf(code, 'epic'), 5);
+  assert.equal((await restocksOf(code)).length, 0);
+});
+
+test('stock poll: a tier whose stock went UP logs a restock event (delta + from/to)', async () => {
+  const code = 'rcB-' + randomUUID().slice(0, 6);
+  await pollMachineStock(db, { getMachinesFn: machinesFn(code, { epic: 2 }) });
+  const r = await pollMachineStock(db, { getMachinesFn: machinesFn(code, { epic: 9 }) }); // +7
+  assert.equal(r.restocks, 1);
+  const ev = await restocksOf(code);
+  assert.equal(ev.length, 1);
+  assert.deepEqual([ev[0].tier, ev[0].fromStock, ev[0].toStock, ev[0].delta], ['epic', 2, 9, 7]);
+  assert.equal(await stockOf(code, 'epic'), 9);
+});
+
+test('stock poll: a decrease (pulls) updates the stock but logs no event', async () => {
+  const code = 'rcC-' + randomUUID().slice(0, 6);
+  await pollMachineStock(db, { getMachinesFn: machinesFn(code, { rare: 50 }) });
+  await pollMachineStock(db, { getMachinesFn: machinesFn(code, { rare: 30 }) });
+  assert.equal((await restocksOf(code)).length, 0);
+  assert.equal(await stockOf(code, 'rare'), 30);
 });

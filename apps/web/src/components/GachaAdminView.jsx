@@ -10,6 +10,14 @@ const oddsStr = (counts, total) => RARITY_TIERS.map((r) => `${r[0].toUpperCase()
 const tierColor = (label, i = 0) => RARITY_COLORS[(label ?? '').toLowerCase()] ?? Object.values(RARITY_COLORS)[i] ?? '#ef4444';
 const titleCase = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const rangeStr = (t) => (t.minE6 ? formatUsd(BigInt(t.minE6)) : '—') + (t.maxE6 ? `–${formatUsd(BigInt(t.maxE6))}` : '+');
+const ago = (iso) => {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 90) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+};
 
 /**
  * Operator Classic Gacha view (docs/classic-gacha-cc-packs-spec.md §12). The economics readout (cut revenue vs
@@ -190,6 +198,23 @@ export function GachaAdminView({ adminKey }) {
       <h3 style={{ marginTop: '1.5rem' }}>Live machines — stock &amp; odds{' '}
         <span className="muted" style={{ fontSize: '0.7rem', fontWeight: 400 }}>· live from Collector Crypt · ▲ = restocked since the last 30s refresh</span>
       </h3>
+
+      {mon?.recentRestocks?.length > 0 && (
+        <div style={{ margin: '0.2rem 0 0.8rem' }}>
+          <p className="muted" style={{ fontSize: '0.76rem', margin: '0 0 0.35rem' }}>Recent restocks — recorded server-side every few minutes, so they show even if this tab was closed:</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+            {mon.recentRestocks.slice(0, 24).map((e, i) => (
+              <span key={i} className="stat-card" style={{ flexDirection: 'row', alignItems: 'center', gap: '0.35rem', padding: '0.25rem 0.55rem', fontSize: '0.76rem' }}>
+                <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: tierColor(e.tier) }} />
+                <strong>{nameOf(e.machineCode)}</strong> {titleCase(e.tier)}
+                <span style={{ color: 'var(--up, #22c55e)', fontWeight: 600 }}>▲ +{e.delta}</span>
+                <span className="muted">· {ago(e.detectedAt)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="gacha-live-machines">
         {machines.filter((m) => (m.tiers?.length ?? 0) > 0 || Object.keys(m.stock ?? {}).length > 0).map((m) => (
           <div key={m.code} style={{ margin: '0.7rem 0' }}>

@@ -165,6 +165,7 @@ export const config = {
   gachaMarkupBps: num('GACHA_MARKUP_BPS', 0), // optional purchase markup over the CC price → FEE_REVENUE (spec §6, default 0/off; admin-tunable)
   tokensEnabled: process.env.TOKENS_ENABLED === 'true', // pay-with-Tokens + loyalty earn (P4); dark until set
   gachaFreePackThresholdUsd: num('GACHA_FREE_PACK_THRESHOLD_USD', 1000), // USD spend that earns one free $25 pack — the loyalty earn rate derives from it (admin-tunable knob)
+  gachaStockPollMs: num('GACHA_STOCK_POLL_MS', 300_000), // how often the stock worker polls CC for restocks (5 min)
   heliusDasUrl: process.env.HELIUS_DAS_URL ?? '', // DAS-capable RPC for getAsset (a won NFT's collection/owner — needed to transfer an MPL Core asset out); falls back to solanaRpcUrl
 
   // Funding: per-accrual rate = skewFactor * (skew / openInterest), bps (the heavy side pays)

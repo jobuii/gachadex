@@ -134,6 +134,25 @@ function startGamesSettleLoop(db: Db, log: FastifyBaseLogger) {
   setInterval(() => void run(), 60_000);
 }
 
+/** Classic Gacha: poll CC machine stock so restocks are recorded server-side (visible even with no admin tab
+ *  open). Lease-guarded so only one instance polls CC per interval. */
+function startGachaStockLoop(db: Db, log: FastifyBaseLogger) {
+  const run = async () => {
+    if (!(await tryAcquireLease(db, 'gacha-stock-poll', INSTANCE_ID, config.gachaStockPollMs))) return;
+    try {
+      const { pollMachineStock } = await import('./services/gacha-stock.ts');
+      const r = await pollMachineStock(db);
+      if (r.restocks) log.info(r, 'gacha stock poll: restocks recorded');
+    } catch (e) {
+      log.warn(e, 'gacha stock poll failed');
+    } finally {
+      await releaseLease(db, 'gacha-stock-poll', INSTANCE_ID).catch(() => {});
+    }
+  };
+  setTimeout(() => void run(), 5_000);
+  setInterval(() => void run(), config.gachaStockPollMs);
+}
+
 /** Self-chained worker loop: the next pass is scheduled only after the current one finishes, so
  *  slow RPC passes can never overlap/stack the way a setInterval-driven loop would. */
 function chainLoop(run: () => Promise<void>, firstDelayMs: number, intervalMs: number) {
@@ -240,6 +259,7 @@ async function main() {
     startFundingLoop(db, app.log);
     startLiquidationLoop(db, app.log);
     startGamesSettleLoop(db, app.log);
+    if (config.classicGachaEnabled) startGachaStockLoop(db, app.log);
     // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
     // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.
     const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadGachaConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
