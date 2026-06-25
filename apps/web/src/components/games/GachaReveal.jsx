@@ -21,13 +21,14 @@ const tierOf = (r) => RARITY[(r || '').toLowerCase()] ?? RARITY.common;
 
 // The reveal as RELATIVE gaps (ms): Year → (gradeGap) Grade → (typeGap) Type → (flipGap) flip → (hold) done.
 // The beats don't start until the RIP sound has finished AND the card has animated in (RIP_AUDIBLE_MS below).
-// `flipGap` dwells on the Type beat (Common/…/Epic) so the player reads the rarity (~1.5s); `hold` dwells on the
-// flipped card so they ingest which card they pulled (~1.5s) — both before the info/actions appear. Multi-opens
-// skip all of this (straight to the summary) so a slow single reveal never gets tedious.
+// Year + Grade tick by at the ORIGINAL pace (gradeGap/typeGap unchanged); then the Type beat LINGERS its original
+// gap PLUS ~1.5s so the player reads the rarity, and the flipped card LINGERS its original gap PLUS ~1.5s before
+// the info/actions appear. (Original type→flip / flip→done: base 1050/700, rare 1250/900, epic 1500/1100.)
+// Multi-opens skip all of this (straight to the summary) so a slow single reveal never gets tedious.
 const BEATS = {
-  base: { gradeGap: 1150, typeGap: 1200, flipGap: 1500, hold: 1500 },
-  rare: { gradeGap: 1400, typeGap: 1450, flipGap: 1500, hold: 1500 },
-  epic: { gradeGap: 1800, typeGap: 1900, flipGap: 1600, hold: 1700 },
+  base: { gradeGap: 1150, typeGap: 1200, flipGap: 2550, hold: 2200 },
+  rare: { gradeGap: 1400, typeGap: 1450, flipGap: 2750, hold: 2400 },
+  epic: { gradeGap: 1800, typeGap: 1900, flipGap: 3000, hold: 2600 },
 };
 // rip.mp3's tear ends ~2.28s (then ~0.8s of trailing silence) — hold the year beat until then so the rip finishes
 // and the card-in animation plays first. If the open+poll already outlasted the rip, just give a short settle.
