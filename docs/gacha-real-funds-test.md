@@ -29,9 +29,11 @@ real machines), and the `solana` CLI is available for keypair gen + devnet SOL a
 
 - **A DAS-capable devnet RPC** (e.g. a free Helius devnet key) → `HELIUS_DAS_URL`. Needed for `getAsset`
   (the withdraw transfer + the stuck-row reconciler). A plain devnet RPC does **not** support DAS.
-- **Devnet USDC of the mint CC devnet expects.** Inspect a `generatePack` response (or ask CC) for the
-  payment mint, then acquire that devnet SPL token. If CC uses a non-standard devnet mint you may need
-  their faucet.
+- **Devnet USDC of CC's mint.** Decoding a live `generatePack` payment tx (2026-06-25) shows CC devnet
+  charges in a **CC-specific** SPL mint, **not** standard Circle devnet USDC:
+  `USDC_MINT=Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr` (6 decimals; e.g. a $250 pack = `250000000`).
+  Because it's CC's own mint, a generic faucet won't give it to you — **you need CC's devnet faucet or for
+  CC to send you that token** (both the test wallet's deposit AND the app hot-wallet float must hold it).
 - **A test wallet** (Phantom/Backpack set to devnet) to sign in to the site and drive the customer flows,
   funded with devnet SOL + the devnet USDC above (deposit into the app to get play→real collateral).
 
@@ -54,7 +56,7 @@ CLASSIC_GACHA_ENABLED=true \
 CC_ENV=dev \
 SOLANA_RPC_URL=https://api.devnet.solana.com \
 HELIUS_DAS_URL=<your devnet DAS url> \
-USDC_MINT=<CC devnet USDC mint> \
+USDC_MINT=Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr \  # CC devnet USDC (decoded from generatePack)
 TREASURY_PUBKEY=$(solana-keygen pubkey treasury.json) \
 HOT_WALLET_SECRET=<base58/json of hot.json> \
 DEPOSIT_MASTER_SEED=<64 hex> \
