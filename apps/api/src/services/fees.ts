@@ -56,3 +56,42 @@ export const getFundingFactorBps = fundingFactor.get;
 export const loadFundingFactor = fundingFactor.load;
 export const setFundingFactor = fundingFactor.set;
 export const fundingFactorView = fundingFactor.view;
+
+/** Whole-percent (0–100) share validator — for splitting a fee/funding/penalty between the LP pool and the
+ *  house revenue account. Throws on a bad one. */
+function pctValidator(label: string) {
+  return (value: unknown): number => {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 0 || n > 100) throw new Error(`${label} must be an integer 0–100`);
+    return n;
+  };
+}
+
+/** One live-editable whole-percent share knob (settings-backed, cached for sync reads on the hot path). */
+function livePctKnob(settingKey: string, defaultPct: number, label: string) {
+  const k = liveKnob(settingKey, defaultPct, pctValidator(label));
+  return { get: k.get, load: k.load, set: k.set, view: (): { pct: number; default: number } => ({ pct: k.get(), default: k.default }) };
+}
+
+// LP revenue shares — the % of each source routed to the LP pool; the house FEE_REVENUE account keeps the
+// rest. These drive the LIVE split mechanics (the engine reads them synchronously when settling each fee /
+// funding / liquidation). The pool page shows a SEPARATELY-published snapshot (admin "Refresh pool
+// numbers"), so tuning a share here never flickers the public page until the operator republishes.
+const lpTradingShare = livePctKnob('lp_trading_fee_pct', config.feeLpSharePct, 'LP trading-fee share');
+const lpFundingShare = livePctKnob('lp_funding_pct', config.lpFundingSharePct, 'LP funding share');
+const lpLiquidationShare = livePctKnob('lp_liquidation_pct', config.lpLiquidationSharePct, 'LP liquidation share');
+
+export const getLpTradingPct = lpTradingShare.get;
+export const loadLpTradingPct = lpTradingShare.load;
+export const setLpTradingPct = lpTradingShare.set;
+export const lpTradingPctView = lpTradingShare.view;
+
+export const getLpFundingPct = lpFundingShare.get;
+export const loadLpFundingPct = lpFundingShare.load;
+export const setLpFundingPct = lpFundingShare.set;
+export const lpFundingPctView = lpFundingShare.view;
+
+export const getLpLiquidationPct = lpLiquidationShare.get;
+export const loadLpLiquidationPct = lpLiquidationShare.load;
+export const setLpLiquidationPct = lpLiquidationShare.set;
+export const lpLiquidationPctView = lpLiquidationShare.view;

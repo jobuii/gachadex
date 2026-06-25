@@ -11,6 +11,8 @@ const usd = (e6) => formatUsd(BigInt(e6 ?? 0));
 // at sign-in. Built off the current origin so it's right on prod, preview, or localhost without a hardcode.
 const refLink = (code) => `${window.location.origin}/?ref=${code}`;
 const EMPTY = { pubkey: '', code: '', cashbackPct: '', discountPct: '', label: '' };
+// a finite percentage within [0, max] — shared by the per-affiliate form and the platform-defaults form.
+const validPct = (v, max) => Number.isFinite(v) && v >= 0 && v <= max;
 
 export function AffiliatesView({ adminKey }) {
   const [rows, setRows] = useState([]);
@@ -21,6 +23,8 @@ export function AffiliatesView({ adminKey }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(null);
   const [form, setForm] = useState(EMPTY);
+  const [pd, setPd] = useState({ cashbackPct: '', discountPct: '' }); // platform-wide defaults
+  const [pdBusy, setPdBusy] = useState(false);
 
   const maxCashbackPct = maxCashbackBps / 100;
 
@@ -31,6 +35,8 @@ export function AffiliatesView({ adminKey }) {
       .then((r) => {
         setRows(r.affiliates || []);
         setMaxCashbackBps(r.maxCashbackBps ?? 5000);
+        const d = r.platformDefaults;
+        if (d) setPd({ cashbackPct: String(d.cashbackBps / 100), discountPct: String(d.feeDiscountBps / 100) });
         setErr(null);
       })
       .catch((e) => setErr(e.message))
@@ -60,11 +66,11 @@ export function AffiliatesView({ adminKey }) {
     }
     const cashbackPct = Number(form.cashbackPct);
     const discountPct = Number(form.discountPct);
-    if (!Number.isFinite(cashbackPct) || cashbackPct < 0 || cashbackPct > maxCashbackPct) {
+    if (!validPct(cashbackPct, maxCashbackPct)) {
       setErr(`Cashback must be 0–${maxCashbackPct}% (the house keeps the rest of each fee).`);
       return;
     }
-    if (!Number.isFinite(discountPct) || discountPct < 0 || discountPct > 100) {
+    if (!validPct(discountPct, 100)) {
       setErr('Fee discount must be 0–100%.');
       return;
     }
@@ -93,6 +99,36 @@ export function AffiliatesView({ adminKey }) {
     }
   };
 
+  // Platform-wide defaults: the baseline cashback + fee-discount paid to every code that has no active
+  // per-wallet terms. Individual affiliate rows above override these for that wallet.
+  const savePd = async () => {
+    setErr(null);
+    setNote(null);
+    const cashbackPct = Number(pd.cashbackPct);
+    const discountPct = Number(pd.discountPct);
+    if (!validPct(cashbackPct, maxCashbackPct)) {
+      setErr(`Default cashback must be 0–${maxCashbackPct}%.`);
+      return;
+    }
+    if (!validPct(discountPct, 100)) {
+      setErr('Default fee discount must be 0–100%.');
+      return;
+    }
+    setPdBusy(true);
+    try {
+      const r = await api.adminSetAffiliateDefaults(
+        { cashbackBps: Math.round(cashbackPct * 100), feeDiscountBps: Math.round(discountPct * 100) },
+        adminKey,
+      );
+      setNote(`Platform defaults saved — ${r.cashbackBps / 100}% cashback, ${r.feeDiscountBps / 100}% off fees for every code.`);
+      setPd({ cashbackPct: String(r.cashbackBps / 100), discountPct: String(r.feeDiscountBps / 100) });
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setPdBusy(false);
+    }
+  };
+
   // Flip active without changing the rates (re-sends the existing bps so validation passes).
   const toggleActive = async (a) => {
     setErr(null);
@@ -116,10 +152,19 @@ export function AffiliatesView({ adminKey }) {
         % of their referees' trading fees paid back to them as real USDC, from the house revenue share (max{' '}
         {maxCashbackPct}%). <strong>Fee discount</strong> = the % off their own trading fees. The code links to
         their wallet — if they've never signed in, the account is created. Edit any row to change its rates;
-        deactivating stops the discount + cashback without deleting the link.
+        deactivating drops a wallet's custom rates (it then falls back to the platform defaults) without deleting
+        the link. Set <strong>platform defaults</strong> below to pay <em>every</em> code a baseline
+        cashback/discount; any active per-wallet row overrides them for that wallet (set one to 0 to zero a wallet out).
       </p>
       {err && <div className="order-error">{err}</div>}
       {note && <div className="ref-msg up">{note}</div>}
+
+      <div className="ref-code-box" style={{ flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.6rem' }}>
+        <strong style={{ flex: '1 1 100%', fontSize: '0.82rem' }}>Platform defaults — every code without its own terms</strong>
+        <input className="wallet-input" type="number" min="0" max={maxCashbackPct} step="1" placeholder={`Cashback % (≤${maxCashbackPct})`} value={pd.cashbackPct} onChange={(e) => setPd((p) => ({ ...p, cashbackPct: e.target.value }))} style={{ width: 160 }} />
+        <input className="wallet-input" type="number" min="0" max="100" step="1" placeholder="Discount %" value={pd.discountPct} onChange={(e) => setPd((p) => ({ ...p, discountPct: e.target.value }))} style={{ width: 130 }} />
+        <button className="btn-primary sm" disabled={pdBusy} onClick={savePd}>{pdBusy ? '…' : 'Save defaults'}</button>
+      </div>
 
       <div className="ref-code-box" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
         <input className="wallet-input" placeholder="Wallet address" value={form.pubkey} onChange={(e) => set('pubkey', e.target.value)} style={{ flex: '2 1 220px' }} />

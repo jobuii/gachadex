@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, WithdrawalAutoProcessRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest, GameConfigRequest, GamePoolSeedRequest, BreakCancelRequest, ArenaCancelRequest } from '@pokex/shared-types';
+import { SetPriceRequest, InsuranceFundRequest, FeeRequest, FundingFactorRequest, MarkClampRequest, LpSharePctRequest, WithdrawalAutoProcessRequest, ChatModActionRequest, ChatThresholdsRequest, DropConfigRequest, GameConfigRequest, GamePoolSeedRequest, BreakCancelRequest, ArenaCancelRequest } from '@pokex/shared-types';
 import { config } from '../config.ts';
 import { HttpError } from '../errors.ts';
 import { getDb } from '../db/client.ts';
@@ -13,8 +13,9 @@ import { resetGoldBalances } from '../services/gold.ts'; // web3-free (DB only) 
 import { getMachines, toLobbyMachine } from '../services/providers/collectorcrypt.ts';
 import { setManualPrice, setPricePin } from '../services/admin-pricing.ts';
 import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from '../services/insurance.ts';
-import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFactor } from '../services/fees.ts';
+import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFactor, lpTradingPctView, setLpTradingPct, lpFundingPctView, setLpFundingPct, lpLiquidationPctView, setLpLiquidationPct } from '../services/fees.ts';
 import { markClampView, setMarkClampBps } from '../services/marks.ts';
+import { computePoolSnapshot, getPoolSnapshot, setPoolSnapshot } from '../services/pool-snapshot.ts';
 import { listCustomers } from '../services/customers.ts';
 import { marketStats } from '../services/admin-stats.ts';
 import { houseEconomics } from '../services/house-pnl.ts';
@@ -35,7 +36,7 @@ import { getUserPositions, liquidateAllEligible } from '../services/engine.ts';
 import { withdrawalAutoProcessView, setWithdrawalAutoProcess } from '../services/withdrawal-config.ts';
 import { getCustomerHistory } from '../services/history.ts';
 import { adminClosePosition, adminCloseUserPositions, adminCloseAllPositions } from '../services/admin-close.ts';
-import { listAffiliates, setAffiliateTerms, maxCashbackBps } from '../services/affiliate.ts';
+import { listAffiliates, setAffiliateTerms, maxCashbackBps, platformDefaultsView, setPlatformAffiliateDefaults } from '../services/affiliate.ts';
 
 /**
  * Non-custody operator endpoints (ROADMAP §2). Unlike the custody admin routes, these register
@@ -55,6 +56,7 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/admin/affiliates', rl(config.routeRateLimits.admin), async () => ({
     affiliates: await listAffiliates(await getDb()),
     maxCashbackBps: maxCashbackBps(),
+    platformDefaults: platformDefaultsView(), // the all-codes fallback rates (override per wallet below)
   }));
   app.post('/admin/affiliates', rl(config.routeRateLimits.admin), async (req) => {
     // setAffiliateTerms validates pubkey + the bps bounds itself, so pass the body straight through.
@@ -62,6 +64,12 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
       pubkey?: string; code?: string; cashbackBps: unknown; feeDiscountBps: unknown; label?: string; active?: boolean;
     };
     return setAffiliateTerms(await getDb(), { ...b, pubkey: b.pubkey ?? '' });
+  });
+  // Platform-wide default cashback + fee-discount applied to every referral code that has no active per-wallet
+  // terms. setPlatformAffiliateDefaults validates both bps bounds (incl. the cashback ceiling).
+  app.post('/admin/affiliate-defaults', rl(config.routeRateLimits.admin), async (req) => {
+    const b = (req.body ?? {}) as { cashbackBps: unknown; feeDiscountBps: unknown };
+    return setPlatformAffiliateDefaults(await getDb(), b);
   });
 
   // Set a manual price for a market (card or index). Pins by default.
@@ -137,6 +145,38 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     await setMarkClampBps(await getDb(), bps);
     return markClampView();
   });
+
+  // Live-tunable LP revenue shares — the % of each source routed to the LP pool (the house keeps the rest).
+  // These drive the LIVE split mechanics immediately; the customer pool page shows a SEPARATELY-published
+  // snapshot (see /admin/pool-snapshot below), so tuning here doesn't flicker the public page. GET ->
+  // { pct, default }; POST a whole percent (0–100) -> the new one.
+  app.get('/admin/lp-trading-pct', rl(config.routeRateLimits.admin), async () => lpTradingPctView());
+  app.post('/admin/lp-trading-pct', rl(config.routeRateLimits.admin), async (req) => {
+    const { pct } = LpSharePctRequest.parse(req.body);
+    await setLpTradingPct(await getDb(), pct);
+    return lpTradingPctView();
+  });
+  app.get('/admin/lp-funding-pct', rl(config.routeRateLimits.admin), async () => lpFundingPctView());
+  app.post('/admin/lp-funding-pct', rl(config.routeRateLimits.admin), async (req) => {
+    const { pct } = LpSharePctRequest.parse(req.body);
+    await setLpFundingPct(await getDb(), pct);
+    return lpFundingPctView();
+  });
+  app.get('/admin/lp-liquidation-pct', rl(config.routeRateLimits.admin), async () => lpLiquidationPctView());
+  app.post('/admin/lp-liquidation-pct', rl(config.routeRateLimits.admin), async (req) => {
+    const { pct } = LpSharePctRequest.parse(req.body);
+    await setLpLiquidationPct(await getDb(), pct);
+    return lpLiquidationPctView();
+  });
+
+  // Pool-page display snapshot. GET -> { published, live } (what the page currently shows vs what a refresh
+  // would publish). POST refresh -> recompute + republish (the "Refresh pool numbers" button) so a fee-share
+  // change (and the NAV-gain / APY figures) propagate to the customer page only when the operator decides.
+  app.get('/admin/pool-snapshot', rl(config.routeRateLimits.admin), async () => {
+    const db = await getDb();
+    return { published: await getPoolSnapshot(db), live: await computePoolSnapshot(db) };
+  });
+  app.post('/admin/pool-snapshot/refresh', rl(config.routeRateLimits.admin), async () => setPoolSnapshot(await getDb()));
 
   // Live toggle: automatic withdrawal approval on/off. OFF => every withdrawal waits for manual approval.
   app.get('/admin/withdrawal-auto-process', rl(config.routeRateLimits.admin), async () => withdrawalAutoProcessView());

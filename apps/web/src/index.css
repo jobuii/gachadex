@@ -19,7 +19,7 @@
   --cb-opacity:   .4;
   /* shape language — retro defaults (sharp, chunky, pixel weight); skins override in themes.css */
   --radius:       0px;   /* panels / inputs / boxes */
-  --pill:         0px;   /* buttons / chips */
+  --pill:         6px;   /* buttons / chips — a slight, consistent curve */
   --border-w:     2px;
   --weight-strong: 400;  /* headings / buttons / tabs */
 }
@@ -46,6 +46,8 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: var(--gold); }
 ::-webkit-scrollbar-corner { background: var(--bg); }
 html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
+/* Consistent slight curve on every button (a specific rule can still override with its own radius). */
+button { border-radius: var(--pill); }
 
 /* ─── NAVBAR ─────────────────────────────────── */
 .navbar {
@@ -839,7 +841,7 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 .sub-tabs { display: flex; gap: 0.4rem; margin-bottom: 0.55rem; }
 .sub-tab-btn {
   background: var(--bg-3); border: 1px solid var(--border); color: var(--text-muted);
-  font-family: var(--font-base); font-size: 0.4rem; padding: 0.3rem 0.6rem; cursor: pointer;
+  font-family: var(--font-base); font-size: 0.5rem; padding: 0.4rem 0.85rem; cursor: pointer;
 }
 .sub-tab-btn:hover { color: var(--text); }
 .sub-tab-btn.active { color: var(--gold); border-color: var(--gold); }
@@ -850,6 +852,10 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 
 /* account-history tables (orders / trades / transactions / position history) */
 .hist-table { width: 100%; border-collapse: collapse; font-size: 0.45rem; }
+/* In the exchange bottom panel, match the larger Open-Positions size for readability. It scrolls inside the
+   fixed-height panel (.bottom-content overflow:auto), so it can't add page-level vertical scroll. The
+   admin / chat-admin tables (also .hist-table) stay compact at 0.45rem. */
+.bottom-content .hist-table { font-size: 0.62rem; }
 .hist-table th {
   text-align: left; font-weight: normal; color: var(--text-muted); letter-spacing: 0.03rem;
   padding: 0.3rem 0.55rem; white-space: nowrap; border-bottom: 1px solid var(--border);
@@ -1010,6 +1016,35 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 .side-btn.buy.active { background: rgba(63,185,80,0.15); color: var(--success); border-color: var(--success); }
 .side-btn.sell.active { background: rgba(248,81,73,0.15); color: var(--danger); border-color: var(--danger); }
 .side-btn:hover:not(.active) { background: var(--bg); color: var(--text); }
+
+/* --- resting orders (P3): Market/Limit toggle, per-position SL/TP editor, Open Orders list --- */
+.order-type-toggle { display: flex; gap: 0.4rem; margin-bottom: 0.5rem; }
+.otype-btn {
+  flex: 1;
+  padding: 0.4rem;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-family: var(--font-base);
+  font-size: 0.62rem;
+  letter-spacing: 1px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.1s;
+}
+.otype-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.otype-btn:hover:not(.active) { color: var(--text); }
+
+.pos-actions { display: flex; gap: 0.3rem; justify-content: flex-end; }
+.btn-ghost.sm.on { color: var(--gold); border-color: var(--gold); }
+
+.bracket-row > td { background: var(--bg-3); padding: 0.5rem 0.6rem; }
+.bracket-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.bracket-editor label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.6rem; color: var(--text-muted); letter-spacing: 0.5px; }
+.bracket-editor input { width: 80px; padding: 0.3rem 0.4rem; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 4px; font-size: 0.65rem; }
+
+.resting-table td { font-size: 0.62rem; padding: 0.35rem 0.5rem; }
+.resting-table td.muted { color: var(--text-muted); }
 
 .form-field { display: flex; flex-direction: column; gap: 0.5rem; }
 
@@ -1366,11 +1401,11 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 .market-halt-badge { margin-left: auto; color: var(--danger); font-size: 0.5rem; border: 1px solid var(--danger); padding: 0.15rem 0.3rem; }
 
 /* Open-interest panel */
-.oi-row { display: flex; justify-content: space-between; font-size: 0.55rem; margin-bottom: 0.4rem; }
+.oi-row { display: flex; justify-content: space-between; font-size: 0.62rem; margin-bottom: 0.4rem; }
 .oi-bar { display: flex; height: 14px; border: 1px solid var(--border); overflow: hidden; }
 .oi-bar-long { background: var(--success); }
 .oi-bar-short { background: var(--danger); }
-.oi-hint { margin-top: 0.5rem; font-size: 0.5rem; color: var(--text-muted); line-height: 1.5; }
+.oi-hint { margin-top: 0.5rem; font-size: 0.6rem; color: var(--text-muted); line-height: 1.5; }
 
 /* Positions table */
 .positions-table { width: 100%; border-collapse: collapse; font-size: 0.62rem; }
@@ -1384,9 +1419,14 @@ html { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 .page h2 { color: var(--gold); font-size: 0.9rem; margin: 0 0 1rem; }
 .page h3 { color: var(--text); font-size: 0.7rem; margin: 1.5rem 0 0.75rem; }
 .stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; }
+.stat-cards + .stat-cards { margin-top: 0.75rem; } /* breathing room between stacked stat-card rows */
 .stat-card { background: var(--bg-2); border: 1px solid var(--border); padding: 0.85rem; display: flex; flex-direction: column; gap: 0.5rem; }
 .sc-label { font-size: 0.6rem; color: var(--text-muted); }
 .sc-val { font-size: 0.82rem; color: var(--text); }
+.sc-sub { font-size: 0.6rem; color: var(--text-muted); margin-top: -0.25rem; }
+.lp-fee-sources { margin-top: 1.5rem; }
+.lp-fee-sources-title { margin: 0 0 0.15rem; font-size: 0.95rem; letter-spacing: 0.02em; }
+.lp-fee-sources-sub { margin: 0 0 0.6rem; font-size: 0.72rem; }
 
 .lp-forms { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-top: 1rem; }
 .lp-form { display: flex; flex-direction: column; gap: 0.6rem; }
@@ -1684,3 +1724,230 @@ td.addr:hover { text-decoration: underline; }
 .screener-jpy { background: var(--bg-3); border: var(--border-w) solid var(--border); color: var(--text-muted);
   font-family: var(--font-base); font-size: 0.45rem; padding: 0.42rem 0.5rem; cursor: pointer; border-radius: var(--radius); }
 .screener-jpy.on { color: var(--gold); border-color: var(--gold); }
+
+/* ===== Profile avatars: chat sprites · Portfolio banner · avatar picker ===== */
+.chat-avatar { overflow: hidden; }
+/* scale up to crop the sprite's transparent margin so the creature fills the box (parent clips the overflow) */
+.chat-avatar-img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; transform: scale(2); }
+
+.pf-banner {
+  position: relative; display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap;
+  padding: 1.1rem 1.25rem; margin-bottom: 1rem; border-radius: 14px; border: 1px solid var(--border);
+  background: linear-gradient(135deg, var(--bg-3), var(--bg-2)); overflow: hidden;
+}
+.pf-banner-glow { position: absolute; inset-inline: 0; top: 0; height: 1px; opacity: 0.5;
+  background: linear-gradient(to right, transparent, var(--accent), transparent); }
+.pf-avatar { position: relative; flex-shrink: 0; width: 104px; height: 104px; border-radius: 14px;
+  border: 2px solid var(--accent); background: var(--bg); padding: 0; cursor: pointer; overflow: hidden;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.45); }
+.pf-avatar-img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated;
+  filter: drop-shadow(0 2px 3px rgba(0,0,0,0.4)); }
+.pf-avatar-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.55); color: #fff; font-size: 0.66rem; font-weight: 800; letter-spacing: 0.08em;
+  text-transform: uppercase; opacity: 0; transition: opacity 0.15s; }
+.pf-avatar:hover .pf-avatar-overlay { opacity: 1; }
+.pf-identity { flex: 1; min-width: 200px; }
+.pf-eyebrow { margin: 0 0 0.2rem; font-size: 0.6rem; font-weight: 800; letter-spacing: 0.22em;
+  text-transform: uppercase; color: var(--text-muted); }
+.pf-name { display: inline-flex; align-items: center; gap: 0.5rem; background: none; border: none; padding: 0;
+  cursor: pointer; color: var(--text); max-width: 100%; }
+.pf-name h1 { margin: 0; font-size: 1.7rem; font-weight: 800; letter-spacing: -0.01em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-name-pencil { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  width: 1.5rem; height: 1.5rem; border-radius: 6px; border: 1px solid var(--border); color: var(--text-muted); font-size: 0.8rem; }
+.pf-name:hover .pf-name-pencil { color: var(--text); border-color: var(--accent); }
+.pf-name-edit { display: flex; align-items: center; gap: 0.4rem; margin: 0.1rem 0; flex-wrap: wrap; }
+.pf-name-edit .wallet-input { width: 180px; }
+.pf-wallet { display: inline-flex; align-items: center; gap: 0.4rem; margin-top: 0.35rem; background: none;
+  border: none; padding: 0; cursor: pointer; font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.72rem; color: var(--text-muted); }
+.pf-wallet-k { text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; font-size: 0.62rem; }
+.pf-wallet:hover { color: var(--text); }
+.pf-err { margin-top: 0.4rem; }
+.pf-stats { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+.pf-stat { display: flex; flex-direction: column; gap: 0.15rem; }
+.pf-stat-k { font-size: 0.6rem; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+.pf-stat-v { font-size: 1.05rem; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--text); }
+
+.avatar-modal-backdrop { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.avatar-modal { width: min(560px, 96vw); max-height: 86vh; display: flex; flex-direction: column;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.avatar-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 0.9rem 1rem; border-bottom: 1px solid var(--border); }
+.avatar-modal-head h3 { margin: 0; font-size: 0.95rem; }
+.avatar-modal-close { background: none; border: none; color: var(--text-muted); font-size: 1rem; cursor: pointer; }
+.avatar-modal-close:hover { color: var(--text); }
+.avatar-modal-controls { display: flex; align-items: center; gap: 0.6rem; padding: 0.7rem 1rem; flex-wrap: wrap; }
+.avatar-variant-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.avatar-variant-toggle button { background: var(--bg-3); border: none; color: var(--text-muted); padding: 0.35rem 0.7rem; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
+.avatar-variant-toggle button.on { background: var(--accent); color: #fff; }
+.avatar-search { width: 120px; }
+.avatar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 0.4rem; padding: 0.8rem 1rem; overflow-y: auto; }
+.avatar-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: var(--bg-3);
+  border: 1px solid var(--border); border-radius: 8px; cursor: pointer; padding: 4px;
+  /* skip layout/paint for off-screen sprites so the grid opens instantly regardless of count */
+  content-visibility: auto; contain-intrinsic-size: 56px; }
+.avatar-cell:hover { border-color: var(--accent); background: var(--bg); }
+.avatar-cell.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.avatar-cell img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+
+/* ─── Markets: Indices | Cards ────────────────────────────────────────────── */
+.markets-view { height: calc(100vh - 64px); display: flex; flex-direction: column; background: var(--bg); }
+.markets-mode { display: flex; gap: 0.5rem; padding: 1.1rem 1.5rem 0.9rem; flex: none; }
+.markets-mode button { font-family: var(--font-chat); font-size: 0.74rem; font-weight: 600; letter-spacing: 0.02em;
+  padding: 0.5rem 1.35rem; background: var(--bg-2); color: var(--text-muted); border: 1px solid var(--border);
+  border-radius: 999px; cursor: pointer; transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease; }
+.markets-mode button:hover { color: var(--text); border-color: var(--text-muted); }
+.markets-mode button.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+.markets-view > .index-overview { flex: 1; min-height: 0; overflow-y: auto; padding: 0 1.5rem 2rem; }
+.markets-view > .screener { flex: 1; min-height: 0; height: auto; } /* the Cards screener fills the space under the toggle */
+
+/* ─── Index overview: boxed game sections (Pokémon / One Piece / Magic) ────── */
+.io-blurb { font-family: var(--font-chat); font-size: 0.78rem; color: var(--text-muted); line-height: 1.6;
+  margin: 0 0 1.1rem; max-width: 72ch; }
+.io-blurb strong { color: var(--text); }
+/* per-game filter (All / Pokémon / One Piece / Magic) — reuses the Cards screener's .game-tab-btn + .gdot */
+.io-games { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 1.1rem; border-bottom: 1px solid var(--border); }
+.io-games .game-tab-btn { flex: none; font-family: var(--font-chat); font-size: 0.66rem; padding: 0.45rem 0.75rem 0.55rem; margin-bottom: -1px; }
+/* win over themes.css's non-arcade .game-tab-btn size (same guard pattern the Cards screener uses) */
+:root:not([data-theme="arcade"]) .io-games .game-tab-btn { font-size: 0.66rem; }
+.io-section { background: var(--bg-2); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; margin-bottom: 1.25rem; }
+.io-section-head { display: flex; align-items: center; gap: 0.6rem; padding: 0.8rem 1.1rem;
+  border-bottom: 1px solid var(--border); box-shadow: inset 3px 0 0 var(--game-color, var(--accent)); }
+.io-section-dot { width: 9px; height: 9px; border-radius: 50%; flex: none;
+  background: var(--game-color, var(--accent)); box-shadow: 0 0 9px var(--game-color, var(--accent)); }
+.io-section-head h3 { font-family: var(--font-chat); font-size: 0.94rem; font-weight: 700; color: var(--text); margin: 0; letter-spacing: 0.01em; }
+.io-section-count { margin-left: auto; font-family: var(--font-chat); font-size: 0.64rem; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.07em; }
+
+.io-scroll { overflow-x: auto; }
+/* table-layout:fixed + the shared <colgroup> (see IndexOverview.jsx) give all three game panels one
+   identical column geometry so they align column-for-column; min-width keeps the numeric columns legible
+   (the panel scrolls via .io-scroll) on narrow viewports instead of crushing them. */
+.io-table { width: 100%; table-layout: fixed; min-width: 58rem; border-collapse: separate; border-spacing: 0; }
+.io-col-price, .io-col-range { width: 6.5rem; }
+.io-col-chg { width: 5.25rem; }
+.io-col-action { width: 5.5rem; }
+/* .io-col-name carries no width → it absorbs the remaining space, identical for every panel (still aligned) */
+.io-table thead th { background: var(--bg-2); text-align: left; white-space: nowrap;
+  font-family: var(--font-chat); font-size: 0.58rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-muted); padding: 0.62rem 0.9rem; border-bottom: 1px solid var(--border); }
+.io-table th.num { text-align: right; }
+.io-table td { padding: 0.66rem 0.9rem; white-space: nowrap; vertical-align: middle;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+.io-table tbody tr:last-child td { border-bottom: 0; }
+.io-table td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); font-size: 0.7rem;
+  font-family: var(--font-num, ui-monospace, 'JetBrains Mono', monospace); }
+.io-row { cursor: pointer; transition: background-color 110ms ease; }
+.io-row:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.io-row.io-row-soon { cursor: default; opacity: 0.55; }
+
+/* series subsection header inside a game panel (GJ / G&P / Pokedaq) — larger than the rows it heads */
+.io-subhead td { padding: 0.85rem 0.9rem 0.3rem; border-bottom: 0; font-family: var(--font-chat); font-size: 0.78rem;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent-lit); }
+
+.io-name { font-family: var(--font-chat); font-size: 0.7rem; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.io-table td.io-price { font-weight: 700; }
+.io-table td.io-range { color: var(--text-muted); }
+.io-table td.io-delta.up { color: var(--success); }
+.io-table td.io-delta.down { color: var(--danger); }
+.io-table td.io-delta.muted { color: var(--text-muted); }
+
+.io-soon { margin-left: 0.5rem; font-family: var(--font-chat); font-size: 0.52rem; color: var(--text-muted); font-weight: 600;
+  border: 1px solid var(--border); border-radius: 5px; padding: 0.08rem 0.38rem; text-transform: uppercase; letter-spacing: 0.05em; vertical-align: middle; }
+.io-cta { display: inline-block; font-family: var(--font-chat); font-size: 0.66rem; font-weight: 600; color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: var(--pill); padding: 0.26rem 0.62rem; white-space: nowrap;
+  opacity: 0; transition: opacity 110ms ease, color 110ms ease, border-color 110ms ease; }
+.io-row:hover .io-cta { opacity: 1; color: var(--text); border-color: var(--text-muted); }
+@media (hover: none) { .io-cta { opacity: 0.65; } }
+
+/* ─── Docs page (/docs) — full-width, gachadex skin (echoes .main-grid + .sidebar) ─── */
+.docs { min-height: 100vh; background: var(--bg); color: var(--text); font-family: var(--font-chat); }
+.docs-top { position: sticky; top: 0; z-index: 100; height: 64px; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 2rem; background: var(--bg-2); border-bottom: 3px solid var(--accent); }
+.docs-brand { display: inline-flex; align-items: baseline; gap: 0.55rem; background: none; border: none; cursor: pointer; padding: 0; }
+.docs-brand em { font-style: normal; font-family: var(--font-chat); font-size: 0.6rem; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.18em; }
+/* mirrors the landing's .lp-btn.lp-btn-sm "ENTER ▶" — gradient pill, dark ink, uppercase mono */
+.docs-launch { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; cursor: pointer; white-space: nowrap;
+  font-family: var(--font-num, 'JetBrains Mono', ui-monospace, monospace); font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+  font-size: 0.7rem; padding: 0.6rem 1rem; border-radius: 7px; border: 1px solid transparent;
+  background: var(--grad, var(--accent)); color: #06060a; transition: transform 0.12s ease, box-shadow 0.12s ease; }
+.docs-launch:hover { transform: translateY(-2px); box-shadow: 0 10px 28px color-mix(in srgb, var(--accent) 45%, transparent); }
+.docs-launch:active { transform: translateY(0); }
+
+/* full-bleed 3-column shell: nav · content · on-this-page (mirrors .main-grid 320px 1fr 280px) */
+.docs-body { display: grid; grid-template-columns: 264px minmax(0, 1fr) 232px; align-items: start; }
+
+/* left rail — same surface + 2px border as .sidebar */
+.docs-nav { position: sticky; top: 64px; height: calc(100vh - 64px); overflow-y: auto; overflow-x: hidden;
+  background: var(--bg-2); border-right: 2px solid var(--border); padding: 1.4rem 0.9rem 2.5rem; display: flex; flex-direction: column; gap: 2px; }
+.docs-nav-link { text-align: left; background: none; border: none; cursor: pointer; padding: 0.5rem 0.7rem; line-height: 1.35;
+  white-space: normal; overflow-wrap: anywhere; font-family: var(--font-chat); font-size: 0.82rem; color: var(--text-muted);
+  border-radius: var(--pill); transition: color 0.12s, background-color 0.12s, box-shadow 0.12s; }
+.docs-nav-link:hover { color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
+.docs-nav-link.active { color: var(--text); font-weight: var(--weight-strong);
+  background: color-mix(in srgb, var(--accent) 13%, transparent); box-shadow: inset 3px 0 0 var(--accent-lit); }
+
+/* content — fills the column; prose capped for readability, tables/code go full-bleed */
+.docs-content { min-width: 0; padding: 2.6rem 3.2rem 5rem; }
+.docs-content :is(h1, h2, h3, p, ul, ol, blockquote), .docs-foot { max-width: 82ch; }
+.docs-section, .docs-content :is(h1, h2, h3) { scroll-margin-top: 80px; } /* clear the 64px sticky header on anchor jumps */
+
+/* right rail — on this page */
+.docs-toc { position: sticky; top: 64px; height: calc(100vh - 64px); overflow-y: auto; padding: 2.7rem 1.3rem 2rem 0.5rem;
+  display: flex; flex-direction: column; gap: 1px; }
+.docs-toc-label { font-size: 0.58rem; text-transform: uppercase; letter-spacing: 0.14em; color: var(--text-muted); margin-bottom: 0.55rem; }
+.docs-toc-link { text-align: left; background: none; border: none; cursor: pointer; font-family: var(--font-chat); font-size: 0.72rem;
+  color: var(--text-muted); padding: 0.24rem 0 0.24rem 0.65rem; line-height: 1.4; border-left: 2px solid transparent; transition: color 0.12s, border-color 0.12s; }
+.docs-toc-link:hover { color: var(--text); border-left-color: var(--gold); }
+.docs-toc-link.lvl3 { padding-left: 1.4rem; font-size: 0.68rem; }
+
+/* markdown — Space Grotesk headings, accent dot, brand surfaces */
+.docs-content h1 { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; letter-spacing: -0.012em; color: var(--text);
+  margin: 2.6rem 0 0.55rem; display: flex; align-items: center; gap: 0.55rem; }
+.docs-content h1::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 10px var(--accent); flex: none; }
+.docs-section:first-child h1 { margin-top: 0.7rem; }
+/* lead — the intro line after each section title reads a touch larger + softer (bold hook stays bright) */
+.docs-content h1 + p { font-size: 0.95rem; line-height: 1.68; color: var(--text-muted); margin: 0.25rem 0 1.15rem; }
+.docs-content h1 + p strong { color: var(--text); }
+.docs-content h2 { font-family: var(--font-display); font-size: 1.05rem; font-weight: 600; letter-spacing: -0.005em; color: var(--text); margin: 2rem 0 0.6rem; }
+.docs-content h3 { font-family: var(--font-display); font-size: 0.88rem; font-weight: 600; color: var(--text); margin: 1.4rem 0 0.45rem; }
+.docs-content p { font-size: 0.84rem; line-height: 1.8; color: var(--text); margin: 0.7rem 0; }
+.docs-content a { color: var(--accent-lit); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent-lit) 40%, transparent); }
+.docs-content a:hover { border-bottom-color: var(--accent-lit); }
+.docs-content strong { color: var(--text); font-weight: 700; }
+.docs-content ul, .docs-content ol { margin: 0.6rem 0 1rem; padding-left: 1.4rem; }
+.docs-content li { font-size: 0.84rem; line-height: 1.72; color: var(--text); margin: 0.32rem 0; }
+.docs-content li::marker { color: var(--accent-lit); }
+.docs-content code { font-family: var(--font-num, ui-monospace, 'JetBrains Mono', monospace); font-size: 0.77rem;
+  background: var(--bg-3); padding: 0.08rem 0.38rem; border-radius: 5px; color: var(--accent-lit); }
+.docs-content pre { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem;
+  overflow-x: auto; margin: 1rem 0; }
+.docs-content pre code { background: none; padding: 0; color: var(--text); font-size: 0.8rem; line-height: 1.6; }
+.docs-content blockquote { border-left: 3px solid var(--gold); background: var(--bg-2); margin: 1.2rem 0; padding: 0.7rem 1.1rem;
+  border-radius: 0 var(--radius) var(--radius) 0; }
+.docs-content blockquote p { margin: 0.2rem 0; color: var(--text-muted); font-size: 0.86rem; }
+.docs-content hr { border: none; border-top: 1px solid var(--border); margin: 2.4rem 0; }
+.docs-content table { width: 100%; border-collapse: separate; border-spacing: 0; margin: 1.2rem 0; font-size: 0.79rem;
+  border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.docs-content th { text-align: left; background: var(--bg-2); color: var(--text-muted); font-weight: 600;
+  padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); text-transform: uppercase; font-size: 0.64rem; letter-spacing: 0.05em; }
+.docs-content td { padding: 0.6rem 0.9rem; color: var(--text); border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); vertical-align: top; }
+.docs-content tbody tr:last-child td { border-bottom: none; }
+.docs-foot { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 3rem;
+  padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 0.76rem; flex-wrap: wrap; }
+
+@media (max-width: 1180px) {
+  .docs-body { grid-template-columns: 244px minmax(0, 1fr); }
+  .docs-toc { display: none; }
+  .docs-content { padding: 2.2rem 2.4rem 4rem; }
+}
+@media (max-width: 800px) {
+  .docs-body { grid-template-columns: 1fr; }
+  .docs-nav { position: static; height: auto; flex-direction: row; flex-wrap: wrap; gap: 0.3rem;
+    border-right: none; border-bottom: 2px solid var(--border); }
+  .docs-content { padding: 1.6rem 1.3rem 3rem; }
+  .docs-content :is(h1, h2, h3, p, ul, ol, blockquote), .docs-foot { max-width: 100%; }
+}

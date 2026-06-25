@@ -57,6 +57,11 @@ export function AdminPanel({ onGoToMarket } = {}) {
   const [fundingDraft, setFundingDraft] = useState(''); // operator enters a PERCENT (0.30 = 0.30%/hour)
   const [markClamp, setMarkClampState] = useState(null); // { bps, default } | null — §6a mark-guard clamp
   const [markClampDraft, setMarkClampDraft] = useState(''); // operator enters a PERCENT (25 = 25%/update)
+  const [lpTrading, setLpTrading] = useState(null); // { pct, default } | null — LP share of trading fees
+  const [lpFunding, setLpFunding] = useState(null); // { pct, default } | null — LP share of funding
+  const [lpLiq, setLpLiq] = useState(null); // { pct, default } | null — LP share of the liquidation penalty
+  const [lpDrafts, setLpDrafts] = useState({}); // { trading?, funding?, liquidation? } draft percents
+  const [poolSnap, setPoolSnap] = useState(null); // { published, live } | null — pool-page display snapshot
   const [withdrawalAuto, setWithdrawalAuto] = useState(null); // { enabled, default } | null — auto-withdrawal toggle
   const [stats, setStats] = useState(null); // { markets: [...], totals } | null — per-asset trading stats
   const [restrictions, setRestrictions] = useState(null); // { restricted:[...], flippedToday:[...] } | null — price-confidence gate
@@ -160,6 +165,29 @@ export function AdminPanel({ onGoToMarket } = {}) {
           setMarkClampState(await api.adminGetMarkClamp(key)); // §6a mark-guard clamp
         } catch {
           setMarkClampState(null);
+        }
+      })(),
+      (async () => {
+        try {
+          const [t, f, l] = await Promise.all([
+            api.adminGetLpTradingPct(key),
+            api.adminGetLpFundingPct(key),
+            api.adminGetLpLiquidationPct(key),
+          ]);
+          setLpTrading(t);
+          setLpFunding(f);
+          setLpLiq(l);
+        } catch {
+          setLpTrading(null);
+          setLpFunding(null);
+          setLpLiq(null);
+        }
+      })(),
+      (async () => {
+        try {
+          setPoolSnap(await api.adminGetPoolSnapshot(key)); // heavier (computes live) — guard separately
+        } catch {
+          setPoolSnap(null);
         }
       })(),
       (async () => {
@@ -380,6 +408,49 @@ export function AdminPanel({ onGoToMarket } = {}) {
       setMarkClampState(r);
       setMarkClampDraft('');
       setMsg(`Mark-guard clamp set to ${(r.bps / 100).toFixed(2)}%/update (uncorroborated moves).`);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // LP revenue shares — change the LIVE split immediately; the customer pool page only reflects it after
+  // "Refresh pool numbers" republishes the snapshot.
+  const LP_SHARE_API = {
+    trading: api.adminSetLpTradingPct,
+    funding: api.adminSetLpFundingPct,
+    liquidation: api.adminSetLpLiquidationPct,
+  };
+  const LP_SHARE_SET = { trading: setLpTrading, funding: setLpFunding, liquidation: setLpLiq };
+  const saveLpShare = async (which, label) => {
+    setErr(null);
+    setMsg(null);
+    const pct = Number(lpDrafts[which]);
+    if (!Number.isInteger(pct) || pct < 0 || pct > 100) {
+      setErr('Enter a whole percent between 0 and 100.');
+      return;
+    }
+    setBusy(`lp-${which}`);
+    try {
+      const r = await LP_SHARE_API[which](pct, adminKey.trim());
+      LP_SHARE_SET[which](r);
+      setLpDrafts((d) => ({ ...d, [which]: '' }));
+      setMsg(`LP ${label} share set to ${r.pct}% (live). Click "Refresh pool numbers" to show it on the pool page.`);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const refreshPoolNumbers = async () => {
+    setErr(null);
+    setMsg(null);
+    setBusy('pool-refresh');
+    try {
+      await api.adminRefreshPoolSnapshot(adminKey.trim());
+      setPoolSnap(await api.adminGetPoolSnapshot(adminKey.trim()));
+      setMsg('Pool numbers refreshed — the pool page now shows the current fee shares, NAV gain and APY.');
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -724,6 +795,10 @@ export function AdminPanel({ onGoToMarket } = {}) {
             onClick={() => allocate(api.adminInsuranceToFees, feesDraft, setFeesDraft, 'Insurance → fees')}>
             Insurance → fees
           </button>
+          <span className="muted" style={{ fontSize: '0.78rem', flexBasis: '100%' }}>
+            allocatable now — fees → insurance: <strong>{economics ? formatUsd(BigInt(economics.feeRevenueE6)) : '—'}</strong>
+            {' · '}insurance → fees: <strong>{insuranceE6 != null ? formatUsd(BigInt(insuranceE6)) : '—'}</strong>
+          </span>
         </div>
       </label>
       {treasury && (
@@ -788,7 +863,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
         skew (the heavy side pays the lighter side via the LP pool). Enter a percentage: <code>0.30</code>{' '}
         means up to 0.30%/hour at full skew. Currently{' '}
         <strong>{fundingFactor ? `${(fundingFactor.bps / 100).toFixed(2)}%/hour` : '—'}</strong>
-        {fundingFactor ? ` (env default ${(fundingFactor.default / 100).toFixed(2)}%/hour)` : ''}.
+        {fundingFactor ? ` ≈ ${((fundingFactor.bps / 100) * 24).toFixed(2)}%/day at full skew (env default ${(fundingFactor.default / 100).toFixed(2)}%/hour)` : ''}.
       </p>
       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.35rem 0' }}>
         <input
@@ -820,6 +895,44 @@ export function AdminPanel({ onGoToMarket } = {}) {
         <button className="btn-primary sm" disabled={busy === 'markClamp'} onClick={saveMarkClamp}>
           {busy === 'markClamp' ? '…' : 'Save clamp'}
         </button>
+      </div>
+
+      {/* ---- LP Fee Sources (revenue split to the pool) ---- */}
+      <h3 style={{ marginTop: '1.25rem' }}>LP Fee Sources</h3>
+      <p className="ref-blurb">
+        The share of each revenue stream routed to the <strong>LP pool</strong> (the house keeps the rest).
+        Saving changes the <strong>live</strong> split immediately, but the customer pool page only updates
+        when you click <strong>Refresh pool numbers</strong> below. Enter a whole percent (0–100).
+      </p>
+      {[
+        { key: 'trading', label: 'Trading fees', state: lpTrading },
+        { key: 'funding', label: 'Funding', state: lpFunding },
+        { key: 'liquidation', label: 'Liquidation penalty', state: lpLiq },
+      ].map((row) => (
+        <div key={row.key} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0.35rem 0' }}>
+          <span style={{ width: 150, fontSize: '0.82rem', color: 'var(--text-muted)' }}>{row.label}</span>
+          <strong style={{ width: 95, fontSize: '0.85rem' }}>{row.state ? `${row.state.pct}% to LP` : '—'}</strong>
+          <input
+            className="wallet-input" type="number" min="0" max="100" step="1"
+            placeholder={row.state ? String(row.state.pct) : '%'}
+            value={lpDrafts[row.key] ?? ''} onChange={(e) => setLpDrafts((d) => ({ ...d, [row.key]: e.target.value }))}
+            style={{ width: 90 }}
+          />
+          <span className="muted" style={{ fontSize: '0.85rem' }}>%</span>
+          <button className="btn-primary sm" disabled={busy === `lp-${row.key}`} onClick={() => saveLpShare(row.key, row.label.toLowerCase())}>
+            {busy === `lp-${row.key}` ? '…' : 'Save'}
+          </button>
+        </div>
+      ))}
+      <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', margin: '0.6rem 0 0.2rem', flexWrap: 'wrap' }}>
+        <button className="btn-primary sm" disabled={busy === 'pool-refresh'} onClick={refreshPoolNumbers}>
+          {busy === 'pool-refresh' ? '…' : 'Refresh pool numbers'}
+        </button>
+        <span className="muted" style={{ fontSize: '0.76rem' }}>
+          {poolSnap?.published
+            ? `Pool page shows ${poolSnap.published.lpTradingPct}/${poolSnap.published.lpFundingPct}/${poolSnap.published.lpLiquidationPct}% · APY ${poolSnap.published.apyPct.toLocaleString()}% · published ${new Date(poolSnap.published.snapshotAt).toLocaleString()}`
+            : 'Not yet published — the pool page hides these until you refresh.'}
+        </span>
       </div>
 
       {withdrawalAuto && (
@@ -875,6 +988,9 @@ export function AdminPanel({ onGoToMarket } = {}) {
                   onChange={(e) => setLimitDrafts((d) => ({ ...d, [key]: e.target.value }))}
                   style={{ width: '100%', marginTop: '0.2rem' }}
                 />
+                <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text)', marginTop: '0.2rem' }}>
+                  current: <strong>{custodyLimits.current[key]}</strong> <span className="muted">(def {custodyLimits.defaults[key]})</span>
+                </span>
               </label>
             ))}
           </div>

@@ -108,6 +108,7 @@ export async function authLogout() {
 // --- markets ---
 export const getMarkets = () => req('/markets');
 export const getCandles = (id, tf) => req(`/markets/${id}/candles?tf=${encodeURIComponent(tf)}`);
+export const getIndexOverview = () => req('/markets/index-overview'); // { indices: [{ marketId, change1w/1m/ytdPct, high/low52wE6 }] }
 export const getMarketDetails = (id) => req(`/markets/${id}/details`);
 // Search-and-bet: whole-catalog search (server-cached) + on-demand market listing (auth).
 export const searchCatalog = (q, game) => req(`/catalog/search?q=${encodeURIComponent(q)}&game=${encodeURIComponent(game)}`, { auth: true });
@@ -138,6 +139,12 @@ export const openOrder = (body) => req('/orders', { method: 'POST', auth: true, 
 export const closePosition = (positionId, body) =>
   req(`/positions/${positionId}/close`, { method: 'POST', auth: true, body });
 
+// Resting orders (limit / stop-loss / take-profit). These 404 until RESTING_ORDERS_ENABLED is on, so the
+// UI feature-detects off the GET (see useRestingOrders).
+export const getRestingOrders = () => req('/orders/resting', { auth: true });
+export const placeRestingOrder = (body) => req('/orders/resting', { method: 'POST', auth: true, body });
+export const cancelRestingOrder = (id) => req(`/orders/resting/${encodeURIComponent(id)}/cancel`, { method: 'POST', auth: true });
+
 // --- social (leaderboard + referrals) ---
 // Leaderboard is public; the optional Bearer (added when signed in) pins the caller's own row.
 export const getLeaderboard = (limit = 100) => req(`/leaderboard?limit=${limit}`, { auth: true });
@@ -156,6 +163,7 @@ export const postChat = (body, replyTo) =>
   req('/chat', { method: 'POST', auth: true, body: { body, ...(replyTo ? { replyTo } : {}) } });
 export const getProfile = () => req('/me/profile', { auth: true });
 export const setUsername = (username) => req('/me/username', { method: 'POST', auth: true, body: { username } });
+export const setAvatar = (avatar) => req('/me/avatar', { method: 'POST', auth: true, body: { avatar } });
 
 // Moderator actions (require a mod account; 403 otherwise).
 export const chatDelete = (id) => req(`/chat/messages/${id}/delete`, { method: 'POST', auth: true });
@@ -260,8 +268,10 @@ export const adminSetPrice = (id, body, adminKey) => adminReq(`/admin/markets/${
 export const adminUnpin = (id, adminKey) => adminReq(`/admin/markets/${id}/unpin`, adminKey);
 // Affiliate / KOL referral economics: list codes + their terms; create/update a code's terms (cashback +
 // fee-discount, linked to a wallet). Body: { pubkey, code?, cashbackBps, feeDiscountBps, label?, active? }.
-export const adminGetAffiliates = (adminKey) => adminGet('/admin/affiliates', adminKey); // { affiliates, maxCashbackBps }
+export const adminGetAffiliates = (adminKey) => adminGet('/admin/affiliates', adminKey); // { affiliates, maxCashbackBps, platformDefaults }
 export const adminSetAffiliate = (body, adminKey) => adminReq('/admin/affiliates', adminKey, body);
+// Platform-wide default cashback + fee-discount (applied to every code without per-wallet terms).
+export const adminSetAffiliateDefaults = (body, adminKey) => adminReq('/admin/affiliate-defaults', adminKey, body);
 // Chat moderation (operator): list mods/muted/banned + audit; act on a user (id OR wallet pubkey) —
 // action is grant | revoke | unmute | unban.
 export const adminGetMods = (adminKey) => adminGet('/admin/chat/mods', adminKey);
@@ -310,6 +320,17 @@ export const adminSetFundingFactor = (bps, adminKey) => adminReq('/admin/funding
 // GET -> { bps, default }; POST { bps } (100-9000).
 export const adminGetMarkClamp = (adminKey) => adminGet('/admin/mark-clamp', adminKey);
 export const adminSetMarkClamp = (bps, adminKey) => adminReq('/admin/mark-clamp', adminKey, { bps });
+
+// LP revenue-share knobs (whole percent). GET -> { pct, default }; POST { pct }.
+export const adminGetLpTradingPct = (adminKey) => adminGet('/admin/lp-trading-pct', adminKey);
+export const adminSetLpTradingPct = (pct, adminKey) => adminReq('/admin/lp-trading-pct', adminKey, { pct });
+export const adminGetLpFundingPct = (adminKey) => adminGet('/admin/lp-funding-pct', adminKey);
+export const adminSetLpFundingPct = (pct, adminKey) => adminReq('/admin/lp-funding-pct', adminKey, { pct });
+export const adminGetLpLiquidationPct = (adminKey) => adminGet('/admin/lp-liquidation-pct', adminKey);
+export const adminSetLpLiquidationPct = (pct, adminKey) => adminReq('/admin/lp-liquidation-pct', adminKey, { pct });
+// Pool-page display snapshot — GET { published, live }; POST refresh republishes.
+export const adminGetPoolSnapshot = (adminKey) => adminGet('/admin/pool-snapshot', adminKey);
+export const adminRefreshPoolSnapshot = (adminKey) => adminReq('/admin/pool-snapshot/refresh', adminKey, {});
 // Automatic withdrawal-approval toggle -> { enabled, default }.
 export const adminGetWithdrawalAutoProcess = (adminKey) => adminGet('/admin/withdrawal-auto-process', adminKey);
 export const adminSetWithdrawalAutoProcess = (enabled, adminKey) => adminReq('/admin/withdrawal-auto-process', adminKey, { enabled });

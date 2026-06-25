@@ -5,7 +5,7 @@ import { SidebarMarkets } from '../components/SidebarMarkets';
 import { TradingView } from '../components/TradingView';
 import { OrderEntry } from '../components/OrderEntry';
 import { BottomPanel } from '../components/BottomPanel';
-import { MarketsScreener } from '../components/MarketsScreener';
+import { MarketsView } from '../components/MarketsView';
 import { Portfolio } from '../components/Portfolio';
 import { PoolView } from '../components/PoolView';
 import { GamesView } from '../components/GamesView';
@@ -25,11 +25,21 @@ function MktBarPrice({ market }) {
   return <span className="mkt-bar-price">{priceE6 ? formatUsd(BigInt(priceE6)) : '—'}</span>;
 }
 
+// The active sub-view is mirrored in the URL hash (e.g. /exchange#markets) so a refresh — and browser
+// back/forward — restores the same page instead of snapping back to Trade. 'trade' is the bare /exchange
+// (no hash); #admin opens the operator panel; anything unrecognized falls back to trade.
+const VIEW_HASHES = ['trade', 'markets', 'portfolio', 'pool', 'games', 'leaderboard', 'admin']; // keep in sync with the rendered views
+const viewFromHash = () => {
+  const h = (window.location.hash || '').replace(/^#/, '');
+  return VIEW_HASHES.includes(h) ? h : 'trade';
+};
+const hashFor = (view) => (view === 'trade' ? '' : `#${view}`); // 'trade' is the bare /exchange (no hash)
+
 export function Exchange() {
   const [markets, setMarkets] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeView, setActiveView] = useState('trade');
+  const [activeView, setActiveView] = useState(viewFromHash); // restored from the URL hash on refresh
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [gamesVisible, setGamesVisible] = useState(false); // Games nav + page stay hidden until GAMES_ENABLED (via /health)
   const [classicGachaVisible, setClassicGachaVisible] = useState(false); // Classic Gacha entry hidden until CLASSIC_GACHA_ENABLED (via /health)
@@ -54,10 +64,18 @@ export function Exchange() {
       return next;
     });
 
-  // Operator panel is reachable at #admin only (not in the public nav).
+  // Mirror the active view into the URL hash so a refresh restores the same page (#admin still opens the
+  // operator panel). replaceState avoids stacking a history entry on every programmatic sync; it doesn't
+  // fire 'hashchange', so this can't loop with the listener below.
   useEffect(() => {
-    const sync = () => { if (window.location.hash === '#admin') setActiveView('admin'); };
-    sync();
+    const want = hashFor(activeView);
+    if (window.location.hash !== want) {
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${want}`);
+    }
+  }, [activeView]);
+  // Follow manual hash edits + browser back/forward (incl. typing #admin).
+  useEffect(() => {
+    const sync = () => setActiveView(viewFromHash());
     window.addEventListener('hashchange', sync);
     return () => window.removeEventListener('hashchange', sync);
   }, []);
@@ -160,7 +178,7 @@ export function Exchange() {
         </div>
       )}
 
-      {activeView === 'markets' && <MarketsScreener markets={markets} loading={loading} onTradeMarket={handleTradeMarket} />}
+      {activeView === 'markets' && <MarketsView markets={markets} loading={loading} onTradeMarket={handleTradeMarket} />}
       {activeView === 'portfolio' && <Portfolio markets={markets} onSelect={handleTradeMarket} />}
       {activeView === 'pool' && <PoolView />}
       {activeView === 'games' && (gamesVisible || classicGachaVisible) && <GamesView onTradeMarket={handleTradeMarket} gamesVisible={gamesVisible} classicGachaVisible={classicGachaVisible} />}

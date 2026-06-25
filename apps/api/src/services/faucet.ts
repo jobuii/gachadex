@@ -10,7 +10,8 @@ const MAX_AVAILABLE_UUSDC = usdc(1_000_000);
 export interface UserBalances {
   availableUusdc: bigint;
   lockedMarginUusdc: bigint;
-  equityUusdc: bigint; // available + locked (+ unrealized PnL once the engine lands)
+  reservedUusdc: bigint; // margin earmarked against resting limit orders (docs/limit-stop-orders-spec.md)
+  equityUusdc: bigint; // available + locked + reserved (+ unrealized PnL once the engine lands)
 }
 
 export async function getUserBalances(db: Db, userId: string): Promise<UserBalances> {
@@ -18,16 +19,20 @@ export async function getUserBalances(db: Db, userId: string): Promise<UserBalan
   const r = await db.query<{ type: string; amt: string }>(
     `SELECT a.type, COALESCE(b.amount_uusdc, 0)::text AS amt
      FROM accounts a LEFT JOIN balances b ON b.account_id = a.id
-     WHERE a.user_id = $1 AND a.type IN ('USER_COLLATERAL', 'USER_POSITION_MARGIN')`,
+     WHERE a.user_id = $1 AND a.type IN ('USER_COLLATERAL', 'USER_POSITION_MARGIN', 'RESTING_ORDER_MARGIN')`,
     [userId],
   );
   let availableUusdc = 0n;
   let lockedMarginUusdc = 0n;
+  let reservedUusdc = 0n;
   for (const row of r.rows) {
     if (row.type === 'USER_COLLATERAL') availableUusdc = BigInt(row.amt);
     else if (row.type === 'USER_POSITION_MARGIN') lockedMarginUusdc = BigInt(row.amt);
+    else if (row.type === 'RESTING_ORDER_MARGIN') reservedUusdc = BigInt(row.amt);
   }
-  return { availableUusdc, lockedMarginUusdc, equityUusdc: availableUusdc + lockedMarginUusdc };
+  // reserved margin is still the user's equity — it just can't be spent while the order rests. Counting it
+  // keeps displayed equity whole when an order is placed (collateral simply moves into the reserve).
+  return { availableUusdc, lockedMarginUusdc, reservedUusdc, equityUusdc: availableUusdc + lockedMarginUusdc + reservedUusdc };
 }
 
 /**

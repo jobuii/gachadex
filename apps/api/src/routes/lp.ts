@@ -3,13 +3,20 @@ import { z } from 'zod';
 import { getDb } from '../db/client.ts';
 import { authenticate } from '../plugins/auth.ts';
 import { lpDeposit, lpWithdraw, getPool, getLpPosition } from '../services/lp.ts';
+import { getPoolSnapshot } from '../services/pool-snapshot.ts';
 import { usdc } from '../money.ts';
 
 const DepositReq = z.object({ amountUsd: z.number().positive().max(1_000_000) });
 const WithdrawReq = z.object({ shares: z.string().regex(/^\d+$/, 'shares must be an integer string') });
 
 export async function lpRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/lp/pool', async () => getPool(await getDb()));
+  // Live pool stats + the operator-published display snapshot (fee shares, NAV gain, APY). The two reads
+  // are independent, so fetch them together.
+  app.get('/lp/pool', async () => {
+    const db = await getDb();
+    const [pool, display] = await Promise.all([getPool(db), getPoolSnapshot(db)]);
+    return { ...pool, display };
+  });
 
   app.get('/lp/position', { preHandler: authenticate, config: { scope: 'trade' } }, async (req) => getLpPosition(await getDb(), req.userId!));
 

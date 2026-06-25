@@ -1,14 +1,14 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { formatUsd } from '@pokex/pricing';
-import { indexSeries, INDEX_SERIES_LABELS } from '@pokex/shared-types';
+import { indexSeries, INDEX_SERIES_LABELS, SERIES_ORDER } from '@pokex/shared-types';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { useAuth } from '../auth/AuthContext';
 import { useStickyState } from '../lib/useStickyState';
+import { GAME_LIST as GAMES } from '../lib/games.js';
 import { MarketThumb } from './MarketThumb';
 import * as api from '../lib/api.js';
 
 const TABS = ['indices', 'cards'];
-const SERIES_ORDER = { gj: 0, gp: 1, pdq: 2 }; // GJ (Dow) → G&P (equal-weight) → Pokedaq (capped)
 
 // Cards-tab top-mover sort pills. Sort off the REST snapshot (markE6/volume24hUsd/change24hPct) so rows
 // don't reshuffle under the cursor on every live tick — same keys as the Markets screener page.
@@ -27,12 +27,6 @@ const CARD_SORTS = {
 
 // Game filter (icon-only identity dots). Fixed brand colours, independent of the skin:
 // gold = Pokémon, red = One Piece, violet = Magic.
-const GAMES = [
-  { id: 'pokemon', label: 'Pokémon', color: '#f0c040' },
-  { id: 'onepiece', label: 'One Piece', color: '#d4202a' },
-  { id: 'mtg', label: 'Magic', color: '#7c5cff' },
-];
-
 // Subtitle under a market row: a card shows its set logo (falling back to its symbol), an index
 // shows its leverage or a "soon" badge when it isn't tradeable yet.
 function marketSubtitle(m) {

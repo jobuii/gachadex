@@ -40,6 +40,10 @@ const INDEX_SERIES = [
 
 export const INDEX_SERIES_LABELS = { gj: 'GJ', gp: 'G&P', pdq: 'Pokedaq' };
 
+/** Display/sort order of the series (GJ → G&P → Pokedaq), derived from INDEX_SERIES — the single source of
+ *  truth the web sorts/groups indices by (was duplicated, once hardcoded, in two components). */
+export const SERIES_ORDER = Object.fromEntries(INDEX_SERIES.map((s, i) => [s.series, i]));
+
 /** Which series an index slug belongs to (the web groups by this; the API returns only `indexSlug`). */
 export function indexSeries(slug) {
   if (typeof slug === 'string' && slug.startsWith('gp-')) return 'gp';
@@ -144,6 +148,24 @@ export const ClosePositionRequest = z.object({
   idempotencyKey: z.string().min(8),
 });
 
+// Resting orders (limit / stop-loss / take-profit — docs/limit-stop-orders-spec.md). All are TRIGGERS
+// that market-fill at the mark when it crosses trigger_price; for a 'limit' the trigger price doubles as
+// the slippage cap (fill mark-or-better). P1 ships 'limit' (open: needs side + qtyE6 + leverage);
+// reduce_only SL/TP (needs positionId) land in P2.
+export const RESTING_ORDER_KINDS = ['limit', 'stop_loss', 'take_profit'];
+export const RestingOrderRequest = z.object({
+  marketId: z.string(),
+  kind: z.enum(RESTING_ORDER_KINDS),
+  triggerPriceE6: z.string().regex(/^\d+$/, 'expected a non-negative micro-unit string'),
+  side: z.enum(SIDES).optional(), // limit-open
+  qtyE6: MicroStr.optional(), // limit
+  leverage: z.number().int().positive().max(MAX_LEVERAGE).optional(), // limit-open
+  slippageE6: z.string().regex(/^\d+$/, 'expected a non-negative micro-unit string').optional(),
+  positionId: z.string().optional(), // SL/TP
+  reduceOnly: z.boolean().default(false),
+  idempotencyKey: z.string().min(8),
+});
+
 export const FaucetRequest = z.object({
   amountUsd: z.number().positive().max(100_000).default(10_000),
 });
@@ -191,6 +213,9 @@ export const FundingFactorRequest = z.object({ bps: z.coerce.number().int().min(
 // (price creeps), higher = more pool protection (adopts moves faster).
 export const MarkClampRequest = z.object({ bps: z.coerce.number().int().min(100).max(9000) }).strict();
 
+// LP revenue-share knobs — the whole-percent (0–100) of a fee/funding/liquidation source routed to the pool.
+export const LpSharePctRequest = z.object({ pct: z.coerce.number().int().min(0).max(100) }).strict();
+
 // Admin toggle for automatic withdrawal approval. When false, all withdrawals require manual approval.
 export const WithdrawalAutoProcessRequest = z.object({ enabled: z.boolean() }).strict();
 
@@ -226,6 +251,11 @@ export const ChatPostRequest = z.object({
 
 export const UsernameRequest = z.object({
   username: z.string().trim().min(3).max(20).regex(/^[A-Za-z0-9_-]+$/, 'letters, numbers, _ and - only'),
+});
+
+// Profile avatar: a sprite path under /avatars/, e.g. 'default/151.png' or 'shiny/25.png'.
+export const AvatarRequest = z.object({
+  avatar: z.string().trim().regex(/^(default|shiny)\/\d{1,4}\.png$/, 'invalid avatar'),
 });
 
 // --- chat moderation ---------------------------------------------------------

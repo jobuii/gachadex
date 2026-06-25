@@ -9,7 +9,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
-const { postChat, listChat, getProfile, setUsername, listChatUsers } = await import('./chat.ts');
+const { postChat, listChat, getProfile, setUsername, setAvatar, listChatUsers } = await import('./chat.ts');
 const { onMessage } = await import('./bus.ts');
 
 await initDb();
@@ -42,6 +42,41 @@ test('chat: empty and over-length messages are rejected', async () => {
   const u = await newUser();
   await assert.rejects(postChat(db, u, '    '), /empty/);
   await assert.rejects(postChat(db, u, 'x'.repeat(281)), /too long/);
+});
+
+test('avatar: set (validated), surfaced in profile + every message; bad values rejected', async () => {
+  const u = await newUser();
+  // unset → null everywhere (the client derives a deterministic default)
+  let prof = await getProfile(db, u);
+  assert.equal(prof.avatar, null);
+  await postChat(db, u, 'before avatar');
+  let msgs = await listChat(db, { limit: 10 });
+  assert.equal(msgs.find((m) => m.body === 'before avatar')?.avatar, null);
+
+  // set a valid sprite
+  const r = await setAvatar(db, u, 'default/151.png');
+  assert.equal(r.avatar, 'default/151.png');
+  prof = await getProfile(db, u);
+  assert.equal(prof.avatar, 'default/151.png');
+
+  // surfaces on a NEW post AND back-fills the existing one (listChat joins live users.avatar)
+  const posted = await postChat(db, u, 'after avatar');
+  assert.equal(posted.avatar, 'default/151.png');
+  msgs = await listChat(db, { limit: 10 });
+  assert.equal(msgs.find((m) => m.body === 'before avatar')?.avatar, 'default/151.png');
+  assert.equal(msgs.find((m) => m.body === 'after avatar')?.avatar, 'default/151.png');
+
+  // profile carries the caller's own stats for the banner strip
+  assert.equal(typeof prof.realizedE6, 'string');
+  assert.equal(typeof prof.volumeE6, 'string');
+
+  // shiny variant is valid; bad shapes (extension / traversal / unknown dir) are rejected
+  assert.equal((await setAvatar(db, u, 'shiny/25.png')).avatar, 'shiny/25.png');
+  await assert.rejects(setAvatar(db, u, 'default/151.jpg'), /invalid avatar/);
+  await assert.rejects(setAvatar(db, u, '../secret.png'), /invalid avatar/);
+  await assert.rejects(setAvatar(db, u, 'evil/1.png'), /invalid avatar/);
+  await assert.rejects(setAvatar(db, u, 'default/9999.png'), /invalid avatar/); // no sprite #9999 shipped
+  await assert.rejects(setAvatar(db, u, 'default/0.png'), /invalid avatar/); // out of the #1–649 range
 });
 
 test('chat: a user can set a unique username; the handle uses it; dupes/bad formats rejected', async () => {

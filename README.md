@@ -32,13 +32,19 @@ chat & social layer** (reactions, rank badges, presence, moderation, and a **DRO
   Top 250 across all three games, plus Pokémon Graded; each in the GJ / G&P / Pokedaq series.
 - **Manage positions** — partial or full close, live unrealized PnL, liquidation price, and a one-click
   **shareable PnL card** (the traded card's art + your ROE %) you can copy or download.
-- **Browse the markets screener** — a sortable table (price · 24h % · volume · rarity) with top-mover
-  tabs, a game filter, a rarity filter, and a **JPY** toggle for Japanese-market cards.
+- **Browse the markets** — toggle between **Indices** and **Cards**. *Indices* is a financial-style
+  overview (price · 1D / 1W / 1M / YTD · 52-week low/high · **View → trade**), grouped by game then by
+  methodology (GJ / G&P / Pokedaq), with a per-game filter. *Cards* is a sortable screener (price · 24h % ·
+  volume · rarity) with top-mover tabs, a game filter, a rarity filter, and a **JPY** toggle.
 - **Provide liquidity** to the LP pool (the counterparty to all trades) and earn fees + trader PnL.
 - **Leaderboard** — traders ranked by net realized PnL (with equity + volume).
+- **Set up your profile** — a Portfolio banner with a **Pokémon avatar** (gen 1–5, default or shiny),
+  an editable **username**, and an at-a-glance **DEX stat strip** (equity · realized PnL · volume · rank);
+  your avatar + name follow you into chat.
 - **Referrals & affiliate codes** — every account gets a shareable code (auto-redeemed on sign-in);
   redeeming pays both sides a play-USDC bonus. Operators can give KOL/affiliate codes a **cashback %**
-  (a cut of their referees' trading fees, paid as real USDC) + a **fee-discount %** on their own trades.
+  (a cut of their referees' trading fees, paid as real USDC) + a **fee-discount %** on their own trades —
+  per code, or as a **platform-wide default** applied to every code.
 - **Chat & socialize** — a live chat rail with emoji reactions, leaderboard **rank badges**, an
   online-presence count, and **BIG BET / BIG WIN** action bars that broadcast notable trades; moderated
   (mods + operator can delete / mute / ban).
@@ -106,6 +112,15 @@ G&P prefixes `gp-`, Pokedaq `pdq-`.
 | **Top 100 / Top 250** — Pokémon, One Piece, Magic | In-house basket from card prices (Scrydex for Pokémon/Magic, tcgpl for One Piece) | ✅ Live (all three games) |
 | **Graded (PSA-10)** — Pokémon | **Scrydex graded** PSA-10 → in-house basket (tcgpl eBay / JustTCG as fallback) | ✅ Live |
 | **Sealed** — Pokémon | needs a sealed-product feed (TCGplayer Sealed / PriceCharting) | 🔒 Gated — no source wired; shows "Soon" |
+
+**Index Overview (Markets → Indices).** The Markets page opens on an **Indices** tab: every index in a boxed
+table **per game** (Pokémon / One Piece / Magic, with a per-game filter), grouped inside each box by series
+(GJ / G&P / Pokedaq). Each row shows the live price, **1D / 1W / 1M / YTD** change, the **52-week low & high**,
+and a **View → Exchange** action. Price + 1D stream from the live `/markets` feed; the slower windows come
+from `GET /markets/index-overview` (`indexOverview` in `services/markets.ts`), computed off the same `marks`
+series as the chart + 24h change. YTD and 52W are measured over each index's **available history** (indices
+are young, so YTD falls back to since-launch and 52W to the window that exists). Toggle to **Cards** for the
+per-card screener.
 
 We deliberately do **not** scrape TCGFish: their pages and embed badges are Cloudflare bot-challenged and
 the badges are rendered images, not an API. Enabling the **Sealed** index for real is a data decision (a
@@ -210,12 +225,15 @@ by construction and never gated.
 - **Pooled-LP counterparty.** There is no order book. Trades fill against the LP pool at the mark;
   the pool books trader PnL (LPs win when traders lose, and vice-versa).
 - **Fees.** A trading commission (`FEE_BPS`, **default 0** — off; when set, charged on both open and
-  close) splits between LPs and platform fee revenue (`FEE_LP_SHARE_PCT`); live-editable in the admin panel.
+  close) splits between LPs and platform fee revenue (`FEE_LP_SHARE_PCT`, default 50%). The LP's share of
+  fees, funding, and liquidation penalties is operator-tunable in the admin **"LP Fee Sources"** panel.
 - **Funding.** Hourly, skew-balancing: the heavier side pays the lighter side (cumulative-index lazy
-  settle). Keeps the mark tethered to the index.
+  settle) via the LP pool, which keeps a configurable cut (`LP_FUNDING_SHARE_PCT`, default 80%; the rest
+  → house revenue). Keeps the mark tethered to the index.
 - **Liquidations.** A maintenance-margin sweep runs every few seconds and after every accepted print.
-  Liquidations are loss-capped at the trader's margin; a 1% penalty tops up the **insurance fund**;
-  any bad debt is drawn from insurance first, then socialized across LP NAV. Every leg is a ledger entry.
+  Liquidations are loss-capped at the trader's margin; the penalty (`LIQ_FEE_BPS`) **splits LP/house**
+  (`LP_LIQ_SHARE_PCT`, default 60% LP — it no longer auto-funds insurance). Any bad debt is drawn from
+  insurance first, then socialized across LP NAV. Every leg is a ledger entry.
 - **Open-interest caps.** Per-side OI caps protect the pool from one-sided risk — a static cap **and**
   a NAV-relative cap (`OI_CAP_NAV_BPS`), so no single side can outgrow a set fraction of LP NAV.
 - **Adaptive depth.** The skew→premium conversion uses a depth that scales with pool NAV and
@@ -239,9 +257,10 @@ by construction and never gated.
   advisory lock, so concurrent orders on the same market serialize.
 - **Idempotency.** Every order/close carries a client key; replays (even concurrent ones) return the
   prior result instead of double-executing.
-- **Chart of accounts.** `USER_COLLATERAL`, `USER_POSITION_MARGIN`, `LP_POOL`, `INSURANCE_FUND`,
-  `FEE_REVENUE`, `FUNDING_POOL`, `PNL_CLEARING`, `FAUCET_SOURCE`, `TREASURY_USDC` (real-funds custody
-  mirror), `DROP_POOL` (the DROP giveaway pot).
+- **Chart of accounts.** `USER_COLLATERAL`, `USER_POSITION_MARGIN`, `RESTING_ORDER_MARGIN` (reserve held
+  against a resting limit order), `LP_POOL`, `INSURANCE_FUND`, `FEE_REVENUE`, `FUNDING_POOL`,
+  `PNL_CLEARING`, `FAUCET_SOURCE`, `TREASURY_USDC` (real-funds custody mirror), `DROP_POOL` (the DROP
+  giveaway pot), `GAME_POOL` (the Games house bankroll).
 
 ---
 
@@ -312,6 +331,9 @@ Deep dives: **[docs/real-funds-custody-plan.md](docs/real-funds-custody-plan.md)
   on the affiliate's own trades (open + close; liquidation fees excluded). Cashback is capped at the house
   fee share (`100% − FEE_LP_SHARE_PCT`) and clamped at charge time so platform revenue can't go negative.
   An affiliate's lifetime cashback shows as a **Cashback** card in their Portfolio and the referral panel.
+  **Platform-wide defaults** (operator-set, default 0) extend both knobs to *every* code with no active
+  per-wallet terms, so a baseline cashback/discount can apply site-wide; an active `affiliate_terms` row
+  overrides per wallet, and a deactivated row falls back to the default (resolved in one indexed lookup).
 
 ---
 
@@ -327,8 +349,9 @@ streamed over the public `chat` WebSocket channel; the browser only renders. Bui
   trade), broadcasts a chat event when an open's notional clears `CHAT_BIG_BET_USD` (gold) or a close's
   realized profit clears `CHAT_BIG_WIN_USD` (green). Both are live-editable operator knobs.
 - **Reactions.** Emoji reactions on messages (`chat_reactions`), broadcast as authoritative counts.
-- **Identity.** A leaderboard **rank badge** (👑#1 / 🥈 / 🥉 / TOP 10 / TOP 100) sits next to each handle,
-  from a ~60s-cached rank map; cumulative-volume **levels** back it (L1–L6).
+- **Identity.** Each handle shows the user's chosen **profile avatar** (a gen 1–5 Pokémon sprite set in the
+  Portfolio banner; a deterministic default until they pick one) plus a leaderboard **rank badge** (👑#1 /
+  🥈 / 🥉 / TOP 10 / TOP 100) from a ~60s-cached rank map; cumulative-volume **levels** back it (L1–L6).
 - **Presence.** A live "● N online" count (connected sockets, including anonymous viewers).
 - **Moderation.** Mods (and the operator via the admin key) soft-delete messages and mute/ban users;
   every action is an append-only audit row (`chat_mod_actions`). Mods act in-chat; the operator manages
@@ -380,6 +403,13 @@ Manage KOL / affiliate codes (a 4th operator tab). Lists every affiliate — cod
 optional branded code + the two %s + a label) and an activate/deactivate toggle. Percentages in the UI,
 basis points over the wire; cashback is capped at the house fee share (`100% − FEE_LP_SHARE_PCT`), enforced
 both client-side and in the service. Linking a code creates the wallet's account if it has never signed in.
+
+A **Platform defaults** form (same tab) sets a baseline **cashback %** + **fee-discount %** that apply to
+*every* referral code without its own active terms — so a site-wide baseline can apply without touching
+each wallet. An active per-wallet row **overrides** the default (set one to **0%** to zero a specific wallet
+out); a **deactivated** row reverts to the platform default, not to zero. Both default to **0** (the feature
+is dormant — no behavior change until set), stored as live knobs (`platform_cashback_bps` /
+`platform_fee_discount_bps`), so they tune without a deploy and respect the same cashback ceiling.
 
 ---
 
@@ -568,13 +598,16 @@ to the browser). Copy `apps/api/.env.example` → `apps/api/.env`; every key has
 | `OI_CAP_NAV_BPS` · `MAX_PNL_FACTOR_BPS` · `ADL_PNL_FACTOR_BPS` | `0` (off) | Pool-risk caps (NAV-relative OI · open-gate · ADL); turn on for real funds |
 | `FAUCET_DEFAULT_USD` | `10000` | Per-claim play USDC (balance capped at $1M) |
 | `REFERRAL_BONUS_USD` / `MAX_REFERRALS_PAID` | `1000` / `50` | Referral payout (both parties) + per-referrer cap |
-| `FEE_BPS` / `FEE_LP_SHARE_PCT` | `0` / `50` | Trading commission (bps; **default off**, charged on both open + close) + LP share; live-editable in admin. `FEE_LP_SHARE_PCT` also caps affiliate cashback at `100 − it`% (the house keeps the rest) |
-| `FUNDING_SKEW_FACTOR_BPS` / `FUNDING_INTERVAL_MS` | `30` / `1h` | Funding rate cap + cadence |
-| `LIQ_FEE_BPS` / `LIQUIDATION_SWEEP_MS` / `ORACLE_STALE_MS` | `100` / `5s` / `36h` | Liquidation penalty, sweep, staleness halt |
+| `FEE_BPS` / `FEE_LP_SHARE_PCT` | `0` / `50` | Trading commission (bps; **default off**, charged on both open + close) + the LP share of it; live-editable in admin. `FEE_LP_SHARE_PCT` also caps affiliate cashback at `100 − it`% (the house keeps the rest) |
+| `LP_FUNDING_SHARE_PCT` / `LP_LIQ_SHARE_PCT` | `80` / `60` | LP's share of **funding** + the **liquidation penalty** (the rest → house `FEE_REVENUE`). All three LP shares are live-editable in the admin **"LP Fee Sources"** panel; the pool page shows a separately-published snapshot (operator "Refresh pool numbers") |
+| `FUNDING_SKEW_FACTOR_BPS` / `FUNDING_INTERVAL_MS` | `30` / `1h` | Funding rate cap + cadence (each settlement splits LP/house per `LP_FUNDING_SHARE_PCT`) |
+| `LIQ_FEE_BPS` / `LIQUIDATION_SWEEP_MS` / `ORACLE_STALE_MS` | `100` / `5s` / `36h` | Liquidation penalty (split LP/house per `LP_LIQ_SHARE_PCT` — it **no longer auto-funds insurance**), sweep, staleness halt |
 | `CHAT_BIG_BET_USD` / `CHAT_BIG_WIN_USD` | `500` / `100` | Chat action-bar thresholds (USD; live-editable in the admin CHAT view) |
 | `DROP_TIPS_ENABLED` | `false` | Opens **real-USDC** player tipping into the DROP pot — keep off until the draw/payout ships |
 | `DROP_TIP_MIN_USD` / `DROP_TIP_MAX_USD` | `1` / `10000` | Per-tip bounds (USD) |
 | `DROP_INTERVAL_MIN` / `DROP_HOUSE_FLOOR_USD` / `DROP_GDEX_MIN` | `60` / `250` / `500000` | DROP round knobs (Phase 2 mechanic) |
+| `RESTING_ORDERS_ENABLED` | `false` | Gates **Limit / Stop-Loss / Take-Profit** resting orders (all fill at the mark; SL/TP are reduce-only position brackets = a free OCO). Ships **dark** — the routes 404 + the sweep no-ops until `true` |
+| `GAMES_ENABLED` | `false` | Gates the **Games** surface (provably-fair USDC games). One switch — reveals the customer Games tab/page **and** enables the game APIs together. Ships **dark** |
 
 ---
 
@@ -694,11 +727,19 @@ pool-protection engine (adaptive depth, NAV-relative OI caps, pool-health gate, 
 marketing landing page is the public entry point. The platform is **multi-game and live across all
 three** — `markets.game` (Pokémon / One Piece / Magic), a per-game index catalogue in **three weighting
 series** (GJ / G&P / Pokedaq), the **Scrydex-primary** feed (tcgpl eBay cross-check + One Piece fallback)
-with a **Scrydex graded** ladder, a sidebar **game switcher**, a sortable **markets screener** (with a
-JPY toggle), and **7 UI skins**. **Delegated trading keys** (scoped, revocable) back the official
+with a **Scrydex graded** ladder, a sidebar **game switcher**, a Markets page with an **Indices | Cards**
+toggle (a financial **Index Overview** table — per-game, per-series, with 1D/1W/1M/YTD + 52W — alongside a
+sortable card screener with a JPY toggle), and **7 UI skins**. **Delegated trading keys** (scoped, revocable) back the official
 `gachadex` CLI / SDK and **search-and-bet** (on-demand market listing). A **chat & social layer** ships
-alongside — live chat with reactions, leaderboard rank badges, presence, and moderation, plus the
-**DROP** giveaway-pot teaser with real-USDC player tipping (flag-gated, **off by default**).
+alongside — live chat with reactions, **profile avatars** + a Portfolio identity banner, leaderboard rank
+badges, presence, and moderation, plus the **DROP** giveaway-pot teaser with real-USDC player tipping
+(flag-gated, **off by default**).
+
+Two **flag-gated surfaces** ship **dark** alongside the live engine: **Limit / Stop-Loss / Take-Profit**
+resting orders (`RESTING_ORDERS_ENABLED` — all fill at the mark; SL/TP are reduce-only position brackets,
+a free OCO) and a **Games** surface of provably-fair USDC games (`GAMES_ENABLED`). The LP's cut of every
+revenue stream — **trading fees / funding / liquidation penalties** — is **operator-configurable** (admin
+**"LP Fee Sources"**), and the pool page surfaces LP **earnings + APY** from an operator-published snapshot.
 
 **Operator responsibility before real money on mainnet:** the security audit, KYC/AML, and geofencing
 are yours to put in place — the code only gates on `ALLOW_MAINNET_FUNDS=true`, it does not verify them.
@@ -711,7 +752,6 @@ not yet surfaced in the admin tab).
 
 Still deferred: the full **DROP** round mechanic (the scheduled draw, the rare.win pack-open, and the
 on-chain NFT prize — needs rare.win API access), the **Sealed** price feed (the Sealed index stays gated
-until a sealed-product source is wired), Scrydex **population reports** + full JustTCG retirement,
-**limit / stop** orders (today's `limitPriceE6` is a slippage guard, not a resting order), a Go engine
-rewrite, and the **KMS-held deposit seed** (`DEPOSIT_SEED_KMS_REF` is recognized but throws "not
+until a sealed-product source is wired), Scrydex **population reports** + full JustTCG retirement, a Go
+engine rewrite, and the **KMS-held deposit seed** (`DEPOSIT_SEED_KMS_REF` is recognized but throws "not
 implemented" — use `DEPOSIT_MASTER_SEED` for now).

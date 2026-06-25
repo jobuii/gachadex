@@ -2,12 +2,20 @@ import { buildServer } from './server.ts';
 import { initDb } from './db/init.ts';
 import { ingest } from './services/oracle.ts';
 import { accrueFunding } from './services/funding.ts';
-import { liquidateAllEligible, haltStaleMarkets, autoDeleverage } from './services/engine.ts';
+import { liquidateAllEligible, haltStaleMarkets, autoDeleverage, checkRestingOrderTriggers } from './services/engine.ts';
 import { scanDeposits } from './services/custody/deposits.ts';
 import { recoverInFlight, processAllRequested } from './services/custody/withdrawals.ts';
 import { treasuryPass } from './services/custody/treasury.ts';
 import { loadLimits } from './services/custody/limits.ts';
-import { loadFee, loadLiqFee, loadFundingFactor } from './services/fees.ts';
+import {
+  loadFee,
+  loadLiqFee,
+  loadFundingFactor,
+  loadLpTradingPct,
+  loadLpFundingPct,
+  loadLpLiquidationPct,
+} from './services/fees.ts';
+import { loadPlatformCashbackBps, loadPlatformFeeDiscountBps } from './services/affiliate.ts';
 import { loadMarkClampBps } from './services/marks.ts';
 import { loadChatConfig } from './services/chat-config.ts';
 import { loadDropConfig } from './services/drop-config.ts';
@@ -26,6 +34,7 @@ import { GAMES } from '@pokex/shared-types';
 import { randomUUID } from 'node:crypto';
 import { solanaDepositChain, solanaWithdrawChain, solanaTreasuryChain } from './services/custody/solana.ts';
 import type { Db } from './db/client.ts';
+import { closeDb } from './db/client.ts';
 import type { FastifyBaseLogger } from 'fastify';
 import { config } from './config.ts';
 
@@ -241,6 +250,27 @@ function startLiquidationLoop(db: Db, log: FastifyBaseLogger) {
   );
 }
 
+// Resting-order trigger sweep — its OWN chained loop (separate from the liquidation self-chain so a
+// trigger backlog can never starve liquidations/ADL). Dark until RESTING_ORDERS_ENABLED=true.
+// docs/limit-stop-orders-spec.md.
+function startRestingOrderLoop(db: Db, log: FastifyBaseLogger) {
+  if (!config.restingOrdersEnabled) return;
+  chainLoop(
+    async () => {
+      try {
+        const r = await db.query<{ id: string }>(`SELECT id FROM markets WHERE tradeable AND status='active'`);
+        let filled = 0;
+        for (const m of r.rows) filled += await checkRestingOrderTriggers(db, m.id);
+        if (filled > 0) log.info({ filled }, 'resting orders filled');
+      } catch (e) {
+        log.error(e, 'resting-order sweep failed');
+      }
+    },
+    config.restingSweepMs,
+    config.restingSweepMs,
+  );
+}
+
 async function main() {
   const db = await initDb();
   const app = await buildServer();
@@ -260,9 +290,10 @@ async function main() {
     startLiquidationLoop(db, app.log);
     startGamesSettleLoop(db, app.log);
     if (config.classicGachaEnabled) startGachaStockLoop(db, app.log);
+    startRestingOrderLoop(db, app.log); // dark unless RESTING_ORDERS_ENABLED=true
     // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
     // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.
-    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadGachaConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
+    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadLpTradingPct(d), loadLpFundingPct(d), loadLpLiquidationPct(d), loadPlatformCashbackBps(d), loadPlatformFeeDiscountBps(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadGachaConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
     await loadLiveKnobs(db);
     setInterval(() => void loadLiveKnobs(db).catch((e) => app.log.warn(e, 'live-knob refresh failed')), 30_000);
     if (config.realFunds) {
@@ -287,7 +318,12 @@ async function main() {
 
   const shutdown = async (signal: string) => {
     app.log.info(`received ${signal}, shutting down`);
-    await app.close();
+    try {
+      await app.close();
+      await closeDb(); // flush PGlite — a file-backed cluster left un-checkpointed corrupts on the next boot
+    } catch (e) {
+      app.log.error(e, 'shutdown error');
+    }
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));

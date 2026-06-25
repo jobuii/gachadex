@@ -22,7 +22,6 @@ after(() => closeDb());
 test('housePnlBreakdown decomposes house equity by source and the lines reconcile to the total', async () => {
   const lp = await getOrCreateSystemAccount(db, 'LP_POOL');
   const fee = await getOrCreateSystemAccount(db, 'FEE_REVENUE');
-  const ins = await getOrCreateSystemAccount(db, 'INSURANCE_FUND');
   const cp = await getOrCreateSystemAccount(db, 'TREASURY_USDC'); // dummy counterparty for the test legs
 
   const before = await housePnlBreakdown(db);
@@ -32,20 +31,20 @@ test('housePnlBreakdown decomposes house equity by source and the lines reconcil
     await postTxn(q, { reason: 'OPEN_FEE', refType: 'fee', refId: 'f1', entries: [
       { accountId: cp, amount: -usdc(2) }, { accountId: fee, amount: usdc(1) }, { accountId: lp, amount: usdc(1) },
     ] });
-    // $3 funding to LP, $0.50 trader loss to LP (house gained), $0.25 liquidation penalty to insurance
+    // $3 funding to LP, $0.50 trader loss to LP (house gained), $0.25 liquidation penalty split 60/40 LP/house
     await postTxn(q, { reason: 'FUNDING', refType: 'position', refId: 'fn1', entries: [{ accountId: cp, amount: -usdc(3) }, { accountId: lp, amount: usdc(3) }] });
     await postTxn(q, { reason: 'REALIZED_PNL', refType: 'position', refId: 'p1', entries: [{ accountId: cp, amount: -usdc(0.5) }, { accountId: lp, amount: usdc(0.5) }] });
-    await postTxn(q, { reason: 'LIQUIDATION_FEE', refType: 'liquidation', refId: 'l1', entries: [{ accountId: cp, amount: -usdc(0.25) }, { accountId: ins, amount: usdc(0.25) }] });
+    await postTxn(q, { reason: 'LIQUIDATION_FEE', refType: 'liquidation', refId: 'l1', entries: [{ accountId: cp, amount: -usdc(0.25) }, { accountId: lp, amount: usdc(0.15) }, { accountId: fee, amount: usdc(0.1) }] });
   });
 
   const a = await housePnlBreakdown(db);
   const d = (k: keyof typeof a) => BigInt(a[k]) - BigInt(before[k]);
-  assert.equal(d('feesHouseE6'), usdc(1), 'house fee cut');
+  assert.equal(d('feesHouseE6'), usdc(1.1), 'house fee cut $1 + liq-penalty house share $0.10');
   assert.equal(d('feesLpE6'), usdc(1), 'LP fee share');
   assert.equal(d('fundingNetE6'), usdc(3), 'funding net');
   assert.equal(d('traderPnlE6'), usdc(0.5), 'net trader P/L (house side)');
-  assert.equal(d('liqPenaltiesE6'), usdc(0.25), 'liquidation penalties');
-  assert.equal(d('insuranceE6'), usdc(0.25), 'insurance fund balance');
+  assert.equal(d('liqPenaltiesE6'), usdc(0.25), 'total liquidation penalties (LP $0.15 + house $0.10)');
+  assert.equal(d('insuranceE6'), usdc(0), 'insurance no longer funded by the liquidation penalty');
   assert.equal(d('totalE6'), usdc(5.75), 'total house equity delta = 1+1+3+0.5+0.25');
 
   // the displayed lines must sum EXACTLY to the total (the whole point of the card)

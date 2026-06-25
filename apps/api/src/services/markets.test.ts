@@ -10,7 +10,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 const { config } = await import('../config.ts');
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
-const { upsertCardMarket, cardSymbol, getMarketById, getCandles, getMarketDetails, listMarketsWithData } = await import('./markets.ts');
+const { upsertCardMarket, upsertIndexMarket, cardSymbol, getMarketById, getCandles, getMarketDetails, listMarketsWithData, indexOverview } = await import('./markets.ts');
 const { gradeLadder } = await import('./providers/tcgpricelookup.ts');
 
 await initDb();
@@ -194,6 +194,63 @@ test('getCandles: OHLC aggregates multiple marks per bucket; volume comes from f
     [randomUUID(), oid, pid, id],
   );
   assert.equal((await getCandles(db, id, 30)).at(-1)!.volume, 220, 'fills notional aggregated into the bucket');
+});
+
+test('indexOverview: 1w / 1m change + 52w high/low off the index marks series', async () => {
+  const id = await db.tx((q) => upsertIndexMarket(q, { game: 'pokemon', slug: 'ovw-full', name: 'Overview Full', tradeable: true }));
+  const mk = (e6: number, ago: string) =>
+    db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES($1,$2,$2, now() - ($3)::interval)`, [id, e6, ago]);
+  await mk(80_000_000, '30 days'); // 1m reference
+  await mk(150_000_000, '20 days'); // 52w high
+  await mk(50_000_000, '10 days'); // 52w low
+  await mk(100_000_000, '7 days'); // 1w reference
+  await mk(120_000_000, '1 hour'); // current
+  const r = (await indexOverview(db)).find((x) => x.marketId === id)!;
+  assert.equal(r.change1wPct, 20); // (120-100)/100
+  assert.equal(r.change1mPct, 50); // (120-80)/80
+  assert.equal(BigInt(r.high52wE6!), 150_000_000n);
+  assert.equal(BigInt(r.low52wE6!), 50_000_000n);
+});
+
+test('indexOverview: a window shorter than the index history yields null', async () => {
+  const id = await db.tx((q) => upsertIndexMarket(q, { game: 'pokemon', slug: 'ovw-young', name: 'Overview Young', tradeable: true }));
+  await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES($1, 90000000, 90000000, now() - interval '3 days')`, [id]);
+  await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES($1, 99000000, 99000000, now() - interval '1 hour')`, [id]);
+  const r = (await indexOverview(db)).find((x) => x.marketId === id)!;
+  assert.equal(r.change1wPct, null); // only 3 days old -> no 7d reference
+  assert.equal(r.change1mPct, null); // no 30d reference
+  assert.equal(BigInt(r.high52wE6!), 99000000n);
+  assert.equal(BigInt(r.low52wE6!), 90000000n);
+});
+
+test('indexOverview YTD: last mark before Jan 1, else the earliest mark (index launched this year)', async () => {
+  // a mark before this year's Jan 1 -> that is the YTD reference
+  const pre = await db.tx((q) => upsertIndexMarket(q, { game: 'pokemon', slug: 'ovw-ytd-pre', name: 'YTD Pre', tradeable: true }));
+  await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES($1, 100000000, 100000000, date_trunc('year', now()) - interval '2 days')`, [pre]);
+  await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES($1, 130000000, 130000000, now())`, [pre]);
+  // launched this year (all marks AFTER Jan 1) -> YTD = since the earliest mark
+  const born = await db.tx((q) => upsertIndexMarket(q, { game: 'pokemon', slug: 'ovw-ytd-born', name: 'YTD Born', tradeable: true }));
+  await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES($1, 200000000, 200000000, date_trunc('year', now()) + interval '1 day')`, [born]);
+  await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES($1, 250000000, 250000000, now())`, [born]);
+  const rows = await indexOverview(db);
+  assert.equal(rows.find((x) => x.marketId === pre)!.changeYtdPct, 30); // (130-100)/100, ref = pre-Jan1 mark
+  assert.equal(rows.find((x) => x.marketId === born)!.changeYtdPct, 25); // (250-200)/200, ref = earliest mark
+});
+
+test('indexOverview: a drop keeps its negative sign; a single-mark index has hi==lo + null windows', async () => {
+  const drop = await db.tx((q) => upsertIndexMarket(q, { game: 'pokemon', slug: 'ovw-drop', name: 'Overview Drop', tradeable: true }));
+  await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES($1, 200000000, 200000000, now() - interval '7 days')`, [drop]);
+  await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES($1, 150000000, 150000000, now() - interval '1 hour')`, [drop]);
+  const single = await db.tx((q) => upsertIndexMarket(q, { game: 'pokemon', slug: 'ovw-single', name: 'Overview Single', tradeable: true }));
+  await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES($1, 70000000, 70000000, now() - interval '2 hours')`, [single]);
+  const rows = await indexOverview(db);
+  assert.equal(rows.find((x) => x.marketId === drop)!.change1wPct, -25); // (150-200)/200
+  const s = rows.find((x) => x.marketId === single)!;
+  assert.equal(s.change1wPct, null); // no 7d/30d reference for a 2-hour-old index
+  assert.equal(s.change1mPct, null);
+  assert.equal(s.changeYtdPct, 0); // YTD ref = the only (earliest) mark = current → 0%
+  assert.equal(BigInt(s.high52wE6!), 70000000n);
+  assert.equal(BigInt(s.low52wE6!), 70000000n); // hi == lo for a single mark
 });
 
 test('gradeLadder: full PSA/BGS/CGC ladder, oracle price chain per grade, sorted', () => {

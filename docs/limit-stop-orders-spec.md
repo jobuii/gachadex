@@ -212,8 +212,12 @@ slippage so the UI can show "stop filled at $X (trigger $Y)".
 ## 9. Decisions (v1 defaults — override on review)
 
 - **No partial fills** (all-or-nothing). **Limit = trigger + fill-at-mark, capped by the limit price**
-  (mark-or-better). **SL/TP = full-close, market at the mark, defaulted slippage; breach ⇒ stays resting**
-  (liquidation is the backstop). **One SL + one TP per position** (the natural bracket). **Caps:**
+  (mark-or-better). **SL/TP = full-close, market at the mark.** Slippage is **optional** with **NO default in
+  P2** (built behaviour): a stop fills at whatever the mark is — the safest default for a protective order
+  (it always fills rather than getting stuck). If the caller supplies a `slippageE6` bound, a breach ⇒ the
+  order **stays resting** (re-evaluates; liquidation is the backstop) — so the UI must send a tolerance band,
+  NOT the bare trigger price. (`RESTING_DEFAULT_SLIP_BPS` deferred.) **One SL + one TP per position** (the
+  natural bracket). **Caps:**
   `RESTING_MAX_PER_USER_MARKET` + `RESTING_MAX_PER_SWEEP`. **Flag-gated** `RESTING_ORDERS_ENABLED` (default
   OFF) gates the routes AND the §4 loop → dark deploy. **Enable `oiCapNavBps`** before the flag flips.
 

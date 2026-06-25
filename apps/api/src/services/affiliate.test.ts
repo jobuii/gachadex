@@ -1,4 +1,4 @@
-import { test, after } from 'node:test';
+import { test, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 
@@ -21,8 +21,10 @@ const { creditFaucet } = await import('./faucet.ts');
 const { openPosition, getUserPositions } = await import('./engine.ts');
 const { getFeeBps } = await import('./fees.ts');
 const { getBalance, getOrCreateUserAccount, getOrCreateSystemAccount } = await import('./ledger.ts');
-const { resolveFeeAffiliate, applyFeeDiscount, maxCashbackBps, setAffiliateTerms, getCashbackTotal, listAffiliates } =
-  await import('./affiliate.ts');
+const {
+  resolveFeeAffiliate, applyFeeDiscount, maxCashbackBps, setAffiliateTerms, getCashbackTotal, listAffiliates,
+  setPlatformAffiliateDefaults, getPlatformCashbackBps, getPlatformFeeDiscountBps,
+} = await import('./affiliate.ts');
 
 await initDb();
 const db = await getDb();
@@ -56,6 +58,9 @@ async function lastFill(user: string): Promise<{ net: bigint; gross: bigint }> {
   const row = r.rows[0];
   return { net: BigInt(row.fee_uusdc), gross: fee(notional(BigInt(row.qty_e6), BigInt(row.exec_price_e6)), getFeeBps()) };
 }
+
+// the platform defaults are a process-global knob; reset after every test so a setter can't leak into the next.
+afterEach(() => setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 0 }));
 
 test('applyFeeDiscount + maxCashbackBps', () => {
   assert.equal(applyFeeDiscount(1000n, 5000), 500n); // 50% off
@@ -165,6 +170,71 @@ test('cashback clamps to the house share so FEE_REVENUE never goes negative', as
   assert.equal((await getBalance(db, affColl)) - affBefore, revPart);
   assert.equal((await getBalance(db, rev)) - revBefore, 0n);
   assert.ok((await getBalance(db, rev)) >= 0n);
+});
+
+test('platform defaults apply to codes without per-wallet terms, and individual terms override them', async () => {
+  // baseline (platform default 0): a referred trader gets no discount, and their no-terms referrer no cashback
+  const referrer = await fundedUser();
+  const referee = await fundedUser(referrer);
+  let r = await resolveFeeAffiliate(db, referee);
+  assert.equal(r.discountBps, 0);
+  assert.equal(r.cashback, null);
+
+  // set platform-wide defaults
+  const view = await setPlatformAffiliateDefaults(db, { cashbackBps: 1000, feeDiscountBps: 500 });
+  assert.deepEqual({ c: view.cashbackBps, d: view.feeDiscountBps }, { c: 1000, d: 500 });
+  assert.equal(getPlatformCashbackBps(), 1000);
+  assert.equal(getPlatformFeeDiscountBps(), 500);
+
+  // every trader now gets the default discount on their OWN fee...
+  const solo = await fundedUser();
+  r = await resolveFeeAffiliate(db, solo);
+  assert.equal(r.discountBps, 500);
+  assert.equal(r.cashback, null); // solo wasn't referred → nobody to pay cashback to
+
+  // ...and a referred trader earns their (no-terms) referrer the default cashback
+  r = await resolveFeeAffiliate(db, referee);
+  assert.equal(r.discountBps, 500);
+  assert.deepEqual(r.cashback, { userId: referrer, bps: 1000 });
+
+  // an active per-wallet term OVERRIDES the platform default for that wallet — even with a LOWER/zero rate
+  const aff = await setAffiliateTerms(db, { pubkey: 'pf-aff-' + randomUUID().slice(0, 8), cashbackBps: 2000, feeDiscountBps: 0 });
+  assert.equal((await resolveFeeAffiliate(db, aff.userId)).discountBps, 0); // 0 overrides the 500 default
+  const refOfAff = await fundedUser(aff.userId);
+  assert.deepEqual((await resolveFeeAffiliate(db, refOfAff)).cashback, { userId: aff.userId, bps: 2000 }); // 2000, not 1000
+
+  await setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 0 }); // reset to dormant
+  assert.equal(getPlatformCashbackBps(), 0);
+});
+
+test('platform fee discount reduces a normal trader’s own fee end-to-end', async () => {
+  await setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 5000 }); // 50% off for everyone
+  await setMark(1000);
+  const u = await fundedUser();
+  await trade(u);
+  const f = await lastFill(u);
+  assert.equal(f.net, applyFeeDiscount(f.gross, 5000)); // platform discount applied to a wallet with no terms
+  assert.ok(f.net < f.gross);
+  await setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 0 }); // reset
+});
+
+test('a deactivated per-wallet term falls back to the platform default (not zero)', async () => {
+  await setPlatformAffiliateDefaults(db, { cashbackBps: 800, feeDiscountBps: 300 });
+  // an affiliate the operator deactivated — their custom rates are dormant, so the wallet behaves as a normal
+  // one and picks up the platform default (NOT 0, and NOT their own inactive 2500/6000).
+  const aff = await setAffiliateTerms(db, { pubkey: 'pf-inact-' + randomUUID().slice(0, 8), cashbackBps: 2500, feeDiscountBps: 6000, active: false });
+  assert.equal((await resolveFeeAffiliate(db, aff.userId)).discountBps, 300);
+  const referee = await fundedUser(aff.userId);
+  assert.deepEqual((await resolveFeeAffiliate(db, referee)).cashback, { userId: aff.userId, bps: 800 });
+});
+
+test('setPlatformAffiliateDefaults validates bounds and never partially applies', async () => {
+  await assert.rejects(() => setPlatformAffiliateDefaults(db, { cashbackBps: 6000, feeDiscountBps: 0 }), /cashbackBps/); // > 5000 ceiling
+  await assert.rejects(() => setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 20000 }), /feeDiscountBps/); // > 10000
+  await assert.rejects(() => setPlatformAffiliateDefaults(db, { cashbackBps: -1, feeDiscountBps: 0 }), /cashbackBps/);
+  // a rejected write leaves BOTH knobs untouched (validated before either is persisted)
+  assert.equal(getPlatformCashbackBps(), 0);
+  assert.equal(getPlatformFeeDiscountBps(), 0);
 });
 
 after(async () => {

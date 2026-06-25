@@ -128,7 +128,9 @@ export const config = {
   // Default 0 = no fee. This is the env-set DEFAULT; it's live-editable from the admin panel —
   // services/fees.ts overlays an operator override on top (shown as "Commission" in tx history).
   feeBps: num('FEE_BPS', 0),
-  feeLpSharePct: num('FEE_LP_SHARE_PCT', 50), // % of fees that go to LPs (rest to platform revenue)
+  feeLpSharePct: num('FEE_LP_SHARE_PCT', 50), // % of trading fees that go to LPs (rest to platform revenue)
+  lpFundingSharePct: num('LP_FUNDING_SHARE_PCT', 80), // % of funding that goes to LPs (rest to platform revenue)
+  lpLiquidationSharePct: num('LP_LIQ_SHARE_PCT', 60), // % of the liquidation penalty to LPs (rest to platform revenue)
 
   // Chat action bars: broadcast a BIG BET when an open's notional >= this (USD) and a BIG WIN when a
   // close's realized profit >= this (USD). Live-tunable via settings (see chat-config.ts).
@@ -176,6 +178,15 @@ export const config = {
   liqFeeBps: num('LIQ_FEE_BPS', 100), // 1% liquidation penalty -> insurance fund
   liquidationSweepMs: num('LIQUIDATION_SWEEP_MS', 5_000),
   oracleStaleMs: num('ORACLE_STALE_MS', 36 * 60 * 60 * 1000), // halt a market if no fresh print
+
+  // Resting orders (limit / SL / TP — docs/limit-stop-orders-spec.md). OFF by default: ships dark, the
+  // routes + the trigger loop both no-op until RESTING_ORDERS_ENABLED=true. The sweep runs on its OWN
+  // chained loop (separate from liquidations so a trigger backlog can't starve the risk engine); the
+  // per-sweep + per-user caps bound the work and stop resting-order spam.
+  restingOrdersEnabled: process.env.RESTING_ORDERS_ENABLED === 'true',
+  restingSweepMs: num('RESTING_SWEEP_MS', 5_000),
+  restingMaxPerSweep: num('RESTING_MAX_PER_SWEEP', 200),
+  restingMaxPerUserMarket: num('RESTING_MAX_PER_USER_MARKET', 50),
 
   // Pool risk cap (GMX-style MAX_PNL_FACTOR). Pause NEW opens once the pool's net liability to
   // traders (winners' unrealized profit, losers' losses capped at their margin) exceeds this
