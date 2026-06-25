@@ -40,6 +40,10 @@ const INDEX_SERIES = [
 
 export const INDEX_SERIES_LABELS = { gj: 'GJ', gp: 'G&P', pdq: 'Pokedaq' };
 
+/** Display/sort order of the series (GJ → G&P → Pokedaq), derived from INDEX_SERIES — the single source of
+ *  truth the web sorts/groups indices by (was duplicated, once hardcoded, in two components). */
+export const SERIES_ORDER = Object.fromEntries(INDEX_SERIES.map((s, i) => [s.series, i]));
+
 /** Which series an index slug belongs to (the web groups by this; the API returns only `indexSlug`). */
 export function indexSeries(slug) {
   if (typeof slug === 'string' && slug.startsWith('gp-')) return 'gp';

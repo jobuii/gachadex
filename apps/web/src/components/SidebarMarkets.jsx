@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { formatUsd } from '@pokex/pricing';
-import { indexSeries, INDEX_SERIES_LABELS } from '@pokex/shared-types';
+import { indexSeries, INDEX_SERIES_LABELS, SERIES_ORDER } from '@pokex/shared-types';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { useAuth } from '../auth/AuthContext';
 import { useStickyState } from '../lib/useStickyState';
@@ -9,7 +9,6 @@ import { MarketThumb } from './MarketThumb';
 import * as api from '../lib/api.js';
 
 const TABS = ['indices', 'cards'];
-const SERIES_ORDER = { gj: 0, gp: 1, pdq: 2 }; // GJ (Dow) → G&P (equal-weight) → Pokedaq (capped)
 
 // Cards-tab top-mover sort pills. Sort off the REST snapshot (markE6/volume24hUsd/change24hPct) so rows
 // don't reshuffle under the cursor on every live tick — same keys as the Markets screener page.

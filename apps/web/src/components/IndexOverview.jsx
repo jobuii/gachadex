@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, Fragment } from 'react';
 import { formatUsd } from '@pokex/pricing';
-import { indexSeries, INDEX_SERIES_LABELS } from '@pokex/shared-types';
+import { indexSeries, INDEX_SERIES_LABELS, SERIES_ORDER } from '@pokex/shared-types';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { GAME_ORDER, gameBrand } from '../lib/games.js';
 import * as api from '../lib/api.js';
@@ -9,8 +9,6 @@ import * as api from '../lib/api.js';
 // (Pokémon → One Piece → Magic), each enclosed in its own panel; within a panel, rows are grouped by series
 // (GJ / G&P / Pokedaq). Per index: price, 1D/1W/1M/YTD change, 52-week low & high, and View → Exchange.
 // Price + 1D come live from the markets feed; the slower windows come from /markets/index-overview.
-
-const SERIES_ORDER = Object.fromEntries(Object.keys(INDEX_SERIES_LABELS).map((k, i) => [k, i]));
 
 const fmtE6 = (e6) => (e6 ? formatUsd(BigInt(e6)) : '—');
 
