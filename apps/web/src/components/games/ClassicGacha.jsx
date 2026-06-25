@@ -5,7 +5,7 @@ import { GachaReveal } from './GachaReveal.jsx';
 import { GachaSummary } from './GachaSummary.jsx';
 import { GachaInventory } from './GachaInventory.jsx';
 import { GoldBar } from './GoldBar.jsx';
-import { RARITY_COLORS, usd, usdWhole } from './gacha-util.js';
+import { RARITY_COLORS, usd, usdWhole, pollGachaOpen } from './gacha-util.js';
 
 // Classic Gacha (docs/classic-gacha-cc-packs-spec.md, P0–P4). Browses the live Collector Crypt machines (a
 // game-filter, a machine strip, the selected machine's detail = price + tier legend + buyback %, the real
@@ -89,18 +89,9 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
   const openOne = async (m) => {
     const key = crypto.randomUUID();
     // The POST is the charge: a throw here is pre-payment (insufficient / sold-out / 401) → safe to surface as
-    // "no charge". Never send 'gold' if pay-with-Gold is off.
-    let r = await api.openGachaPack(m.code, key, m.priceE6, payWithGold ? payWith : 'usdc', yolo);
-    // Past the charge we only POLL the reveal. A network blip mid-poll must NOT bubble — that would push a
-    // re-click → a NEW idempotency key → a SECOND charge. Keep the paid open; the reveal shows "still processing"
-    // and the reconciler + getOpen finish it.
-    try {
-      for (let i = 0; i < 12 && r.status === 'paid'; i++) {
-        await new Promise((res) => setTimeout(res, 2000));
-        r = await api.getGachaOpen(r.openId);
-      }
-    } catch { /* keep r at its last-known (paid) state */ }
-    return r;
+    // "no charge". Never send 'gold' if pay-with-Gold is off. Past the charge we only poll the reveal.
+    const r = await api.openGachaPack(m.code, key, m.priceE6, payWithGold ? payWith : 'usdc', yolo);
+    return await pollGachaOpen(r);
   };
 
   // Confirmed: open `qty` packs. The overlay opens immediately charging (latency = suspense); a single pack
