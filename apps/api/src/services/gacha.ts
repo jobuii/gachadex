@@ -367,7 +367,8 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
     )).rows[0];
     if (!row) throw new HttpError(404, 'prize not found');
     if (row.status !== 'held') throw new HttpError(409, 'prize already settled');
-    await q.query(`UPDATE gacha_nft_inventory SET status = 'selling' WHERE id = $1`, [prizeId]);
+    // settled_at doubles as the last-state-change marker so the stuck-row reconciler can grace this claim.
+    await q.query(`UPDATE gacha_nft_inventory SET status = 'selling', settled_at = now() WHERE id = $1`, [prizeId]);
     return { mint: row.mint, custodyPubkey: row.custody_pubkey };
   });
 
@@ -474,7 +475,8 @@ export async function requestNftWithdraw(
     if (!row) throw new HttpError(404, 'prize not found');
     if (row.status !== 'held') throw new HttpError(409, 'prize not withdrawable');
     await verifyNftWithdrawStepUp(q, { pubkey, mint: row.mint, dest: p.dest, message: p.message, signature: p.signature });
-    await q.query(`UPDATE gacha_nft_inventory SET status = 'withdrawing', withdraw_dest = $2 WHERE id = $1`, [prizeId, p.dest]);
+    // settled_at = last-state-change marker (grace anchor for the stuck-row reconciler).
+    await q.query(`UPDATE gacha_nft_inventory SET status = 'withdrawing', withdraw_dest = $2, settled_at = now() WHERE id = $1`, [prizeId, p.dest]);
     return { mint: row.mint };
   });
 

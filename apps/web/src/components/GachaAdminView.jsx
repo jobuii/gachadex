@@ -73,6 +73,11 @@ export function GachaAdminView({ adminKey }) {
     act(() => api.adminSetGachaConfig({ disabledMachines: [...disabled] }, adminKey));
   };
 
+  const reconcileStuck = () => act(async () => {
+    const r = await api.adminReconcileStuckGacha(adminKey);
+    setMsg(`Reconciled — ${r.revertedToHeld} released to held · ${r.markedWithdrawn} marked withdrawn · ${r.flaggedSelling} flagged for manual credit · ${r.skipped} skipped (DAS).`);
+  });
+
   if (!cfg) return <p className="ref-blurb">{err || 'Loading gacha config…'}</p>;
 
   const nameOf = (code) => machines.find((m) => m.code === code)?.name ?? code; // resolve a stat's machine code to its name
@@ -111,6 +116,13 @@ export function GachaAdminView({ adminKey }) {
             <div className="stat-card"><span className="sc-label">Withdraws</span><span className="sc-val">{mon.withdraws}</span></div>
             <div className="stat-card"><span className="sc-label">Realized odds — all-time (24h)</span><span className="sc-val" style={{ fontSize: '0.78rem' }}>{oddsStr(mon.rarity, mon.packsOpened)} <span className="muted">({oddsStr(mon.rarity24h, mon.packsOpened24h)})</span></span></div>
           </div>
+
+          <h4 style={{ margin: '1.2rem 0 0.4rem' }}>Stuck rows</h4>
+          <div className="admin-stats">
+            <div className="stat-card"><span className="sc-label">Selling / withdrawing</span><span className={`sc-val ${(mon.stuckSelling + mon.stuckWithdrawing) > 0 ? 'down' : ''}`}>{mon.stuckSelling} / {mon.stuckWithdrawing}</span></div>
+            <div className="stat-card" style={{ alignItems: 'flex-start', justifyContent: 'center' }}><button className="btn-ghost" disabled={busy} onClick={reconcileStuck}>Reconcile stuck rows</button></div>
+          </div>
+          <p className="muted" style={{ fontSize: '0.76rem' }}>A crash mid sell-back/withdraw can strand a row. This checks each NFT’s on-chain owner: still in custody → released to “held”; gone for a withdraw → marked withdrawn; sold-but-unsettled → flagged in the logs for a manual credit. Also runs on boot.</p>
 
           {mon.machines?.length > 0 && (
             <>

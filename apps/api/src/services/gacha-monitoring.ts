@@ -27,6 +27,7 @@ export interface GachaMonitoring {
   packsOpened: number; packsOpened24h: number; volumeUsdcE6: string; tokenPacks: number; prizeValueE6: string;
   biggestPullE6: string; players: number; withdraws: number;
   rarity: RarityCounts; rarity24h: RarityCounts;
+  stuckSelling: number; stuckWithdrawing: number; // in-flight rows a crash could strand → the reconciler clears these
   // per machine
   machines: GachaMachineStats[];
 }
@@ -118,6 +119,8 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
   const totalInv = inv.rows.reduce((a, r) => a + num(r.n), 0);
   const sold = num(inv.rows.find((r) => r.status === 'sold')?.n);
   const withdraws = num(inv.rows.find((r) => r.status === 'withdrawn')?.n);
+  const stuckSelling = num(inv.rows.find((r) => r.status === 'selling')?.n);
+  const stuckWithdrawing = num(inv.rows.find((r) => r.status === 'withdrawing')?.n);
   const a0 = activity.rows[0];
   // delivered = inventory rows (opened NFTs) + turbo auto-sells (which write no inventory row, always Common).
   const packsOpened = num(a0?.opened);
@@ -171,6 +174,8 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
     withdraws,
     rarity: rarityAll,
     rarity24h: rarity24hAll,
+    stuckSelling,
+    stuckWithdrawing,
     machines,
   };
 }

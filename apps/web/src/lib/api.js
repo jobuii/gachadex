@@ -283,6 +283,7 @@ export const adminCancelArena = (roundId, adminKey) => adminReq('/admin/games/ar
 export const adminGetGachaConfig = (adminKey) => adminGet('/admin/gacha/config', adminKey);
 export const adminSetGachaConfig = (body, adminKey) => adminReq('/admin/gacha/config', adminKey, body);
 export const adminGetGachaMonitoring = (adminKey) => adminGet('/admin/gacha/monitoring', adminKey);
+export const adminReconcileStuckGacha = (adminKey) => adminReq('/admin/gacha/reconcile-stuck', adminKey, {}); // recover crash-stranded selling/withdrawing rows
 // Treasury + insurance. /admin/treasury (full PoR view incl. insurance + allocatable surplus) is
 // real-funds-only; /admin/insurance (balance) + the fee-allocation moves work in play-money too.
 export const adminGetTreasury = (adminKey) => adminGet('/admin/treasury', adminKey);

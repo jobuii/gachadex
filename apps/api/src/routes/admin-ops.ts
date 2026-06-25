@@ -7,6 +7,7 @@ import { rl } from './_ratelimit.ts';
 import { requireAdminKey } from './admin.ts';
 import { gachaAdminConfig, setGachaConfig } from '../services/gacha-config.ts';
 import { gachaMonitoring } from '../services/gacha-monitoring.ts';
+import { reconcileStuckPrizes } from '../services/gacha-reconcile.ts'; // web3-free (DB + DAS) → eager-safe
 import { getMachines, toLobbyMachine } from '../services/providers/collectorcrypt.ts';
 import { setManualPrice, setPricePin } from '../services/admin-pricing.ts';
 import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from '../services/insurance.ts';
@@ -302,5 +303,11 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/admin/gacha/monitoring', rl(config.routeRateLimits.admin), async () => {
     const db = await getDb();
     return { ...(await gachaMonitoring(db)), config: gachaAdminConfig() };
+  });
+
+  // Recover inventory rows stranded in 'selling'/'withdrawing' by a crash mid-flight (DAS owner is the oracle).
+  app.post('/admin/gacha/reconcile-stuck', rl(config.routeRateLimits.admin), async (req) => {
+    const graceSec = Number((req.body as { graceSec?: number } | undefined)?.graceSec);
+    return reconcileStuckPrizes(await getDb(), Number.isFinite(graceSec) && graceSec >= 0 ? { graceSec } : {});
   });
 }

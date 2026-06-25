@@ -251,6 +251,14 @@ async function main() {
       startDepositScanner(db, app.log);
       startWithdrawalWorker(db, app.log);
       startTreasuryWorker(db, app.log);
+      // Recover Classic Gacha NFTs stranded 'selling'/'withdrawing' by a crash mid-flight (spec §9/§16). Fire-and-
+      // forget so it never blocks boot; self-gates on CLASSIC_GACHA_ENABLED and on DAS being reachable.
+      if (config.classicGachaEnabled) {
+        void import('./services/gacha-reconcile.ts')
+          .then((m) => m.reconcileStuckPrizes(db))
+          .then((r) => { if (r.scanned) app.log.info(r, 'gacha stuck-row reconcile (boot)'); })
+          .catch((e) => app.log.warn(e, 'gacha stuck-row reconcile failed'));
+      }
     }
   } catch (err) {
     app.log.error(err);

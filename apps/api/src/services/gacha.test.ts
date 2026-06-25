@@ -18,6 +18,7 @@ const { migrate } = await import('../db/migrate.ts');
 const { usdc } = await import('../money.ts');
 const { fund, sign } = await import('../test-helpers.ts');
 const { openPack, sellBack, convert, reconcilePending, nftWithdrawNonce, requestNftWithdraw } = await import('./gacha.ts');
+const { reconcileStuckPrizes } = await import('./gacha-reconcile.ts');
 const { tokensEarnedForOpen, tokenPriceForPack, earnTokens, getTokenSummary } = await import('./tokens.ts');
 const { setGachaConfig, gachaAdminConfig } = await import('./gacha-config.ts');
 const { gachaMonitoring } = await import('./gacha-monitoring.ts');
@@ -403,13 +404,13 @@ test('monitoring: reports packs opened, the rarity mix, volume + per-machine sta
 });
 
 // ── lever C: convert a won card → a GDEX perp on its market (sell-back → openPosition) ──
-async function seedMarket(markUsd) {
+async function seedMarket(markUsd: number | null) {
   const id = randomUUID();
   await db.query(`INSERT INTO markets(id, kind, game, symbol, display_name, status, tradeable, featured) VALUES($1,'card','pokemon',$2,$3,'active',true,true)`, [id, 'CONV-' + id.slice(0, 6), 'Conv ' + id.slice(0, 4)]);
   if (markUsd != null) await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6) VALUES($1,$2,$2)`, [id, usdc(markUsd).toString()]);
   return id;
 }
-async function openAndMatch(user, key, marketId) {
+async function openAndMatch(user: string, key: string, marketId: string | null) {
   await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: key }, { chain: fakeChain(), cc: fakeCc(), ...noWait });
   const prize = (await db.query<{ id: string }>(`SELECT id FROM gacha_nft_inventory WHERE user_id = $1 ORDER BY acquired_at DESC LIMIT 1`, [user])).rows[0];
   // set explicitly (incl. NULL) so we override any name-based auto-match left over from an earlier test
@@ -448,4 +449,58 @@ test('convert: if the position fails to open, the user keeps the sell-back proce
   assert.ok(r.positionError);
   assert.equal((await db.query<{ s: string }>(`SELECT status s FROM gacha_nft_inventory WHERE id = $1`, [prizeId])).rows[0].s, 'sold'); // stage 1 still committed
   assert.ok((await collOf(user)) > before, 'proceeds credited to the user');
+});
+
+// ── stuck-row reconciler (recover 'selling'/'withdrawing' stranded by a crash; DAS owner is the oracle) ──
+async function seedStuck(user: string, mint: string, status: string, custody: string, settledAtIso: string) {
+  const id = randomUUID();
+  await db.query(`INSERT INTO gacha_nft_inventory(id, user_id, mint, custody_pubkey, status, settled_at) VALUES($1,$2,$3,$4,$5,$6)`,
+    [id, user, mint, custody, status, settledAtIso]);
+  return id;
+}
+const statusOf = async (id: string) => (await db.query<{ s: string }>(`SELECT status s FROM gacha_nft_inventory WHERE id = $1`, [id])).rows[0].s;
+// a DAS stub that only "knows" the target mint (every other row in the global scan → null → skipped, so a test
+// asserts on its own row only). owner === custody means "still in custody".
+const dasFor = (mint: string, owner: string) => async (m: string) => (m === mint ? { collection: null, owner, frozen: false } : null);
+const STALE = new Date(Date.now() - 3_600_000).toISOString();
+
+test('reconcile-stuck: selling + NFT still in custody → released to held', async () => {
+  const id = await seedStuck(await newUser(), 'RC-S-CUST', 'selling', 'CUSTODY1', STALE);
+  const r = await reconcileStuckPrizes(db, { getAssetInfo: dasFor('RC-S-CUST', 'CUSTODY1') });
+  assert.equal(r.revertedToHeld, 1);
+  assert.equal(await statusOf(id), 'held');
+});
+
+test('reconcile-stuck: selling + NFT gone (sold on-chain, unsettled) → flagged, left for an operator', async () => {
+  const id = await seedStuck(await newUser(), 'RC-S-GONE', 'selling', 'CUSTODY2', STALE);
+  const r = await reconcileStuckPrizes(db, { getAssetInfo: dasFor('RC-S-GONE', 'COLLECTORCRYPT') });
+  assert.equal(r.flaggedSelling, 1);
+  assert.equal(await statusOf(id), 'selling'); // can't auto-credit → needs a manual settle
+});
+
+test('reconcile-stuck: withdrawing + NFT left custody → marked withdrawn', async () => {
+  const id = await seedStuck(await newUser(), 'RC-W-GONE', 'withdrawing', 'CUSTODY3', STALE);
+  const r = await reconcileStuckPrizes(db, { getAssetInfo: dasFor('RC-W-GONE', 'USER-WALLET') });
+  assert.equal(r.markedWithdrawn, 1);
+  assert.equal(await statusOf(id), 'withdrawn');
+});
+
+test('reconcile-stuck: withdrawing + NFT still in custody → released to held', async () => {
+  const id = await seedStuck(await newUser(), 'RC-W-CUST', 'withdrawing', 'CUSTODY4', STALE);
+  const r = await reconcileStuckPrizes(db, { getAssetInfo: dasFor('RC-W-CUST', 'CUSTODY4') });
+  assert.equal(r.revertedToHeld, 1);
+  assert.equal(await statusOf(id), 'held');
+});
+
+test('reconcile-stuck: a freshly-claimed row inside the grace window is never touched', async () => {
+  const id = await seedStuck(await newUser(), 'RC-FRESH', 'selling', 'CUSTODY5', new Date().toISOString());
+  await reconcileStuckPrizes(db, { graceSec: 300, getAssetInfo: dasFor('RC-FRESH', 'CUSTODY5') });
+  assert.equal(await statusOf(id), 'selling'); // within grace → not scanned
+});
+
+test('reconcile-stuck: DAS unavailable (null) → row left untouched, counted skipped', async () => {
+  const id = await seedStuck(await newUser(), 'RC-DASNULL', 'selling', 'CUSTODY6', STALE);
+  const r = await reconcileStuckPrizes(db, { getAssetInfo: async () => null });
+  assert.ok(r.skipped >= 1);
+  assert.equal(await statusOf(id), 'selling');
 });
