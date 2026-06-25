@@ -108,6 +108,7 @@ export async function authLogout() {
 // --- markets ---
 export const getMarkets = () => req('/markets');
 export const getCandles = (id, tf) => req(`/markets/${id}/candles?tf=${encodeURIComponent(tf)}`);
+export const getIndexOverview = () => req('/markets/index-overview'); // { indices: [{ marketId, change1w/1m/ytdPct, high/low52wE6 }] }
 export const getMarketDetails = (id) => req(`/markets/${id}/details`);
 // Search-and-bet: whole-catalog search (server-cached) + on-demand market listing (auth).
 export const searchCatalog = (q, game) => req(`/catalog/search?q=${encodeURIComponent(q)}&game=${encodeURIComponent(game)}`, { auth: true });

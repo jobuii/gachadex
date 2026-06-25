@@ -5,7 +5,7 @@ import { SidebarMarkets } from '../components/SidebarMarkets';
 import { TradingView } from '../components/TradingView';
 import { OrderEntry } from '../components/OrderEntry';
 import { BottomPanel } from '../components/BottomPanel';
-import { MarketsScreener } from '../components/MarketsScreener';
+import { MarketsView } from '../components/MarketsView';
 import { Portfolio } from '../components/Portfolio';
 import { PoolView } from '../components/PoolView';
 import { GamesView } from '../components/GamesView';
@@ -159,7 +159,7 @@ export function Exchange() {
         </div>
       )}
 
-      {activeView === 'markets' && <MarketsScreener markets={markets} loading={loading} onTradeMarket={handleTradeMarket} />}
+      {activeView === 'markets' && <MarketsView markets={markets} loading={loading} onTradeMarket={handleTradeMarket} />}
       {activeView === 'portfolio' && <Portfolio markets={markets} onSelect={handleTradeMarket} />}
       {activeView === 'pool' && <PoolView />}
       {activeView === 'games' && gamesVisible && <GamesView onTradeMarket={handleTradeMarket} />}
