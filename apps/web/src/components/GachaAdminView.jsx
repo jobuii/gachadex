@@ -3,6 +3,10 @@ import { formatUsd } from '@pokex/pricing';
 import * as api from '../lib/api.js';
 import { Stat, PnlStat } from './adminStats.jsx';
 
+const RTIERS = ['common', 'uncommon', 'rare', 'epic'];
+// realized odds: the % of pulls in each tier (C/U/R/E) for a count map + total.
+const oddsStr = (counts, total) => RTIERS.map((r) => `${r[0].toUpperCase()} ${total ? Math.round(((counts[r] ?? 0) / total) * 100) : 0}%`).join(' · ');
+
 /**
  * Operator Classic Gacha view (docs/classic-gacha-cc-packs-spec.md §12). The economics readout (cut revenue vs
  * Token-rebate cost + the live sell-back rate, so the operator can watch the §6 net — break-even ≈ 57%) plus the
@@ -71,6 +75,8 @@ export function GachaAdminView({ adminKey }) {
 
   if (!cfg) return <p className="ref-blurb">{err || 'Loading gacha config…'}</p>;
 
+  const nameOf = (code) => machines.find((m) => m.code === code)?.name ?? code; // resolve a stat's machine code to its name
+
   return (
     <div className="games-admin gacha-admin">
       {msg && <div className="ref-msg up">{msg}</div>}
@@ -91,6 +97,40 @@ export function GachaAdminView({ adminKey }) {
             <Stat label="Rewards budget" value={mon.rewardsBudgetE6} />
           </div>
           <p className="muted">Break-even ≈ 57% sell-back at the default 5% cut. If the rate drifts toward it, raise the cut or turn on the purchase markup below. Pre-fund the rewards budget before enabling Tokens.</p>
+
+          <h4 style={{ margin: '1.2rem 0 0.4rem' }}>Activity</h4>
+          <div className="admin-stats">
+            <div className="stat-card"><span className="sc-label">Packs opened (24h)</span><span className="sc-val">{mon.packsOpened} ({mon.packsOpened24h})</span></div>
+            <Stat label="Volume (USDC)" value={mon.volumeUsdcE6} />
+            <Stat label="Prize value delivered" value={mon.prizeValueE6} />
+            <Stat label="Biggest pull" value={mon.biggestPullE6} />
+          </div>
+          <div className="admin-stats">
+            <div className="stat-card"><span className="sc-label">Players</span><span className="sc-val">{mon.players}</span></div>
+            <div className="stat-card"><span className="sc-label">Token packs</span><span className="sc-val">{mon.tokenPacks}</span></div>
+            <div className="stat-card"><span className="sc-label">Withdraws</span><span className="sc-val">{mon.withdraws}</span></div>
+            <div className="stat-card"><span className="sc-label">Realized odds — all-time (24h)</span><span className="sc-val" style={{ fontSize: '0.78rem' }}>{oddsStr(mon.rarity, mon.packsOpened)} <span className="muted">({oddsStr(mon.rarity24h, mon.packsOpened24h)})</span></span></div>
+          </div>
+
+          {mon.machines?.length > 0 && (
+            <>
+              <h4 style={{ margin: '1.2rem 0 0.4rem' }}>Per machine</h4>
+              <table className="hist-table">
+                <thead><tr><th>Machine</th><th>Opens (24h)</th><th>Net</th><th>Prize value</th><th>Realized odds — all-time (24h)</th></tr></thead>
+                <tbody>
+                  {mon.machines.map((m) => (
+                    <tr key={m.code}>
+                      <td>{nameOf(m.code)}</td>
+                      <td>{m.opens} ({m.opens24h})</td>
+                      <td>{formatUsd(BigInt(m.netE6))}</td>
+                      <td>{formatUsd(BigInt(m.prizeValueE6))}</td>
+                      <td className="muted" style={{ fontSize: '0.74rem' }}>{oddsStr(m.rarity, m.opens)} <span style={{ opacity: 0.65 }}>({oddsStr(m.rarity24h, m.opens24h)})</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
         </>
       )}
 

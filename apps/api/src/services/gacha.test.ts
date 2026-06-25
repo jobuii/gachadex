@@ -386,3 +386,18 @@ test('monitoring: a sell-back grows the cut revenue + the sell-back rate', async
   assert.ok(m.deliveredCards >= 1 && m.soldBack >= 1);
   assert.ok(m.sellBackRatePct > 0);
 });
+
+test('monitoring: reports packs opened, the rarity mix, volume + per-machine stats', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 's1' }, { chain: fakeChain(), cc, ...noWait }); // epic
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 's2' }, { chain: fakeChain(), cc, ...noWait }); // epic
+  const m = await gachaMonitoring(db);
+  assert.ok(m.packsOpened >= 2);
+  assert.ok((m.rarity.epic ?? 0) >= 2);            // epics counted in the realized mix
+  assert.ok(BigInt(m.volumeUsdcE6) > 0n);          // USDC volume tracked
+  assert.ok(BigInt(m.prizeValueE6) > 0n);          // prize value delivered tracked
+  const pm = m.machines.find((x) => x.code === 'pokemon_50');
+  assert.ok(pm && pm.opens >= 2);                  // per-machine opens
+  assert.ok((pm.rarity.epic ?? 0) >= 2);           // per-machine realized odds
+});
