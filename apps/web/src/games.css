@@ -345,7 +345,12 @@
 .gacha-reveal-charging { font-size: 0.8rem; letter-spacing: 0.06em; }
 
 /* the EPIC banner */
-.gacha-reveal-banner { font-size: clamp(1.6rem, 6vw, 2.6rem); font-weight: 900; letter-spacing: 0.06em; color: var(--cg, #f59e0b); text-shadow: 0 2px 0 rgba(0,0,0,0.4), 0 0 26px rgba(245,158,11,0.6); animation: gr-banner-in 0.5s cubic-bezier(0.34,1.4,0.4,1) both; }
+.gacha-reveal-banner { font-size: clamp(1.7rem, 6.5vw, 2.9rem); font-weight: 900; letter-spacing: 0.06em;
+  background: linear-gradient(100deg, #a9780a 0%, #ffe27a 24%, #fffdf2 50%, #ffe27a 76%, #a9780a 100%);
+  background-size: 250% 100%; background-position: 50% 0;
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent;
+  filter: drop-shadow(0 0 24px rgba(255,201,60,0.65)) drop-shadow(0 2px 1px rgba(0,0,0,0.4));
+  animation: gr-banner-in 0.5s cubic-bezier(0.34,1.4,0.4,1) both, gr-gold-shine 2.4s linear infinite; }
 
 /* 3D card */
 .gacha-card3d-wrap { perspective: 1200px; }
@@ -375,6 +380,16 @@
 /* the base size keeps the longest word (UNCOMMON) on the card; shorter labels go bigger to stand out */
 .gacha-beat-tier-common { font-size: clamp(1.3rem, 7vw, 2rem); }
 .gacha-beat-tier-rare, .gacha-beat-tier-epic { font-size: clamp(1.5rem, 8vw, 2.4rem); }
+/* EPIC is special — real metallic gold with a moving shine sweep (overrides the flat colour/stroke/glow) */
+.gacha-beat-tier-epic {
+  -webkit-text-stroke: 0; text-shadow: none;
+  background: linear-gradient(100deg, #a9780a 0%, #ffe27a 24%, #fffdf2 50%, #ffe27a 76%, #a9780a 100%);
+  background-size: 250% 100%; background-position: 50% 0;
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent;
+  filter: drop-shadow(0 0 16px rgba(255,201,60,0.8)) drop-shadow(0 3px 5px rgba(0,0,0,0.55));
+  animation: gr-tier-pop 0.5s cubic-bezier(0.34,1.7,0.45,1) both, gr-gold-shine 2.4s linear infinite;
+}
+@keyframes gr-gold-shine { from { background-position: 250% 0; } to { background-position: -50% 0; } }
 /* darkening scrim behind the beats → high contrast (dim while charging, deepens while a beat reads) */
 .gacha-card3d-scrim { position: absolute; inset: 0; pointer-events: none; z-index: 1; opacity: 0.45; transition: opacity 0.35s ease;
   background: radial-gradient(ellipse 72% 58% at 50% 50%, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.62) 42%, rgba(0,0,0,0.16) 78%, transparent 100%); }
@@ -435,6 +450,11 @@
 .gacha-machine-media { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gacha-machine-ph { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 3rem; }
 .gacha-machine-badge { position: absolute; top: 0.5rem; left: 50%; transform: translateX(-50%); z-index: 2; padding: 0.2rem 0.6rem; border-radius: 6px; font-size: 0.62rem; font-weight: 900; letter-spacing: 0.16em; text-transform: uppercase; color: #0d0d15; background: var(--cg, #f59e0b); white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+/* quality tiers by price: standard (silver) · premium (cyan) · legendary (violet) · grail (gold, shines) */
+.gacha-machine-badge.badge-standard { background: #c4cad6; color: #0d0d15; }
+.gacha-machine-badge.badge-premium { background: linear-gradient(135deg, #22d3ee, #2f86e6); color: #04121a; }
+.gacha-machine-badge.badge-legendary { background: linear-gradient(135deg, #b15cff, #7c3aed); color: #fff; }
+.gacha-machine-badge.badge-grail { background: linear-gradient(110deg, #a9780a 0%, #ffe27a 28%, #fffceb 50%, #ffe27a 72%, #a9780a 100%); background-size: 220% 100%; color: #2a1d00; box-shadow: 0 4px 14px rgba(0,0,0,0.5), 0 0 16px -2px rgba(255,201,60,0.7); animation: gr-gold-shine 2.6s linear infinite; }
 @keyframes gacha-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
 @media (prefers-reduced-motion: reduce) { .gacha-machine-art { animation: none; } }
 .gacha-machine-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 0.75rem; margin: 0.9rem 0 0.2rem; }

@@ -17,7 +17,7 @@ const RARITY = {
   common: { color: '#ef4444', label: 'Common', fx: null, sound: 'winCommon' }, // red
   uncommon: { color: '#22c55e', label: 'Uncommon', fx: null, sound: 'winCommon' }, // green
   rare: { color: '#a855f7', label: 'Rare', fx: 'rare', sound: 'winRare' }, // violet — lighter celebration
-  epic: { color: '#f59e0b', label: 'Epic', fx: 'epic', sound: 'winEpic' }, // gold — the full jackpot
+  epic: { color: '#ffc93c', label: 'Epic', fx: 'epic', sound: 'winEpic' }, // gold — the full jackpot
 };
 const tierOf = (r) => RARITY[(r || '').toLowerCase()] ?? RARITY.common;
 

@@ -16,8 +16,8 @@ const PANELS = { 'classic-gacha': ClassicGacha, 'pack-rip': PackRip, 'set-poker'
 // The full 7-game lineup (docs/games-spec.md) — all live. id matches the server's games list; cat groups
 // the lobby into sections (like flip.gg's "Originals" rows).
 const LINEUP = [
-  { id: 'classic-gacha', name: 'Classic Gacha', icon: '💎', blurb: 'Open real graded-card packs from Collector Crypt.', live: true, cat: 'gacha' },
-  { id: 'pack-rip', name: 'Pack Rip', icon: '🎴', blurb: 'Open a pack, reveal a card, sell it back for USDC.', live: true, cat: 'casino' },
+  { id: 'classic-gacha', name: 'Classic Gacha', icon: '💎', blurb: 'Open real graded-card packs from Collector Crypt.', live: true, cat: 'gacha', img: '/games/classic-gacha.png' },
+  { id: 'pack-rip', name: 'Pack Rip', icon: '🎴', blurb: 'Open a pack, reveal a card, sell it back for USDC.', live: true, cat: 'gacha' },
   { id: 'set-poker', name: 'Set Poker', icon: '🃏', blurb: 'Five-card draw — your cards’ value beats the house.', live: true, cat: 'casino' },
   { id: 'grade-gamble', name: 'Grade Gamble', icon: '🔍', blurb: 'Gamble a raw card up the grade ladder.', live: true, cat: 'casino' },
   { id: 'the-break', name: 'The Break', icon: '📦', blurb: 'Buy spots in a shared case; the cards shuffle to spots.', live: true, cat: 'casino' },
@@ -28,7 +28,7 @@ const LINEUP = [
 
 // Lobby sections, in order.
 const SECTIONS = [
-  { cat: 'gacha', label: 'Classic Gacha', icon: '💎' },
+  { cat: 'gacha', label: 'Gacha', icon: '💎' },
   { cat: 'casino', label: 'Casino', icon: '🎰' },
   { cat: 'skill', label: 'Skill & PvP', icon: '🆚' },
 ];
@@ -74,7 +74,7 @@ export function GamesView({ onTradeMarket, gamesVisible, classicGachaVisible }) 
             <h3 className="games-section-head"><span className="games-section-icon" aria-hidden="true">{s.icon}</span>{s.label}</h3>
             <div className="games-grid">
               {games.map((g) => {
-                const enabled = g.cat === 'gacha' ? classicGachaVisible : g.live && serverGame(g.id)?.enabled;
+                const enabled = g.id === 'classic-gacha' ? classicGachaVisible : g.live && serverGame(g.id)?.enabled;
                 return (
                   <button
                     key={g.id}
@@ -85,7 +85,7 @@ export function GamesView({ onTradeMarket, gamesVisible, classicGachaVisible }) 
                     <span className="game-art" aria-hidden="true">
                       <span className="game-art-deck"><i /><i /><i /></span>
                       <span className="game-art-icon">{g.icon}</span>
-                      <img className="game-art-img" src={`/games/${g.id}.webp`} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                      <img className="game-art-img" src={g.img ?? `/games/${g.id}.webp`} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                     </span>
                     <span className="game-foot">
                       <span className="game-foot-main">

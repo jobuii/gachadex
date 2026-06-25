@@ -8,7 +8,7 @@ import { formatUsd } from '@pokex/pricing';
 // or "Keep / Done". `onSell(mint)` resolves the held row + sells it instantly (cut applied); true on success.
 
 const usd = (e6) => formatUsd(BigInt(e6 || 0));
-const TIER = { common: '#ef4444', uncommon: '#22c55e', rare: '#a855f7', epic: '#f59e0b' };
+const TIER = { common: '#ef4444', uncommon: '#22c55e', rare: '#a855f7', epic: '#ffc93c' };
 const tierColor = (r) => TIER[(r || '').toLowerCase()] ?? '#9aa0aa';
 
 export function GachaSummary({ results, spentE6, onSell, onClose, instantCutBps = 1000 }) {

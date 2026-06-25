@@ -15,11 +15,22 @@ import { GachaSummary } from './GachaSummary.jsx';
 const usd = (e6) => formatUsd(BigInt(e6 || 0)); // `|| 0` guards '', null, undefined (e6 is always an integer string)
 const tokenPrice = (e6) => Math.floor(Number(e6 || 0) / 1000).toLocaleString(); // a pack's Token price = USD×1000 = priceE6/1000
 const fmtTokens = (n) => Number(n || 0).toLocaleString();
-const TIER_COLOR = { common: '#ef4444', uncommon: '#22c55e', rare: '#a855f7', epic: '#f59e0b' }; // red · green · violet · gold
-const tierColor = (label, i) => TIER_COLOR[(label ?? '').toLowerCase()] ?? ['#ef4444', '#22c55e', '#a855f7', '#f59e0b'][i] ?? '#ef4444';
+const TIER_COLOR = { common: '#ef4444', uncommon: '#22c55e', rare: '#a855f7', epic: '#ffc93c' }; // red · green · violet · gold
+const tierColor = (label, i) => TIER_COLOR[(label ?? '').toLowerCase()] ?? ['#ef4444', '#22c55e', '#a855f7', '#ffc93c'][i] ?? '#ef4444';
 const GAMES = [['all', 'All'], ['pokemon', 'Pokémon'], ['onepiece', 'One Piece']];
 const ALLOWED_GAMES = new Set(['pokemon', 'onepiece']);
 const HIDDEN_MACHINES = new Set(['pokemon_2500', 'pokemon_5000', 'pokemon_151']); // hidden per operator
+// CC files some Pokémon-themed packs under their own game key; surface them under the Pokémon tab.
+const GAME_REMAP = { water_100: 'pokemon' };
+const gameOf = (m) => GAME_REMAP[m.code] ?? m.game;
+// Price → quality badge (label + colour class). $25/$50 standard · $100 premium · $250 legendary · $1000+ grail.
+const badgeOf = (priceE6) => {
+  const p = Number(priceE6 || 0) / 1e6;
+  if (p <= 50) return { label: 'Standard', cls: 'standard' };
+  if (p <= 100) return { label: 'Premium', cls: 'premium' };
+  if (p <= 250) return { label: 'Legendary', cls: 'legendary' };
+  return { label: 'Grail', cls: 'grail' };
+};
 const PREVIEW_IMG = 'https://d1xpxki1g4htqu.cloudfront.net/_nIGwpul5IF9JxQ3La5uK3myeBL6fr6UBcA6s1ZX6V4'; // dev-preview fallback card art
 const titleCase = (s) => (s ?? '').replace(/\b\w/g, (c) => c.toUpperCase());
 const hideBrokenImg = (e) => { e.currentTarget.style.visibility = 'hidden'; }; // CC image 404 → hide, keep the card
@@ -56,7 +67,7 @@ export function ClassicGacha({ onTradeMarket }) {
         if (!alive) return;
         const list = m.machines ?? [];
         setMachines(list);
-        setSelected((cur) => cur ?? list.find((x) => ALLOWED_GAMES.has(x.game) && !HIDDEN_MACHINES.has(x.code))?.code ?? null);
+        setSelected((cur) => cur ?? list.find((x) => ALLOWED_GAMES.has(gameOf(x)) && !HIDDEN_MACHINES.has(x.code))?.code ?? null);
         setLoading(false);
       })
       .catch((e) => { if (alive) { setErr(e.message); setLoading(false); } });
@@ -189,8 +200,8 @@ export function ClassicGacha({ onTradeMarket }) {
   if (err) return <div className="order-error">Couldn’t load packs: {err}</div>;
   if (machines.length === 0) return <div className="empty-state">No packs available right now.</div>;
 
-  const base = machines.filter((m) => ALLOWED_GAMES.has(m.game) && !HIDDEN_MACHINES.has(m.code)); // Pokémon / One Piece / MTG, minus hidden
-  const shown = (game === 'all' ? base : base.filter((m) => m.game === game)).slice().sort((a, b) => Number(a.priceE6) - Number(b.priceE6)); // ascending price
+  const base = machines.filter((m) => ALLOWED_GAMES.has(gameOf(m)) && !HIDDEN_MACHINES.has(m.code)); // Pokémon / One Piece, minus hidden
+  const shown = (game === 'all' ? base : base.filter((m) => gameOf(m) === game)).slice().sort((a, b) => Number(a.priceE6) - Number(b.priceE6)); // ascending price
   const machine = machines.find((m) => m.code === selected) ?? shown[0] ?? base[0] ?? machines[0];
   const topCards = cards ? [...cards].sort((a, b) => Number(b.valueE6) - Number(a.valueE6)).slice(0, 25) : null; // top 25 by value
   const totalE6 = String(Number(machine.priceE6 || 0) * qty);
@@ -244,7 +255,7 @@ export function ClassicGacha({ onTradeMarket }) {
       <div className="gacha-main">
         <aside className="gacha-machine">
           <div className="gacha-machine-art">
-            <span className="gacha-machine-badge">★ Standard</span>
+            {(() => { const b = badgeOf(machine.priceE6); return <span className={`gacha-machine-badge badge-${b.cls}`}>★ {b.label}</span>; })()}
             {machine.video ? (
               <video className="gacha-machine-media" autoPlay loop muted playsInline poster={machine.image ?? undefined} key={machine.code}>
                 {machine.videoHevc && <source src={machine.videoHevc} type="video/mp4" />}
