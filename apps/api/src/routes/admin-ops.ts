@@ -29,7 +29,7 @@ import { getUserPositions, liquidateAllEligible } from '../services/engine.ts';
 import { withdrawalAutoProcessView, setWithdrawalAutoProcess } from '../services/withdrawal-config.ts';
 import { getCustomerHistory } from '../services/history.ts';
 import { adminClosePosition, adminCloseUserPositions, adminCloseAllPositions } from '../services/admin-close.ts';
-import { listAffiliates, setAffiliateTerms, maxCashbackBps } from '../services/affiliate.ts';
+import { listAffiliates, setAffiliateTerms, maxCashbackBps, platformDefaultsView, setPlatformAffiliateDefaults } from '../services/affiliate.ts';
 
 /**
  * Non-custody operator endpoints (ROADMAP §2). Unlike the custody admin routes, these register
@@ -49,6 +49,7 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/admin/affiliates', rl(config.routeRateLimits.admin), async () => ({
     affiliates: await listAffiliates(await getDb()),
     maxCashbackBps: maxCashbackBps(),
+    platformDefaults: platformDefaultsView(), // the all-codes fallback rates (override per wallet below)
   }));
   app.post('/admin/affiliates', rl(config.routeRateLimits.admin), async (req) => {
     // setAffiliateTerms validates pubkey + the bps bounds itself, so pass the body straight through.
@@ -56,6 +57,12 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
       pubkey?: string; code?: string; cashbackBps: unknown; feeDiscountBps: unknown; label?: string; active?: boolean;
     };
     return setAffiliateTerms(await getDb(), { ...b, pubkey: b.pubkey ?? '' });
+  });
+  // Platform-wide default cashback + fee-discount applied to every referral code that has no active per-wallet
+  // terms. setPlatformAffiliateDefaults validates both bps bounds (incl. the cashback ceiling).
+  app.post('/admin/affiliate-defaults', rl(config.routeRateLimits.admin), async (req) => {
+    const b = (req.body ?? {}) as { cashbackBps: unknown; feeDiscountBps: unknown };
+    return setPlatformAffiliateDefaults(await getDb(), b);
   });
 
   // Set a manual price for a market (card or index). Pins by default.
