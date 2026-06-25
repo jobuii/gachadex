@@ -41,15 +41,17 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   const timers = useRef([]);
   const started = useRef(false);
   const mountAt = useRef(0); // when the rip started → so the year beat can wait out the rip
+  const raf = useRef(0); // the EPIC value count-up frame → cancelled on unmount
 
   useEffect(() => {
     mountAt.current = performance.now();
     playSound('rip', { debounceMs: 500 }); // once, as the charging screen opens (debounce drops StrictMode's echo)
     const t = timers;
     const loop = coinLoop;
+    const rf = raf;
     // Re-arm `started` on cleanup so React 18 StrictMode's dev mount→unmount→mount double-invoke reschedules
     // the beats instead of clearing them and freezing on the card-back (rare.win's CardReveal hits the same).
-    return () => { t.current.forEach(clearTimeout); t.current = []; stopSound(loop.current); started.current = false; };
+    return () => { t.current.forEach(clearTimeout); t.current = []; cancelAnimationFrame(rf.current); stopSound(loop.current); started.current = false; };
   }, []);
 
   // Once the open result lands, run the beat sequence exactly once.
@@ -86,9 +88,9 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
         const step = (now) => {
           const k = Math.min(1, (now - start) / dur);
           setShownE6(Math.round(target * k));
-          if (k < 1) requestAnimationFrame(step);
+          raf.current = k < 1 ? requestAnimationFrame(step) : 0;
         };
-        requestAnimationFrame(step);
+        raf.current = requestAnimationFrame(step);
       } else if (big === 'rare') {
         playSound('confetti', { volume: 0.5 });
       }
