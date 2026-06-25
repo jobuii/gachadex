@@ -1791,25 +1791,61 @@ td.addr:hover { text-decoration: underline; }
 .avatar-cell.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 .avatar-cell img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
 
-/* Markets: Indices | Cards top-level switch */
-.markets-mode { display: flex; gap: 0.4rem; margin: 0 0 0.85rem; }
-.markets-mode button { padding: 0.45rem 1.15rem; font-size: 0.6rem; background: var(--bg-3); color: var(--text-muted);
-  border: 1px solid var(--border); border-radius: var(--pill); cursor: pointer; text-transform: uppercase; letter-spacing: 0.05em; }
-.markets-mode button:hover { color: var(--text); border-color: var(--accent); }
-.markets-mode button.active { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 700; }
+/* ─── Markets: Indices | Cards ────────────────────────────────────────────── */
+.markets-view { height: calc(100vh - 64px); display: flex; flex-direction: column; background: var(--bg); }
+.markets-mode { display: flex; gap: 0.5rem; padding: 1.1rem 1.5rem 0.9rem; flex: none; }
+.markets-mode button { font-family: var(--font-chat); font-size: 0.74rem; font-weight: 600; letter-spacing: 0.02em;
+  padding: 0.5rem 1.35rem; background: var(--bg-2); color: var(--text-muted); border: 1px solid var(--border);
+  border-radius: 999px; cursor: pointer; transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease; }
+.markets-mode button:hover { color: var(--text); border-color: var(--text-muted); }
+.markets-mode button.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+.markets-view > .index-overview { flex: 1; min-height: 0; overflow-y: auto; padding: 0 1.5rem 2rem; }
+.markets-view > .screener { flex: 1; min-height: 0; height: auto; } /* the Cards screener fills the space under the toggle */
 
-/* Index overview table (Markets → Indices) */
-.io-blurb { font-size: 0.72rem; color: var(--text-muted); margin: 0 0 0.7rem; line-height: 1.55; }
+/* ─── Index overview: boxed game sections (Pokémon / One Piece / Magic) ────── */
+.io-blurb { font-family: var(--font-chat); font-size: 0.78rem; color: var(--text-muted); line-height: 1.6;
+  margin: 0 0 1.1rem; max-width: 72ch; }
+.io-blurb strong { color: var(--text); }
+.io-section { background: var(--bg-2); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; margin-bottom: 1.25rem; }
+.io-section-head { display: flex; align-items: center; gap: 0.6rem; padding: 0.8rem 1.1rem;
+  border-bottom: 1px solid var(--border); box-shadow: inset 3px 0 0 var(--game-color, var(--accent)); }
+.io-section-dot { width: 9px; height: 9px; border-radius: 50%; flex: none;
+  background: var(--game-color, var(--accent)); box-shadow: 0 0 9px var(--game-color, var(--accent)); }
+.io-section-head h3 { font-family: var(--font-chat); font-size: 0.94rem; font-weight: 700; color: var(--text); margin: 0; letter-spacing: 0.01em; }
+.io-section-count { margin-left: auto; font-family: var(--font-chat); font-size: 0.64rem; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.07em; }
+
 .io-scroll { overflow-x: auto; }
-.io-table { width: 100%; border-collapse: collapse; font-size: 0.66rem; }
-.io-table th { text-align: left; padding: 0.5rem 0.65rem; color: var(--text-muted); font-weight: 600;
-  border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.57rem; white-space: nowrap; }
-.io-table td { padding: 0.5rem 0.65rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
-.io-table td.num, .io-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
-.io-table tr.io-series td { color: var(--accent-lit); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
-  font-size: 0.57rem; padding-top: 0.85rem; border-bottom: none; }
-.io-table tbody tr:not(.io-series):hover { background: var(--bg-3); }
-.io-name { font-weight: 600; }
-.io-soon { margin-left: 0.45rem; font-size: 0.5rem; color: var(--text-muted); border: 1px solid var(--border);
-  border-radius: 4px; padding: 0.05rem 0.32rem; text-transform: uppercase; letter-spacing: 0.04em; }
-.io-range { color: var(--text-muted); }
+.io-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.io-table thead th { background: var(--bg-2); text-align: left; white-space: nowrap;
+  font-family: var(--font-chat); font-size: 0.58rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-muted); padding: 0.62rem 0.9rem; border-bottom: 1px solid var(--border); }
+.io-table th.num { text-align: right; }
+.io-table td { padding: 0.66rem 0.9rem; white-space: nowrap; vertical-align: middle;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+.io-table tbody tr:last-child td { border-bottom: 0; }
+.io-table td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); font-size: 0.76rem;
+  font-family: var(--font-num, ui-monospace, 'JetBrains Mono', monospace); }
+.io-row { cursor: pointer; transition: background-color 110ms ease; }
+.io-row:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.io-row.io-row-soon { cursor: default; opacity: 0.55; }
+
+/* series subsection divider inside a game panel (GJ / G&P / Pokedaq) */
+.io-subhead td { padding: 0.7rem 0.9rem 0.25rem; border-bottom: 0; font-family: var(--font-chat); font-size: 0.56rem;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent-lit); }
+
+.io-name { font-family: var(--font-chat); font-size: 0.8rem; font-weight: 600; color: var(--text); }
+.io-table td.io-price { font-weight: 700; }
+.io-table td.io-range { color: var(--text-muted); }
+.io-table td.io-delta.up { color: var(--success); }
+.io-table td.io-delta.down { color: var(--danger); }
+.io-table td.io-delta.muted { color: var(--text-muted); }
+
+.io-soon { margin-left: 0.5rem; font-family: var(--font-chat); font-size: 0.52rem; color: var(--text-muted); font-weight: 600;
+  border: 1px solid var(--border); border-radius: 5px; padding: 0.08rem 0.38rem; text-transform: uppercase; letter-spacing: 0.05em; vertical-align: middle; }
+.io-action { width: 1%; }
+.io-cta { display: inline-block; font-family: var(--font-chat); font-size: 0.66rem; font-weight: 600; color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: var(--pill); padding: 0.26rem 0.62rem; white-space: nowrap;
+  opacity: 0; transition: opacity 110ms ease, color 110ms ease, border-color 110ms ease; }
+.io-row:hover .io-cta { opacity: 1; color: var(--text); border-color: var(--text-muted); }
+@media (hover: none) { .io-cta { opacity: 0.65; } }
