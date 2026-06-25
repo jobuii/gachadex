@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { useWallet } from '@solana/wallet-adapter-react';
 import * as api from '../../lib/api.js';
-import { signAndSubmitNftWithdrawal } from '../../lib/withdraw.js';
 import { GachaReveal } from './GachaReveal.jsx';
 import { GachaSummary } from './GachaSummary.jsx';
+import { GachaInventory } from './GachaInventory.jsx';
 import { RARITY_COLORS, usd } from './gacha-util.js';
 
 // Classic Gacha (docs/classic-gacha-cc-packs-spec.md, P0–P4). Browses the live Collector Crypt machines (a
@@ -56,7 +55,7 @@ export function ClassicGacha({ onTradeMarket }) {
   const [instantCutBps, setInstantCutBps] = useState(1000); // GDEX cut on an instant sell-back (from /health); drives the net shown
   const [tokens, setTokens] = useState(null); // { balance, untilFreePackTokens }
   const [tokensEnabled, setTokensEnabled] = useState(false);
-  const { signMessage } = useWallet();
+  const [invVersion, setInvVersion] = useState(0); // bump → the <GachaInventory> panel reloads (after a pull/sell)
 
   useEffect(() => {
     let alive = true;
@@ -80,7 +79,7 @@ export function ClassicGacha({ onTradeMarket }) {
     return () => { alive = false; };
   }, [selected]);
 
-  const loadInventory = () => { if (!api.hasSession()) return; api.getGachaInventory().then((r) => setInventory(r.inventory ?? [])).catch(() => {}); };
+  const loadInventory = () => { setInvVersion((v) => v + 1); if (!api.hasSession()) return; api.getGachaInventory().then((r) => setInventory(r.inventory ?? [])).catch(() => {}); };
   useEffect(() => { loadInventory(); }, []);
   // Loyalty Tokens: the balance/progress, and whether spending Tokens is enabled (earn always accrues).
   const loadTokens = () => { if (!api.hasSession()) return; api.getTokenBalance().then(setTokens).catch(() => {}); };
@@ -179,20 +178,6 @@ export function ClassicGacha({ onTradeMarket }) {
 
   // Trade tie-in: jump to the card's GDEX perp market (only shown when the won card matched one).
   const trade = (item) => { if (onTradeMarket && item?.marketId) onTradeMarket({ id: item.marketId }); };
-
-  // Withdraw the real graded-card NFT to the user's own wallet: a fresh wallet signature over (mint, dest).
-  const withdraw = async (item) => {
-    setRipErr(null);
-    if (!signMessage) { setRipErr('Connect a wallet that can sign messages to withdraw.'); return; }
-    const dest = window.prompt('Withdraw this card NFT to which Solana wallet address?');
-    if (!dest) return;
-    try {
-      await signAndSubmitNftWithdrawal({ prizeId: item.id, dest: dest.trim(), signMessage });
-      loadInventory();
-    } catch (e) {
-      setRipErr(e?.status === 401 ? 'Sign in to withdraw.' : e.message);
-    }
-  };
 
   if (loading) return <div className="empty-state">Loading packs…</div>;
   if (err) return <div className="order-error">Couldn’t load packs: {err}</div>;
@@ -338,29 +323,7 @@ export function ClassicGacha({ onTradeMarket }) {
         </section>
       </div>
 
-      {inventory.length > 0 && (
-        <section className="gacha-inventory">
-          <h4>Your pulls ({inventory.length})</h4>
-          <div className="gacha-card-grid">
-            {inventory.map((it) => (
-              <div key={it.id} className="gacha-card">
-                {it.imageUrl && <img src={it.imageUrl} alt={it.name ?? ''} loading="lazy" referrerPolicy="no-referrer" onError={hideBrokenImg} />}
-                <span className="gacha-card-name" title={it.name ?? ''}>{it.name ?? 'card'}{it.grade ? ` · ${it.grade}` : ''}</span>
-                <span className="gacha-card-val">{usd(it.valueE6)}</span>
-                {it.status === 'held' ? (
-                  <>
-                    <button className="btn-ghost sm" onClick={() => sellBack(it)}>Sell back</button>
-                    {it.marketId && <button className="btn-ghost sm" onClick={() => trade(it)}>Trade</button>}
-                    <button className="btn-ghost sm" onClick={() => withdraw(it)}>Withdraw</button>
-                  </>
-                ) : (
-                  <span className="muted" style={{ fontSize: '0.72rem' }}>Withdrawal in progress…</span>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      <GachaInventory heading="Your pulls" onTradeMarket={onTradeMarket} refreshKey={invVersion} />
 
       <p className="muted gacha-note">Real graded-card packs from Collector Crypt — bought with your GachaDex balance. Sell a pull back for USDC (GDEX keeps 5%) or keep it.</p>
 
