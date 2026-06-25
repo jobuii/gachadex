@@ -37,6 +37,7 @@ export function ProfileBanner({ balance }) {
     try {
       await api.setAvatar(path);
       setProfile((p) => ({ ...p, avatar: path }));
+      window.dispatchEvent(new Event('profile:changed')); // let chat update the composer avatar immediately
       setPickerOpen(false);
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };
@@ -47,6 +48,7 @@ export function ProfileBanner({ balance }) {
     try {
       const r = await api.setUsername(name);
       setProfile((p) => ({ ...p, username: r.username, handle: r.username }));
+      window.dispatchEvent(new Event('profile:changed')); // let chat update the composer handle immediately
       setEditName(false);
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };

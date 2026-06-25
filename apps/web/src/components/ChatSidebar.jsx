@@ -164,16 +164,20 @@ export function ChatSidebar({ open, onToggle }) {
     }
   };
 
-  // load my chat profile (username + handle) when signed in
+  // load my chat profile (username + handle + avatar) when signed in, and refetch when the Portfolio banner
+  // changes the avatar/name so the composer reflects it immediately (message rows self-heal on the next poll).
   useEffect(() => {
     if (!user) {
       setMe(null);
       return;
     }
     let alive = true;
-    api.getProfile().then((p) => alive && setMe(p)).catch(() => {});
+    const loadMe = () => api.getProfile().then((p) => alive && setMe(p)).catch(() => {});
+    loadMe();
+    window.addEventListener('profile:changed', loadMe);
     return () => {
       alive = false;
+      window.removeEventListener('profile:changed', loadMe);
     };
   }, [user]);
 

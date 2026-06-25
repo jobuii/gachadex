@@ -1784,7 +1784,9 @@ td.addr:hover { text-decoration: underline; }
 .avatar-search { width: 120px; }
 .avatar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 0.4rem; padding: 0.8rem 1rem; overflow-y: auto; }
 .avatar-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: var(--bg-3);
-  border: 1px solid var(--border); border-radius: 8px; cursor: pointer; padding: 4px; }
+  border: 1px solid var(--border); border-radius: 8px; cursor: pointer; padding: 4px;
+  /* skip layout/paint for off-screen sprites so the grid opens instantly regardless of count */
+  content-visibility: auto; contain-intrinsic-size: 56px; }
 .avatar-cell:hover { border-color: var(--accent); background: var(--bg); }
 .avatar-cell.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 .avatar-cell img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
