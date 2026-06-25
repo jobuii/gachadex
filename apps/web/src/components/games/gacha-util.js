@@ -5,6 +5,8 @@ import { formatUsd } from '@pokex/pricing';
 
 // red · green · violet · gold. Each component keeps its own tiny lookup wrapper (their fallbacks differ).
 export const RARITY_COLORS = { common: '#ef4444', uncommon: '#22c55e', rare: '#a855f7', epic: '#ffc93c' };
+// the four tiers in display order (common → epic), derived from the colour map so they can't drift.
+export const RARITY_TIERS = Object.keys(RARITY_COLORS);
 
 // micro-USD integer string → display string ('|| 0' guards '', null, undefined).
 export const usd = (e6) => formatUsd(BigInt(e6 || 0));

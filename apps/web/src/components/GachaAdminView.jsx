@@ -2,10 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { formatUsd } from '@pokex/pricing';
 import * as api from '../lib/api.js';
 import { Stat, PnlStat } from './adminStats.jsx';
+import { RARITY_TIERS } from './games/gacha-util.js';
 
-const RTIERS = ['common', 'uncommon', 'rare', 'epic'];
 // realized odds: the % of pulls in each tier (C/U/R/E) for a count map + total.
-const oddsStr = (counts, total) => RTIERS.map((r) => `${r[0].toUpperCase()} ${total ? Math.round(((counts[r] ?? 0) / total) * 100) : 0}%`).join(' · ');
+const oddsStr = (counts, total) => RARITY_TIERS.map((r) => `${r[0].toUpperCase()} ${total ? Math.round(((counts[r] ?? 0) / total) * 100) : 0}%`).join(' · ');
 
 /**
  * Operator Classic Gacha view (docs/classic-gacha-cc-packs-spec.md §12). The economics readout (cut revenue vs
