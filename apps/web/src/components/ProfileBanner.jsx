@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { formatUsd } from '@pokex/pricing';
+import { formatUsd, shortenPubkey } from '@pokex/pricing';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAuth } from '../auth/AuthContext';
+import { useChat } from '../store/chat';
+import { useCopy } from '../lib/useCopy.js';
 import { avatarSrc, avatarFallback } from '../lib/avatar.js';
 import { AvatarPicker } from './AvatarPicker';
 import * as api from '../lib/api.js';
-
-const shortPk = (pk) => (pk ? `${pk.slice(0, 4)}…${pk.slice(-4)}` : '');
 
 // Portfolio header: avatar (click to change), username (click to rename — reuses /me/username), wallet, and
 // a slim strip of DEX stats. The avatar + username flow the same identity that shows in chat.
@@ -19,7 +19,8 @@ export function ProfileBanner({ balance }) {
   const [nameDraft, setNameDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopy(1200);
+  const relabel = useChat((s) => s.relabel);
 
   const load = useCallback(() => {
     if (user) api.getProfile().then(setProfile).catch(() => {});
@@ -29,7 +30,7 @@ export function ProfileBanner({ balance }) {
   if (!user) return null;
   const pk = publicKey?.toBase58() ?? '';
   const av = avatarSrc(profile?.avatar, user.id);
-  const handle = profile?.username || profile?.handle || shortPk(pk);
+  const handle = profile?.username || profile?.handle || shortenPubkey(pk);
   const realized = profile ? BigInt(profile.realizedE6) : null;
 
   const pickAvatar = async (path) => {
@@ -48,17 +49,11 @@ export function ProfileBanner({ balance }) {
     try {
       const r = await api.setUsername(name);
       setProfile((p) => ({ ...p, username: r.username, handle: r.username }));
-      window.dispatchEvent(new Event('profile:changed')); // let chat update the composer handle immediately
+      relabel(user.id, r.username); // re-label my already-rendered chat rows instantly (same as the chat editor)
+      window.dispatchEvent(new Event('profile:changed')); // and refresh the chat composer's own handle
       setEditName(false);
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };
-  const copyPk = () => {
-    if (!pk) return;
-    navigator.clipboard?.writeText(pk);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
-  };
-
   return (
     <div className="pf-banner">
       <div aria-hidden className="pf-banner-glow" />
@@ -89,9 +84,9 @@ export function ProfileBanner({ balance }) {
             <span className="pf-name-pencil" aria-hidden>✎</span>
           </button>
         )}
-        <button className="pf-wallet" onClick={copyPk} title="Copy wallet address">
+        <button className="pf-wallet" onClick={() => pk && copy(pk)} title="Copy wallet address">
           <span className="pf-wallet-k">Wallet</span>
-          <span className="pf-wallet-v">{shortPk(pk)}</span>
+          <span className="pf-wallet-v">{shortenPubkey(pk)}</span>
           <span className="pf-wallet-copy">{copied ? '✓' : '⧉'}</span>
         </button>
         {err && <div className="order-error pf-err">{err}</div>}

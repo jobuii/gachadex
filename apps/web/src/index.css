@@ -1769,7 +1769,7 @@ td.addr:hover { text-decoration: underline; }
 .pf-stat-k { font-size: 0.6rem; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
 .pf-stat-v { font-size: 1.05rem; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--text); }
 
-.avatar-modal-backdrop { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,0.6);
+.avatar-modal-backdrop { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.6);
   display: flex; align-items: center; justify-content: center; padding: 1rem; }
 .avatar-modal { width: min(560px, 96vw); max-height: 86vh; display: flex; flex-direction: column;
   background: var(--bg-2); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
