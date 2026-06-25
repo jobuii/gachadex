@@ -1862,11 +1862,13 @@ td.addr:hover { text-decoration: underline; }
 .docs-brand { display: inline-flex; align-items: baseline; gap: 0.55rem; background: none; border: none; cursor: pointer; padding: 0; }
 .docs-brand em { font-style: normal; font-family: var(--font-chat); font-size: 0.6rem; color: var(--text-muted);
   text-transform: uppercase; letter-spacing: 0.18em; }
-.docs-launch { padding: 0.55rem 1.25rem; font-family: var(--font-chat); font-size: 0.8rem; font-weight: 700; letter-spacing: 0.02em;
-  background: var(--accent); color: #fff; border: 1px solid var(--accent-lit); border-radius: var(--pill); cursor: pointer; white-space: nowrap;
-  box-shadow: 0 3px 16px color-mix(in srgb, var(--accent) 42%, transparent); transition: background-color 0.13s, box-shadow 0.13s, transform 0.13s; }
-.docs-launch:hover { background: var(--accent-lit); transform: translateY(-1px);
-  box-shadow: 0 5px 22px color-mix(in srgb, var(--accent-lit) 50%, transparent); }
+/* mirrors the landing's .lp-btn.lp-btn-sm "ENTER ▶" — gradient pill, dark ink, uppercase mono */
+.docs-launch { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; cursor: pointer; white-space: nowrap;
+  font-family: var(--font-num, 'JetBrains Mono', ui-monospace, monospace); font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+  font-size: 0.7rem; padding: 0.6rem 1rem; border-radius: 7px; border: 1px solid transparent;
+  background: var(--grad, var(--accent)); color: #06060a; transition: transform 0.12s ease, box-shadow 0.12s ease; }
+.docs-launch:hover { transform: translateY(-2px); box-shadow: 0 10px 28px color-mix(in srgb, var(--accent) 45%, transparent); }
+.docs-launch:active { transform: translateY(0); }
 
 /* full-bleed 3-column shell: nav · content · on-this-page (mirrors .main-grid 320px 1fr 280px) */
 .docs-body { display: grid; grid-template-columns: 264px minmax(0, 1fr) 232px; align-items: start; }

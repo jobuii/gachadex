@@ -70,7 +70,7 @@ export function Docs() {
           <em>docs</em>
         </button>
         <button className="docs-launch" onClick={() => navigate('/exchange')}>
-          Launch app →
+          Launch app ▶
         </button>
       </header>
 
