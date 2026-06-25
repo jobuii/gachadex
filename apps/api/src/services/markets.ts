@@ -222,6 +222,13 @@ export async function getMarketDetails(db: Db, id: string): Promise<MarketDetail
   };
 }
 
+/** Percentage change of `cur` vs a reference price (2 dp), or null when there's no reference (or it's 0).
+ *  Shared by the 24h change + the index-overview windows so the rounding/guard stay identical. */
+function pctChange(cur: bigint, ref: bigint | undefined): number | null {
+  if (ref === undefined || ref === 0n) return null;
+  return Math.round((Number(cur - ref) / Number(ref)) * 100 * 100) / 100;
+}
+
 export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
   const markets = await db.query<MarketRow>(`SELECT ${COLS} FROM markets ORDER BY kind DESC, display_name`);
 
@@ -243,10 +250,8 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
   const changeMap = new Map<string, number>();
   for (const r of ref.rows) {
     const cur = latestMap.get(r.market_id)?.mark_e6;
-    if (cur && BigInt(r.ref) !== 0n) {
-      const change = (Number(BigInt(cur) - BigInt(r.ref)) / Number(BigInt(r.ref))) * 100;
-      changeMap.set(r.market_id, Math.round(change * 100) / 100);
-    }
+    const ch = cur ? pctChange(BigInt(cur), BigInt(r.ref)) : null;
+    if (ch !== null) changeMap.set(r.market_id, ch);
   }
 
   // 24h traded notional (USD) per market — same qty×price/1e12 as the candle volume — for the
@@ -293,6 +298,67 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
         jpy: m.jpy,
       };
     });
+}
+
+export interface IndexOverviewRow {
+  marketId: string;
+  change1wPct: number | null; // null = the index is younger than the window (not enough history)
+  change1mPct: number | null;
+  changeYtdPct: number | null; // an index launched this year has YTD = since-launch (correct year-to-date)
+  high52wE6: string | null; // high/low over AVAILABLE history (<= 1y), micro-USD; full-year once it accrues
+  low52wE6: string | null;
+}
+
+/** Time-windowed stats for the Markets "Indices" overview table — per index market: 1w / 1m / YTD % change
+ *  plus the 52-week high/low, all from the same `marks` series the chart + 24h change use. Indices are few,
+ *  so this is a handful of cheap indexed queries, run on demand when the Indices sub-tab opens. Current price
+ *  + 24h change still come from the live /markets feed; this only adds the slower-moving windows. */
+export async function indexOverview(db: Db): Promise<IndexOverviewRow[]> {
+  const J = `JOIN markets m ON m.id = mk.market_id AND m.kind = 'index'`;
+  // the last mark at/before a cutoff, per index — same reference logic as the 24h change
+  const refAt = async (cutoffSql: string): Promise<Map<string, bigint>> => {
+    const r = await db.query<{ market_id: string; v: string }>(
+      `SELECT DISTINCT ON (mk.market_id) mk.market_id, mk.mark_price_e6::text AS v
+         FROM marks mk ${J} WHERE mk.computed_at <= ${cutoffSql}
+         ORDER BY mk.market_id, mk.computed_at DESC`,
+    );
+    return new Map(r.rows.map((x) => [x.market_id, BigInt(x.v)]));
+  };
+
+  const [latest, earliest, ref1w, ref1m, refYtd, hl] = await Promise.all([
+    db.query<{ market_id: string; v: string }>(
+      `SELECT DISTINCT ON (mk.market_id) mk.market_id, mk.mark_price_e6::text AS v
+         FROM marks mk ${J} ORDER BY mk.market_id, mk.computed_at DESC`),
+    db.query<{ market_id: string; v: string }>(
+      `SELECT DISTINCT ON (mk.market_id) mk.market_id, mk.mark_price_e6::text AS v
+         FROM marks mk ${J} ORDER BY mk.market_id, mk.computed_at ASC`),
+    refAt(`now() - interval '7 days'`),
+    refAt(`now() - interval '30 days'`),
+    refAt(`date_trunc('year', now())`),
+    db.query<{ market_id: string; hi: string; lo: string }>(
+      `SELECT mk.market_id, max(mk.mark_price_e6)::text AS hi, min(mk.mark_price_e6)::text AS lo
+         FROM marks mk ${J} WHERE mk.computed_at >= now() - interval '365 days'
+         GROUP BY mk.market_id`),
+  ]);
+
+  const curMap = new Map(latest.rows.map((r) => [r.market_id, BigInt(r.v)]));
+  const firstMap = new Map(earliest.rows.map((r) => [r.market_id, BigInt(r.v)]));
+  const hlMap = new Map(hl.rows.map((r) => [r.market_id, { hi: r.hi, lo: r.lo }]));
+
+  return [...curMap.entries()].map(([marketId, cur]) => {
+    const hilo = hlMap.get(marketId);
+    // YTD ref = last mark before Jan 1; an index launched this year has none, so fall back to its earliest
+    // mark — YTD then = since-launch, which IS the correct year-to-date for a mid-year listing.
+    const ytdRef = refYtd.get(marketId) ?? firstMap.get(marketId);
+    return {
+      marketId,
+      change1wPct: pctChange(cur, ref1w.get(marketId)),
+      change1mPct: pctChange(cur, ref1m.get(marketId)),
+      changeYtdPct: pctChange(cur, ytdRef),
+      high52wE6: hilo?.hi ?? null,
+      low52wE6: hilo?.lo ?? null,
+    };
+  });
 }
 
 export interface Candle {

@@ -1790,3 +1790,26 @@ td.addr:hover { text-decoration: underline; }
 .avatar-cell:hover { border-color: var(--accent); background: var(--bg); }
 .avatar-cell.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 .avatar-cell img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+
+/* Markets: Indices | Cards top-level switch */
+.markets-mode { display: flex; gap: 0.4rem; margin: 0 0 0.85rem; }
+.markets-mode button { padding: 0.45rem 1.15rem; font-size: 0.6rem; background: var(--bg-3); color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: var(--pill); cursor: pointer; text-transform: uppercase; letter-spacing: 0.05em; }
+.markets-mode button:hover { color: var(--text); border-color: var(--accent); }
+.markets-mode button.active { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 700; }
+
+/* Index overview table (Markets → Indices) */
+.io-blurb { font-size: 0.72rem; color: var(--text-muted); margin: 0 0 0.7rem; line-height: 1.55; }
+.io-scroll { overflow-x: auto; }
+.io-table { width: 100%; border-collapse: collapse; font-size: 0.66rem; }
+.io-table th { text-align: left; padding: 0.5rem 0.65rem; color: var(--text-muted); font-weight: 600;
+  border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.57rem; white-space: nowrap; }
+.io-table td { padding: 0.5rem 0.65rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.io-table td.num, .io-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.io-table tr.io-series td { color: var(--accent-lit); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  font-size: 0.57rem; padding-top: 0.85rem; border-bottom: none; }
+.io-table tbody tr:not(.io-series):hover { background: var(--bg-3); }
+.io-name { font-weight: 600; }
+.io-soon { margin-left: 0.45rem; font-size: 0.5rem; color: var(--text-muted); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.05rem 0.32rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.io-range { color: var(--text-muted); }

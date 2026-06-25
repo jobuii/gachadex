@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { GAMES } from '@pokex/shared-types';
 import { getDb } from '../db/client.ts';
-import { listMarketsWithData, getCandles, getMarketDetails } from '../services/markets.ts';
+import { listMarketsWithData, getCandles, getMarketDetails, indexOverview } from '../services/markets.ts';
 import { searchCatalog, ensureMarketFromCard } from '../services/providers/search.ts';
 import { getDefaultClient } from '../services/providers/tcgpricelookup.ts';
 import { getDefaultScrydexClient } from '../services/providers/scrydex.ts';
@@ -28,6 +28,10 @@ export async function marketRoutes(app: FastifyInstance): Promise<void> {
     if (!details) throw new HttpError(404, 'market not found');
     return details;
   });
+
+  // Time-windowed stats (1w / 1m / YTD % change + 52w high/low) per index market, for the Markets
+  // "Indices" overview table. Public + cheap (indices are few); the live price + 24h come from /markets.
+  app.get('/markets/index-overview', async () => ({ indices: await indexOverview(await getDb()) }));
 
   // Catalogue search (read-only) is live once the feature flag is on + a search-capable provider drives
   // the oracle — it does NOT depend on the NAV gates (it browses, it doesn't create a market). Routing
