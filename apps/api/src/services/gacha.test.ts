@@ -20,7 +20,7 @@ const { fund, sign } = await import('../test-helpers.ts');
 const { openPack, sellBack, convert, reconcilePending, nftWithdrawNonce, requestNftWithdraw } = await import('./gacha.ts');
 const { reconcileStuckPrizes } = await import('./gacha-reconcile.ts');
 const { pollMachineStock, recentRestocks } = await import('./gacha-stock.ts');
-const { goldEarnedForOpen, goldPriceForPack, earnGold, getGoldSummary } = await import('./gold.ts');
+const { goldEarnedForOpen, goldPriceForPack, earnGold, getGoldSummary, resetGoldBalances } = await import('./gold.ts');
 const { setGachaConfig, gachaAdminConfig } = await import('./gacha-config.ts');
 const { gachaMonitoring } = await import('./gacha-monitoring.ts');
 
@@ -289,6 +289,7 @@ test('gold: a USDC open earns loyalty Gold (PACK_OPEN_EARN)', async () => {
 
 test('gold: a gold-bought open spends Gold, funds CC from the rewards budget, earns nothing', async () => {
   const user = await newUser();
+  await setGachaConfig(db, { payWithGoldEnabled: true }); // general pay-with-Gold (the toggle defaults off)
   await db.tx(async (q) => earnGold(q, user, 100_000n, 'SEED', {})); // enough for a $50 pack (50,000)
   const budgetBefore = await rewardsBudget();
   const collBefore = await collOf(user);
@@ -301,6 +302,7 @@ test('gold: a gold-bought open spends Gold, funds CC from the rewards budget, ea
 
 test('gold: a gold open with too few Gold is rejected (no pack, no charge)', async () => {
   const user = await newUser();
+  await setGachaConfig(db, { payWithGoldEnabled: true });
   await assert.rejects(
     openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'tok-broke', payWith: 'gold' }, { chain: fakeChain(), cc: fakeCc(), ...noWait }),
     /insufficient Gold/i,
@@ -310,6 +312,7 @@ test('gold: a gold open with too few Gold is rejected (no pack, no charge)', asy
 
 test('gold: Σ gold_ledger == gold_balances per user (invariant)', async () => {
   const user = await newUser();
+  await setGachaConfig(db, { payWithGoldEnabled: true });
   await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'tinv1' }, { chain: fakeChain(), cc: fakeCc(), ...noWait }); // +1250
   await db.tx(async (q) => earnGold(q, user, 100_000n, 'SEED', {}));
   await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'tinv2', payWith: 'gold' }, { chain: fakeChain(), cc: fakeCc(), ...noWait }); // -50,000
@@ -320,6 +323,7 @@ test('gold: Σ gold_ledger == gold_balances per user (invariant)', async () => {
 
 test('gold: a refunded gold-bought open returns Gold (not USDC) and reverses the budget', async () => {
   const user = await newUser();
+  await setGachaConfig(db, { payWithGoldEnabled: true });
   await db.tx(async (q) => earnGold(q, user, 100_000n, 'SEED', {}));
   const cc = fakeCc();
   cc.alwaysWait = true;   // CC never reveals
@@ -334,6 +338,47 @@ test('gold: a refunded gold-bought open returns Gold (not USDC) and reverses the
   assert.equal(await goldBal(user), 100_000n);                  // Gold fully returned
   assert.equal(await collOf(user), collBefore);                 // NO USDC credited (no money minted)
   assert.equal(await rewardsBudget(), budgetAfterBuy + PRICE);   // rewards budget reversed
+});
+
+// ── Gold gates: master switch · pay-with-Gold toggle · the free-pack-claim exception · reset ──
+test('gold gate: master OFF rejects a Gold open (earn still works elsewhere)', async () => {
+  const user = await newUser();
+  await setGachaConfig(db, { goldEnabled: false });
+  await db.tx(async (q) => earnGold(q, user, 100_000n, 'SEED', {}));
+  await assert.rejects(openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'gm-off', payWith: 'gold' }, { chain: fakeChain(), cc: fakeCc(), ...noWait }), /Gold is not enabled/);
+  await setGachaConfig(db, { goldEnabled: true }); // restore for later tests
+});
+
+test('gold gate: master ON but pay-with-Gold OFF rejects a general Gold open', async () => {
+  const user = await newUser();
+  await setGachaConfig(db, { goldEnabled: true, payWithGoldEnabled: false });
+  await db.tx(async (q) => earnGold(q, user, 100_000n, 'SEED', {}));
+  await assert.rejects(openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'pwg-off', payWith: 'gold' }, { chain: fakeChain(), cc: fakeCc(), ...noWait }), /paying with Gold is not available/);
+});
+
+test('gold gate: a free-pack CLAIM ($25) succeeds with pay-with-Gold OFF; a non-$25 claim is rejected', async () => {
+  const user = await newUser();
+  await setGachaConfig(db, { goldEnabled: true, payWithGoldEnabled: false });
+  await db.tx(async (q) => earnGold(q, user, 30_000n, 'SEED', {}));
+  const cc25 = fakeCc(); cc25.price = 25; // a $25 machine → gold cost 25,000 == FREE_PACK_GOLD
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'claim25', payWith: 'gold', claim: true }, { chain: fakeChain(), cc: cc25, ...noWait });
+  assert.equal(r.status, 'opened');
+  assert.equal(await goldBal(user), 30_000n - 25_000n); // spent the $25-pack gold price
+  // a claim on a NON-$25 pack is rejected (the claim exception is the $25 reward only)
+  await assert.rejects(openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'claim50', payWith: 'gold', claim: true }, { chain: fakeChain(), cc: fakeCc(), ...noWait }), /free-pack claim is the \$25 pack/);
+});
+
+test('gold reset: zeroes every balance + writes ADMIN_RESET, keeping the Σ invariant', async () => {
+  const u1 = await newUser(); const u2 = await newUser();
+  await db.tx(async (q) => { await earnGold(q, u1, 12_340n, 'SEED', {}); await earnGold(q, u2, 500n, 'SEED', {}); });
+  const r = await resetGoldBalances(db);
+  assert.ok(r.usersReset >= 2);
+  assert.equal(await goldBal(u1), 0n);
+  assert.equal(await goldBal(u2), 0n);
+  const sum1 = BigInt((await db.query<{ s: string }>(`SELECT COALESCE(SUM(delta),0)::text AS s FROM gold_ledger WHERE user_id = $1`, [u1])).rows[0].s);
+  assert.equal(sum1, 0n); // Σ ledger == balance == 0
+  const reset = (await db.query<{ n: string }>(`SELECT COUNT(*)::text AS n FROM gold_ledger WHERE reason = 'ADMIN_RESET'`)).rows[0].n;
+  assert.ok(Number(reset) >= 2);
 });
 
 // ── §12 admin: markup money-path + knob validation + the economics readout ──

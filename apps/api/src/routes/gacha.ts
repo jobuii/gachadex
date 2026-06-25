@@ -78,13 +78,13 @@ export async function gachaRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/gacha/open', rl(config.routeRateLimits.gamePlay, TRADE), async (req) => {
     realGate();
-    const b = (req.body ?? {}) as { machineCode?: string; idempotencyKey?: string; expectedPriceE6?: string; payWith?: string; turbo?: boolean };
+    const b = (req.body ?? {}) as { machineCode?: string; idempotencyKey?: string; expectedPriceE6?: string; payWith?: string; turbo?: boolean; claim?: boolean };
     if (!b.machineCode || !MACHINE_CODE_RE.test(b.machineCode)) throw new HttpError(400, 'bad machine code');
     if (typeof b.idempotencyKey !== 'string' || b.idempotencyKey.length < 1 || b.idempotencyKey.length > 100) throw new HttpError(400, 'bad idempotency key');
     const expectedPriceE6 = typeof b.expectedPriceE6 === 'string' && /^\d{1,20}$/.test(b.expectedPriceE6) ? b.expectedPriceE6 : undefined;
     const payWith = b.payWith === 'gold' ? ('gold' as const) : ('usdc' as const);
     const { openPack } = await gachaSvc();
-    return openPack(await getDb(), req.userId!, { machineCode: b.machineCode, idempotencyKey: b.idempotencyKey, expectedPriceE6, payWith, turbo: b.turbo === true }, { chain: await realChain(), cc: defaultCcClient });
+    return openPack(await getDb(), req.userId!, { machineCode: b.machineCode, idempotencyKey: b.idempotencyKey, expectedPriceE6, payWith, turbo: b.turbo === true, claim: b.claim === true }, { chain: await realChain(), cc: defaultCcClient });
   });
 
   // Poll a single open (the web polls until the reveal lands).

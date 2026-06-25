@@ -55,7 +55,8 @@ export function ClassicGacha({ onTradeMarket }) {
   const [previewSellable, setPreviewSellable] = useState(false); // dev preview: force the single-reveal Sell-back button on
   const [instantCutBps, setInstantCutBps] = useState(1000); // GDEX cut on an instant sell-back (from /health); drives the net shown
   const [gold, setGold] = useState(null); // { balance, untilFreePackGold }
-  const [goldEnabled, setGoldEnabled] = useState(false);
+  const [goldEnabled, setGoldEnabled] = useState(false); // master: show Gold in the UI (earn always accrues)
+  const [payWithGold, setPayWithGold] = useState(false); // gates the USDC/Gold pay choice on machines
   const [invVersion, setInvVersion] = useState(0); // bump → the <GachaInventory> panel reloads (after a pull/sell)
 
   useEffect(() => {
@@ -84,14 +85,14 @@ export function ClassicGacha({ onTradeMarket }) {
   useEffect(() => { loadInventory(); }, []);
   // Loyalty Gold: the balance/progress, and whether spending Gold is enabled (earn always accrues).
   const loadGold = () => { if (!api.hasSession()) return; api.getGoldBalance().then(setGold).catch(() => {}); };
-  useEffect(() => { loadGold(); api.getHealth().then((h) => { setGoldEnabled(!!h.goldEnabled); if (h.gachaInstantCutBps != null) setInstantCutBps(Number(h.gachaInstantCutBps)); }).catch(() => {}); }, []);
+  useEffect(() => { loadGold(); api.getHealth().then((h) => { setGoldEnabled(!!h.goldEnabled); setPayWithGold(!!h.payWithGoldEnabled); if (h.gachaInstantCutBps != null) setInstantCutBps(Number(h.gachaInstantCutBps)); }).catch(() => {}); }, []);
 
   const requestRip = (m) => { setRipErr(null); setConfirmMachine(m); }; // → buy-confirm modal
 
   // Open one pack: charge, then poll until CC's reveal lands (the payment webhook can lag a few seconds).
   const openOne = async (m) => {
     const key = crypto.randomUUID();
-    let r = await api.openGachaPack(m.code, key, m.priceE6, payWith, yolo);
+    let r = await api.openGachaPack(m.code, key, m.priceE6, payWithGold ? payWith : 'usdc', yolo); // never send 'gold' if pay-with-Gold is off
     for (let i = 0; i < 12 && r.status === 'paid'; i++) {
       await new Promise((res) => setTimeout(res, 2000));
       r = await api.getGachaOpen(r.openId);
@@ -197,7 +198,7 @@ export function ClassicGacha({ onTradeMarket }) {
       <div className="games-hero">
         <h2>Classic Gacha</h2>
         <p className="muted">Real graded-card packs from Collector Crypt — win a genuine slab, sell it back or keep it.</p>
-        {gold && (
+        {goldEnabled && gold && (
           <div className="gacha-gold-bal" title="Loyalty Gold — earned on every USDC open">
             <GoldBar size={16} />
             <strong>{fmtGold(gold.balance)}</strong>&nbsp;Gold
@@ -263,7 +264,7 @@ export function ClassicGacha({ onTradeMarket }) {
               <button type="button" onClick={() => setQty((q) => Math.min(10, q + 1))} disabled={qty >= 10} aria-label="More packs">+</button>
             </div>
           </div>
-          {goldEnabled && (
+          {payWithGold && (
             <div className="gacha-paywith" role="group" aria-label="Pay with">
               <button className={`gacha-pay ${payWith === 'usdc' ? 'active' : ''}`} onClick={() => setPayWith('usdc')}>USDC</button>
               <button className={`gacha-pay ${payWith === 'gold' ? 'active' : ''}`} onClick={() => setPayWith('gold')}><GoldBar size={15} /> Gold</button>

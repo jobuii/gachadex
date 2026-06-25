@@ -6,7 +6,7 @@ import { usdc } from '../money.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './ledger.ts';
 import { getNftCustodyKeypair } from './custody/wallet.ts';
 import { createNftWithdrawNonce, verifyNftWithdrawStepUp } from './auth.ts';
-import { spendGold, earnGold, goldEarnedForOpen, goldPriceForPack } from './gold.ts';
+import { spendGold, earnGold, goldEarnedForOpen, goldPriceForPack, FREE_PACK_GOLD } from './gold.ts';
 import { openPosition } from './engine.ts';
 import { lastMarkE6 } from './marks.ts';
 import { gachaConfig, gachaMarkupE6 } from './gacha-config.ts';
@@ -112,10 +112,9 @@ async function getOpenRow(db: Db, openId: string): Promise<OpenRow | null> {
 }
 
 // ─────────────────────────────── open ───────────────────────────────
-export async function openPack(db: Db, userId: string, opts: { machineCode: string; idempotencyKey: string; expectedPriceE6?: string; payWith?: 'usdc' | 'gold'; turbo?: boolean }, deps: GachaDeps): Promise<OpenResult> {
+export async function openPack(db: Db, userId: string, opts: { machineCode: string; idempotencyKey: string; expectedPriceE6?: string; payWith?: 'usdc' | 'gold'; turbo?: boolean; claim?: boolean }, deps: GachaDeps): Promise<OpenResult> {
   if (!config.classicGachaEnabled) throw GACHA_OFF();
   const payWith = opts.payWith === 'gold' ? 'gold' : 'usdc';
-  if (payWith === 'gold' && !config.goldEnabled) throw new HttpError(403, 'paying with Gold is not available');
   const turbo = opts.turbo === true; // YOLO: CC auto-sells a Common for instant USDC instead of delivering the slab
   const cc = deps.cc ?? defaultCcClient;
   const { chain } = deps;
@@ -124,6 +123,13 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
   if (!machine) throw new HttpError(404, 'unknown machine');
   const price = usdc(machine.price); // $ → micro-USDC (CC's base price — what we pay CC on-chain)
   if (price <= 0n) throw new HttpError(503, 'machine price unavailable');
+  // Gold spend gates: the master switch + the pay-with-Gold toggle, with a free-pack-claim exception — the $25
+  // reward pack is claimable with Gold whenever the master is on, even if general pay-with-Gold is off (spec §6b).
+  if (payWith === 'gold') {
+    if (!gachaConfig.goldEnabled.get()) throw new HttpError(403, 'Gold is not enabled', 'gold_disabled');
+    if (opts.claim !== true && !gachaConfig.payWithGoldEnabled.get()) throw new HttpError(403, 'paying with Gold is not available', 'pay_with_gold_off');
+    if (opts.claim === true && goldPriceForPack(price) !== FREE_PACK_GOLD) throw new HttpError(403, 'a free-pack claim is the $25 pack only', 'not_free_pack');
+  }
   // Optional GDEX markup over CC's price (USDC buys only; default 0 = no change). The user pays `allIn`; CC still
   // gets `price`; GDEX keeps `markup` as FEE_REVENUE (spec §6 — the "turn on if sell-back drops" lever).
   const markup = payWith === 'usdc' ? gachaMarkupE6(price, gachaConfig.markupBps.get()) : 0n;

@@ -9,6 +9,7 @@ import { gachaAdminConfig, setGachaConfig } from '../services/gacha-config.ts';
 import { gachaMonitoring } from '../services/gacha-monitoring.ts';
 import { reconcileStuckPrizes } from '../services/gacha-reconcile.ts'; // web3-free (DB + DAS) → eager-safe
 import { recentRestocks } from '../services/gacha-stock.ts'; // web3-free (DB + CC read client) → eager-safe
+import { resetGoldBalances } from '../services/gold.ts'; // web3-free (DB only) → eager-safe
 import { getMachines, toLobbyMachine } from '../services/providers/collectorcrypt.ts';
 import { setManualPrice, setPricePin } from '../services/admin-pricing.ts';
 import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from '../services/insurance.ts';
@@ -313,4 +314,7 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     const graceSec = Number((req.body as { graceSec?: number } | undefined)?.graceSec);
     return reconcileStuckPrizes(await getDb(), Number.isFinite(graceSec) && graceSec >= 0 ? { graceSec } : {});
   });
+
+  // Zero EVERY customer's loyalty Gold balance (destructive; writes an ADMIN_RESET ledger entry per user).
+  app.post('/admin/gacha/reset-gold', rl(config.routeRateLimits.admin), async () => resetGoldBalances(await getDb()));
 }

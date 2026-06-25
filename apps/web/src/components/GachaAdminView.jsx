@@ -101,6 +101,12 @@ export function GachaAdminView({ adminKey }) {
     act(() => api.adminSetGachaConfig({ disabledMachines: [...disabled] }, adminKey));
   };
 
+  const setGold = (patch) => act(() => api.adminSetGachaConfig(patch, adminKey));
+  const resetGold = () => {
+    if (window.prompt('Type RESET to zero EVERY customer’s Gold balance. This cannot be undone.') !== 'RESET') return;
+    act(async () => { const r = await api.adminResetGold(adminKey); setMsg(`Reset ${r.usersReset} Gold balance(s) to zero.`); });
+  };
+
   const reconcileStuck = () => act(async () => {
     const r = await api.adminReconcileStuckGacha(adminKey);
     setMsg(`Reconciled — ${r.revertedToHeld} released to held · ${r.markedWithdrawn} marked withdrawn · ${r.flaggedSelling} flagged for manual credit · ${r.skipped} skipped (DAS).`);
@@ -182,6 +188,20 @@ export function GachaAdminView({ adminKey }) {
         <label className="field-label"><span>Purchase markup (%)</span><input type="number" step="0.1" min="0" value={markup} onChange={(e) => setMarkup(e.target.value)} /></label>
       </div>
       <button className="btn-primary" disabled={busy} onClick={saveKnobs}>Save knobs</button>
+
+      <h3 style={{ marginTop: '1.5rem' }}>Gold (loyalty)</h3>
+      <div className="gacha-admin-machines">
+        <label className="games-admin-row">
+          <input type="checkbox" checked={!!cfg.goldEnabled} disabled={busy} onChange={(e) => setGold({ goldEnabled: e.target.checked })} />
+          <span>Gold system <span className="muted">· on = customers see + can claim Gold; off = hidden in the UI (earn still accrues silently)</span></span>
+        </label>
+        <label className="games-admin-row">
+          <input type="checkbox" checked={!!cfg.payWithGoldEnabled} disabled={busy || !cfg.goldEnabled} onChange={(e) => setGold({ payWithGoldEnabled: e.target.checked })} />
+          <span>Pay with Gold on machines <span className="muted">· off = USDC only (free-pack claim still works); needs the system on</span></span>
+        </label>
+      </div>
+      <button className="btn-ghost" disabled={busy} onClick={resetGold} style={{ marginTop: '0.5rem', color: 'var(--down, #ef4444)' }}>Reset all Gold balances…</button>
+      <p className="muted" style={{ fontSize: '0.76rem' }}>Destructive: zeroes every customer’s Gold (writes an ADMIN_RESET ledger entry per user). Type-to-confirm.</p>
 
       <h3 style={{ marginTop: '1.5rem' }}>Machines ({machines.length})</h3>
       <p className="muted">Untick a machine to hide it from the lobby (live, no deploy).</p>

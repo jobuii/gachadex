@@ -284,6 +284,7 @@ export const adminGetGachaConfig = (adminKey) => adminGet('/admin/gacha/config',
 export const adminSetGachaConfig = (body, adminKey) => adminReq('/admin/gacha/config', adminKey, body);
 export const adminGetGachaMonitoring = (adminKey) => adminGet('/admin/gacha/monitoring', adminKey);
 export const adminReconcileStuckGacha = (adminKey) => adminReq('/admin/gacha/reconcile-stuck', adminKey, {}); // recover crash-stranded selling/withdrawing rows
+export const adminResetGold = (adminKey) => adminReq('/admin/gacha/reset-gold', adminKey, {}); // zero every customer's Gold balance (destructive)
 // Treasury + insurance. /admin/treasury (full PoR view incl. insurance + allocatable surplus) is
 // real-funds-only; /admin/insurance (balance) + the fee-allocation moves work in play-money too.
 export const adminGetTreasury = (adminKey) => adminGet('/admin/treasury', adminKey);

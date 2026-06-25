@@ -66,3 +66,16 @@ export async function getGoldHistory(db: Db, userId: string, limit = 50): Promis
   );
   return r.rows.map((x) => ({ delta: x.delta, reason: x.reason, createdAt: x.created_at }));
 }
+
+/** Admin: zero EVERY player's Gold balance, writing a −balance ADMIN_RESET ledger entry per user so the
+ *  Σ gold_ledger == gold_balances invariant still holds. Destructive — operator-gated. Returns the user count. */
+export async function resetGoldBalances(db: Db): Promise<{ usersReset: number }> {
+  return db.tx(async (q) => {
+    const rows = (await q.query<{ user_id: string; balance: string }>(`SELECT user_id, balance FROM gold_balances WHERE balance <> 0`)).rows;
+    for (const r of rows) {
+      await q.query(`INSERT INTO gold_ledger(id, user_id, delta, reason) VALUES($1,$2,$3,'ADMIN_RESET')`, [randomUUID(), r.user_id, (-BigInt(r.balance)).toString()]);
+    }
+    await q.query(`UPDATE gold_balances SET balance = 0`);
+    return { usersReset: rows.length };
+  });
+}

@@ -39,13 +39,19 @@ function machineListValidator(v: unknown): string[] {
   return [...new Set(codes)];
 }
 
+const bool = (v: unknown): boolean => v === true || v === 'true';
 const freePackThresholdUsd = liveKnob('gacha_free_pack_threshold_usd', config.gachaFreePackThresholdUsd, usdValidator('free-pack threshold'));
 const buybackCutBps = liveKnob('gacha_buyback_cut_bps', config.gachaBuybackCutBps, bpsValidator('buyback cut'));
 const turboCutBps = liveKnob('gacha_turbo_cut_bps', config.gachaTurboCutBps, bpsValidator('turbo cut'));
 const markupBps = liveKnob('gacha_markup_bps', config.gachaMarkupBps, bpsValidator('markup'));
 const disabledMachines = liveKnob<string[]>('gacha_disabled_machines', [], machineListValidator, (a) => a.join(','));
+// Loyalty Gold master switch — OFF hides Gold in the UI but earn keeps accruing silently (env GOLD_ENABLED is the
+// default; the admin toggle overrides). payWithGold gates the "pay with Gold" option on machine purchases (default
+// OFF) — when off, customers still earn/see Gold and can claim a free pack, just can't spend Gold on any machine.
+const goldEnabled = liveKnob('gacha_gold_enabled', config.goldEnabled, bool);
+const payWithGoldEnabled = liveKnob('gacha_pay_with_gold', false, bool);
 
-export const gachaConfig = { freePackThresholdUsd, buybackCutBps, turboCutBps, markupBps, disabledMachines };
+export const gachaConfig = { freePackThresholdUsd, buybackCutBps, turboCutBps, markupBps, disabledMachines, goldEnabled, payWithGoldEnabled };
 
 /** The GDEX markup amount (micro-USDC, floor) over a base CC price — one formula for the charge + the displayed
  *  price so they can never drift (a mismatch would trip the open's expected-price drift guard). */
@@ -55,6 +61,7 @@ export const gachaMarkupE6 = (priceE6: bigint | string, markupBps: number): bigi
 export async function loadGachaConfig(db: Db): Promise<void> {
   await Promise.all([
     freePackThresholdUsd.load(db), buybackCutBps.load(db), turboCutBps.load(db), markupBps.load(db), disabledMachines.load(db),
+    goldEnabled.load(db), payWithGoldEnabled.load(db),
   ]);
 }
 
@@ -66,6 +73,8 @@ export function gachaAdminConfig() {
     turboCutBps: turboCutBps.get(),
     markupBps: markupBps.get(),
     disabledMachines: disabledMachines.get(),
+    goldEnabled: goldEnabled.get(),
+    payWithGoldEnabled: payWithGoldEnabled.get(),
   };
 }
 
@@ -77,6 +86,8 @@ export async function setGachaConfig(db: Db, patch: Record<string, unknown>): Pr
   if (p.turboCutBps !== undefined) await turboCutBps.set(db, p.turboCutBps);
   if (p.markupBps !== undefined) await markupBps.set(db, p.markupBps);
   if (p.disabledMachines !== undefined) await disabledMachines.set(db, p.disabledMachines);
+  if (p.goldEnabled !== undefined) await goldEnabled.set(db, p.goldEnabled);
+  if (p.payWithGoldEnabled !== undefined) await payWithGoldEnabled.set(db, p.payWithGoldEnabled);
   return gachaAdminConfig();
 }
 
