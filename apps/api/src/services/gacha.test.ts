@@ -17,7 +17,7 @@ const { getDb } = await import('../db/client.ts');
 const { migrate } = await import('../db/migrate.ts');
 const { usdc } = await import('../money.ts');
 const { fund, sign } = await import('../test-helpers.ts');
-const { openPack, sellBack, convert, reconcilePending, nftWithdrawNonce, requestNftWithdraw } = await import('./gacha.ts');
+const { openPack, sellBack, convert, reconcilePending, nftWithdrawNonce, requestNftWithdraw, remediateMisrecordedTurboCommon } = await import('./gacha.ts');
 const { reconcileStuckPrizes } = await import('./gacha-reconcile.ts');
 const { pollMachineStock, recentRestocks } = await import('./gacha-stock.ts');
 const { goldEarnedForOpen, goldPriceForPack, earnGold, getGoldSummary, resetGoldBalances } = await import('./gold.ts');
@@ -266,6 +266,53 @@ test('open: normal (non-turbo) delivery is unchanged — no altFundsRecipient, c
   assert.equal(r.status, 'opened');
   assert.ok(r.card && r.card.mint.startsWith('Mint'));
   assert.equal(genParams.altFundsRecipient, undefined, 'normal mode never sends altFundsRecipient');
+});
+
+test('remediate turbo mis-record: books the auto-sell (credit −10%), retires the prize, idempotent + dry-run', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  // Reproduce the OLD bug state: a turbo Common CC auto-sold, but recorded as a delivered held slab + never credited.
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'misrec' }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(r.status, 'opened');
+  const prizeId = (await db.query<{ id: string }>(`SELECT id FROM gacha_nft_inventory WHERE open_id=$1`, [r.openId])).rows[0].id;
+  await db.query(`UPDATE gacha_pack_opens SET turbo=true, rarity='Common', turbo_refund_e6=NULL WHERE id=$1`, [r.openId]);
+  const before = await collOf(user); // baseline AFTER the (mis-recorded) open — the auto-sell was never credited
+  const feeBefore = await feeRev();
+
+  const gross = 30_000_000n; // CC's confirmed buyback ($30)
+  const dry = await remediateMisrecordedTurboCommon(db, prizeId, gross, { dryRun: true });
+  assert.equal(dry.status, 'dry_run');
+  assert.equal(dry.payoutE6, '27000000');
+  assert.equal(await collOf(user), before); // dry run writes nothing
+
+  const res = await remediateMisrecordedTurboCommon(db, prizeId, gross);
+  assert.equal(res.status, 'applied');
+  assert.equal(res.payoutE6, '27000000'); // 90% of $30
+  assert.equal(res.cutE6, '3000000'); // 10%
+  assert.equal(await collOf(user), before + 27_000_000n); // user credited
+  assert.equal((await feeRev()) - feeBefore, 3_000_000n); // cut → FEE_REVENUE
+  const open = (await db.query<{ status: string; turbo_refund_e6: string }>(`SELECT status, turbo_refund_e6 FROM gacha_pack_opens WHERE id=$1`, [r.openId])).rows[0];
+  assert.equal(open.status, 'turbo_sold');
+  assert.equal(String(open.turbo_refund_e6), '27000000');
+  const inv = (await db.query<{ status: string; sell_value_e6: string }>(`SELECT status, sell_value_e6 FROM gacha_nft_inventory WHERE id=$1`, [prizeId])).rows[0];
+  assert.equal(inv.status, 'sold'); // phantom held card retired
+  assert.equal(String(inv.sell_value_e6), '27000000');
+
+  // idempotent: re-run does NOT double-credit
+  const again = await remediateMisrecordedTurboCommon(db, prizeId, gross);
+  assert.equal(again.status, 'already_done');
+  assert.equal(await collOf(user), before + 27_000_000n);
+});
+
+test('remediate turbo mis-record: refuses a prize NOT in the mis-recorded state (normal held card)', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'normalheld' }, { chain: fakeChain(), cc, ...noWait });
+  const prizeId = (await db.query<{ id: string }>(`SELECT id FROM gacha_nft_inventory WHERE open_id=$1`, [r.openId])).rows[0].id;
+  // A normal delivered card (turbo=false, rarity=epic, held) must be refused — no money moves.
+  const before = await collOf(user);
+  await assert.rejects(remediateMisrecordedTurboCommon(db, prizeId, 30_000_000n), /not in mis-recorded turbo-Common state/);
+  assert.equal(await collOf(user), before);
 });
 
 test('sell-back: 95% to the user, 5% to FEE_REVENUE, prize sold once', async () => {
