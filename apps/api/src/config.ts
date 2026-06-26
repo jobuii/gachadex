@@ -252,6 +252,8 @@ export const config = {
   // they sit 'requested' (already debited) until an operator runs processWithdrawal explicitly.
   withdrawalAutoApproveMaxUsd: num('WITHDRAWAL_AUTO_APPROVE_MAX_USD', 1_000),
   treasuryPassMs: num('TREASURY_PASS_MS', 60_000), // proof-of-reserves + hot-float worker cadence
+  treasuryBreachGraceMs: num('TREASURY_BREACH_GRACE_MS', 90_000), // a small (non-material) PoR breach must persist this long before it freezes — filters transient measurement blips (e.g. RPC lag at a deposit-sweep hand-off)
+  treasuryBreachMaterialBps: num('TREASURY_BREACH_MATERIAL_BPS', 500), // a breach > this fraction of liabilities (500 = 5%) is a real shortfall → freezes IMMEDIATELY, no grace
   // Operator surface (custody): the /admin routes are only registered when this is set (and only
   // under REAL_FUNDS). Approve/reverse withdrawals, freeze/unfreeze, treasury report — see
   // docs/ops-runbook.md. The key authenticates the operator; signing stays server-side.

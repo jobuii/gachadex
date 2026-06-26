@@ -36,6 +36,16 @@ async function liability(): Promise<bigint> {
   return bal < 0n ? -bal : 0n;
 }
 
+/** Credited-but-unswept deposit total (part of on-chain custody) — so the breach math stays exact regardless
+ *  of unswept rows left by other tests. */
+async function unsweptNow(): Promise<bigint> {
+  const r = await db.query<{ t: string }>(
+    `SELECT COALESCE(SUM(usdc_credited_e6), 0)::text AS t FROM deposits WHERE asset = 'USDC' AND status = 'credited' AND sweep_sig IS NULL`,
+  );
+  return BigInt(r.rows[0].t);
+}
+const clearStreak = () => db.query(`DELETE FROM system_flags WHERE key = 'por_breach_since'`);
+
 /** A 'requested' withdrawal row planted directly (already-debited state is irrelevant here). */
 async function insertRequested(userId: string, amountE6: bigint): Promise<string> {
   const id = randomUUID();
@@ -228,6 +238,52 @@ test('the auto loop only pays out up to the auto-approve cap; larger rows wait f
 
   // the operator path ignores the auto cap — explicit approval processes the large row
   assert.equal((await processWithdrawal(db, wchain, large)).status, 'confirmed');
+});
+
+// ── PoR breach grace + material carve-out (transient measurement blips must not auto-freeze) ──
+test('PoR grace: a small (non-material) breach does NOT freeze on a single pass', async () => {
+  await unfreezeWithdrawals(db);
+  await clearStreak();
+  const L = await liability();
+  const deficit = L / 100n; // 1% of liabilities — well under the 5% material threshold
+  const chain = fakeTreasury({ hot: L - deficit - (await unsweptNow()), cold: 0n });
+  const r = await treasuryPass(db, chain, undefined, () => 1_000_000);
+  assert.equal(r.breached, true); // it IS breached this instant…
+  assert.equal(await withdrawalsFrozen(db), null); // …but not frozen — it's within the grace window
+});
+
+test('PoR grace: a small breach that PERSISTS past the grace freezes', async () => {
+  await unfreezeWithdrawals(db);
+  await clearStreak();
+  const L = await liability();
+  const chain = fakeTreasury({ hot: L - L / 100n - (await unsweptNow()), cold: 0n }); // 1% deficit
+  await treasuryPass(db, chain, undefined, () => 2_000_000); // pass 1: records the streak, no freeze
+  assert.equal(await withdrawalsFrozen(db), null);
+  await treasuryPass(db, chain, undefined, () => 2_000_000 + 90_001); // past TREASURY_BREACH_GRACE_MS
+  assert.match((await withdrawalsFrozen(db)) ?? '', /proof-of-reserves breach/);
+});
+
+test('PoR grace: a breach that clears by the next pass resets the streak (never freezes)', async () => {
+  await unfreezeWithdrawals(db);
+  await clearStreak();
+  const L = await liability();
+  const unswept = await unsweptNow();
+  const broke = fakeTreasury({ hot: L - L / 100n - unswept, cold: 0n }); // 1% deficit
+  const solvent = fakeTreasury({ hot: L - unswept, cold: 0n }); // onchain == liability
+  await treasuryPass(db, broke, undefined, () => 3_000_000); // pass 1: streak recorded
+  assert.equal(await withdrawalsFrozen(db), null);
+  await treasuryPass(db, solvent, undefined, () => 3_030_000); // blip cleared → streak reset
+  await treasuryPass(db, broke, undefined, () => 3_060_000); // breaches again, but the streak just restarted
+  assert.equal(await withdrawalsFrozen(db), null); // still within grace of the NEW streak start
+});
+
+test('PoR grace: a MATERIAL breach (> 5% of liabilities) freezes IMMEDIATELY, no grace', async () => {
+  await unfreezeWithdrawals(db);
+  await clearStreak();
+  const L = await liability();
+  const chain = fakeTreasury({ hot: L - (L * 6n) / 100n - (await unsweptNow()), cold: 0n }); // 6% deficit
+  await treasuryPass(db, chain, undefined, () => 4_000_000); // FIRST pass
+  assert.match((await withdrawalsFrozen(db)) ?? '', /proof-of-reserves breach/);
 });
 
 after(async () => {
