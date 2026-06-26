@@ -15,7 +15,7 @@ const SORTS = [
   ['tips', 'Tips'],
   ['joined', 'Joined'],
 ];
-const COLS = 17; // table width (for the expand-row + empty-state colSpan)
+const COLS = 18; // table width (for the expand-row + empty-state colSpan)
 const KILL_PHRASE = 'CLOSE ALL';
 
 const short = (a) => shortenPubkey(a) || '—';
@@ -227,6 +227,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
               <th />
               <th>Wallet</th>
               <th>Deposit addr</th>
+              <th>NFT custody</th>
               <th>Balance</th>
               <th>LP Pool</th>
               <th>In trades</th>
@@ -264,6 +265,9 @@ export function CustomersView({ adminKey, onGoToMarket }) {
                     </td>
                     <td className="addr" title={c.depositAddress || ''} onClick={() => copy(c.depositAddress)}>
                       {copied && copied === c.depositAddress ? 'copied!' : short(c.depositAddress)}
+                    </td>
+                    <td className="addr" title={c.nftCustodyAddress || ''} onClick={() => copy(c.nftCustodyAddress)}>
+                      {copied && copied === c.nftCustodyAddress ? 'copied!' : short(c.nftCustodyAddress)}
                     </td>
                     <td className="num">{usd(c.freeE6)}</td>
                     <td className="num">{usd(c.lpE6)}</td>
