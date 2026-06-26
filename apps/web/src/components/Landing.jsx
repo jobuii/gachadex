@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChatSidebar } from './ChatSidebar';
 import { Wordmark } from './Brand';
 import { useChat, initialChatOpen, persistChatOpen } from '../store/chat';
+import * as api from '../lib/api.js';
 import '../landing.css';
 
 const CYCLE = ['LONG', 'SHORT', 'LONG', 'SHORT']; // hero word swap (gold)
@@ -43,6 +44,17 @@ const SOCIALS = [
   ['GitHub', 'https://github.com/gachadex/cli', 'M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'],
   ['npm', 'https://www.npmjs.com/package/@gachadex/sdk', 'M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z'],
 ];
+
+// --- Classic Gacha launch announcement (gated on CLASSIC_GACHA_ENABLED via /health) -------------
+const GACHA_MODAL_KEY = 'gdx:gacha-launch-modal:v1'; // show the spotlight modal once, ever
+const GACHA_BANNER_KEY = 'gdx:gacha-banner:v1'; // remember the top-banner dismissal
+const GACHA_AUTO_CLOSE_MS = 9000; // soft auto-close once read — pauses while the pointer is over the modal
+const GACHA_MAX_OPEN_MS = 18000; // hard cap: the modal always closes by here, even if left hovered (never stuck)
+const GACHA_SHOW_DELAY_MS = 1400; // let the hero paint first (never pop before the page loads)
+const GACHA_DROP_CARDS = ['base1/4', 'base1/2', 'base1/15', 'base1/10', 'base1/16']; // cards raining from the machine
+// localStorage helpers — default to "already seen" if storage is unavailable (private mode) so we never nag
+const seenFlag = (k) => { try { return !!localStorage.getItem(k); } catch { return true; } };
+const setSeen = (k) => { try { localStorage.setItem(k, '1'); } catch { /* private mode */ } };
 
 export function Landing() {
   const navigate = useNavigate();
@@ -94,6 +106,86 @@ export function Landing() {
       .catch(() => {});
   };
 
+  // ---- Classic Gacha launch announcement: a show-once spotlight modal + a dismissible banner + a nav entry,
+  // all gated on the live CLASSIC_GACHA_ENABLED flag so nothing announces a feature that isn't on yet. ----
+  const [gachaLive, setGachaLive] = useState(false);
+  const [showGacha, setShowGacha] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(() => seenFlag(GACHA_BANNER_KEY));
+  const [gachaPaused, setGachaPaused] = useState(false);
+  const gachaDialogRef = useRef(null);
+  const gachaRemaining = useRef(GACHA_AUTO_CLOSE_MS); // soft-close budget left (ms), kept across hover-pauses
+
+  // is Classic Gacha live? (same /health gate the Exchange uses) — drives the whole announcement + nav entry
+  useEffect(() => {
+    api.getHealth().then((h) => setGachaLive(!!h.classicGachaEnabled)).catch(() => {});
+  }, []);
+
+  // show the spotlight modal ONCE, shortly after load — and mark it seen the moment it shows, so a refresh
+  // (or navigating away) never re-triggers it
+  useEffect(() => {
+    if (!gachaLive || seenFlag(GACHA_MODAL_KEY)) return;
+    const t = setTimeout(() => { setShowGacha(true); setSeen(GACHA_MODAL_KEY); }, GACHA_SHOW_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [gachaLive]);
+
+  // the dismissible banner is derived — open while live and not yet dismissed (no effect/extra state needed)
+  const bannerOpen = gachaLive && !bannerDismissed;
+
+  const closeGacha = useCallback(() => { setShowGacha(false); setGachaPaused(false); }, []);
+
+  // refill the soft-close budget each time the modal opens
+  useEffect(() => { if (showGacha) gachaRemaining.current = GACHA_AUTO_CLOSE_MS; }, [showGacha]);
+
+  // soft auto-close — this effect OWNS the timer. It runs only while open AND not paused; on teardown it
+  // deducts the elapsed slice from the remaining budget, so a hover (gachaPaused=true) stops the clock and a
+  // leave resumes it from where it left off. pause/resume merely flip the flag — that sidesteps the
+  // appear-under-cursor race an imperative start/stop had (a mouseenter firing before this effect could
+  // corrupt the budget to 0 and flash-close the modal).
+  useEffect(() => {
+    if (!showGacha || gachaPaused) return;
+    const startedAt = Date.now();
+    const t = setTimeout(closeGacha, gachaRemaining.current);
+    return () => {
+      clearTimeout(t);
+      gachaRemaining.current = Math.max(0, gachaRemaining.current - (Date.now() - startedAt));
+    };
+  }, [showGacha, gachaPaused, closeGacha]);
+
+  // hard safety cap — closes by GACHA_MAX_OPEN_MS no matter what (never stuck open, even if left paused)
+  useEffect(() => {
+    if (!showGacha) return;
+    const hard = setTimeout(closeGacha, GACHA_MAX_OPEN_MS);
+    return () => clearTimeout(hard);
+  }, [showGacha, closeGacha]);
+
+  const pauseGacha = () => setGachaPaused(true);
+  const resumeGacha = () => setGachaPaused(false);
+
+  // a11y: focus the dialog on open, ESC closes, and Tab is trapped inside it (so aria-modal is honoured)
+  useEffect(() => {
+    if (!showGacha) return;
+    const dialog = gachaDialogRef.current;
+    const onKey = (e) => {
+      if (e.key === 'Escape') { closeGacha(); return; }
+      if (e.key === 'Tab' && dialog) {
+        const f = dialog.querySelectorAll('button, [href], [tabindex]:not([tabindex="-1"])');
+        if (!f.length) return;
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    dialog?.focus({ preventScroll: true }); // don't scroll a too-tall modal off the top on short viewports
+    return () => document.removeEventListener('keydown', onKey);
+  }, [showGacha, closeGacha]);
+
+  // both CTAs (and the banner + nav entry) land on the games page; if signed out, the games/gacha flow there
+  // prompts a wallet connect / sign-in — same gate as the rest of the app
+  const goToGacha = (e) => { e?.preventDefault(); navigate('/exchange#games'); };
+  const playGacha = () => { closeGacha(); navigate('/exchange#games'); };
+  const dismissBanner = () => { setBannerDismissed(true); setSeen(GACHA_BANNER_KEY); };
+
   const enter = (e) => {
     e?.preventDefault();
     navigate('/exchange');
@@ -111,6 +203,17 @@ export function Landing() {
     <div className={`lp ${chatOpen ? 'lp-chat-open' : ''}`}>
       <ChatSidebar open={chatOpen} onToggle={onToggleChat} />
 
+      {bannerOpen && (
+        <div className="lp-gacha-banner" role="region" aria-label="Announcement">
+          <span className="lp-gb-txt">
+            <span className="lp-gb-star" aria-hidden="true">✦</span> <strong>Classic Gacha is live.</strong> Open
+            real graded-card packs from Collector Crypt.
+          </span>
+          <button className="lp-gb-cta" onClick={goToGacha}>Open a pack ▶</button>
+          <button className="lp-gb-x" onClick={dismissBanner} aria-label="Dismiss announcement">✕</button>
+        </div>
+      )}
+
       <header className="lp-nav">
         <div className="lp-nav-left">
           <a className="lp-brand" href="#" onClick={enter}>
@@ -126,6 +229,11 @@ export function Landing() {
           <a href="#why" onClick={scrollTo('why')}>FEATURES</a>
           <a href="#faq" onClick={scrollTo('faq')}>FAQ</a>
           <a href="/docs" onClick={goDocs}>DOCS</a>
+          {gachaLive && (
+            <a className="lp-nav-gacha" href="/exchange#games" onClick={goToGacha}>
+              GACHA<span className="lp-new-badge">new</span>
+            </a>
+          )}
           {SOCIALS.map(([label, href, d]) => (
             <a key={label} className="lp-social" href={href} target="_blank" rel="noopener noreferrer" title={label} aria-label={label}>
               <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={d} /></svg>
@@ -275,6 +383,45 @@ export function Landing() {
         </div>
         <button className="lp-btn lp-btn-sm" onClick={enter}>ENTER ▶</button>
       </footer>
+
+      {/* Launch spotlight — shows once, auto-closes after a readable beat (pauses on hover), ESC/✕/"maybe
+          later" close it immediately. Gated on the live flag + show-once via localStorage. */}
+      {showGacha && (
+        <div className="lp-gacha-scrim" onClick={(e) => { if (e.target === e.currentTarget) closeGacha(); }}>
+          <div
+            className="lp-gacha-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="lp-gacha-h"
+            ref={gachaDialogRef}
+            tabIndex={-1}
+            onMouseEnter={pauseGacha}
+            onMouseLeave={resumeGacha}
+          >
+            <button className="lp-gacha-x" onClick={closeGacha} aria-label="Close">✕</button>
+            <div className="lp-gacha-stage" aria-hidden="true">
+              {GACHA_DROP_CARDS.map((c, i) => (
+                <img key={c} className="lp-gacha-drop" style={{ '--n': i }} src={`https://images.pokemontcg.io/${c}.png`} alt="" loading="lazy" />
+              ))}
+              <img className="lp-gacha-machine" src="/games/classic-gacha.png" alt="" />
+            </div>
+            <div className="lp-gacha-body">
+              <div className="lp-gacha-kicker">✦ Now live on GachaDex</div>
+              <h2 className="lp-gacha-h" id="lp-gacha-h">GACHA PACKS <span className="lp-swap">HERE!</span></h2>
+              <p className="lp-gacha-p">
+                Open real <strong>graded-card packs</strong> from the Collector Crypt vault. Pull a card, then{' '}
+                <strong>sell it back for USDC</strong> or keep it in your inventory.
+              </p>
+              <div className="lp-gacha-actions">
+                <button className="lp-btn lp-btn-lg" onClick={playGacha}>OPEN A PACK ▶</button>
+                <button className="lp-btn lp-btn-ghost lp-btn-lg" onClick={playGacha}>SEE THE MACHINES</button>
+              </div>
+              <button className="lp-gacha-later" onClick={closeGacha}>Maybe later</button>
+            </div>
+            <div className={`lp-gacha-bar ${gachaPaused ? 'paused' : ''}`} style={{ '--dur': `${GACHA_AUTO_CLOSE_MS}ms` }} aria-hidden="true" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

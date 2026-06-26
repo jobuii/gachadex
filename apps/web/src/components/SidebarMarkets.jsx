@@ -88,7 +88,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
   const [tab, setTab] = useState('cards');
   const [game, setGame] = useState('pokemon');
   const [search, setSearch] = useState('');
-  const [sortMode, setSortMode] = useState('top'); // cards top-mover sort: top|volume|gainers|losers
+  const [sortMode, setSortMode] = useState('gainers'); // cards top-mover sort: top|volume|gainers|losers — default to biggest 24h gainers
   const [showJpy, setShowJpy] = useStickyState('pokeX_showJpy', false); // JP cards hidden by default; persists across refresh (shared key with the screener toggle)
   const [catalog, setCatalog] = useState(null); // null = inactive; [] = no results
   const [catalogLoading, setCatalogLoading] = useState(false);
