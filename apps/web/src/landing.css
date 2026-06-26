@@ -264,9 +264,14 @@
 .lp-nav-links a.lp-nav-gacha:hover { color: var(--text); }
 .lp-new-badge { font-family: var(--lp-mono); font-size: 0.5rem; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: #06060a;
   background: var(--grad, var(--accent)); border-radius: 4px; padding: 0.06rem 0.3rem; margin-left: 0.34rem; }
+/* the GACHA link rides the same mobile nav-hide as the other anchors (needs the full selector to out-specify it) */
+@media (max-width: 768px) { .lp-nav-links a.lp-nav-gacha { display: none; } }
 
 /* ---- spotlight modal ---- */
-.lp-gacha-scrim { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 1.2rem;
+/* z-index 1000 matches the app's own modals + sits above the chat sidebar (z:120 / mobile 160) so the open
+   chat can't occlude or out-stack the announcement. `align-items: safe center` + overflow-y on the scrim
+   center the modal when it fits but let a too-tall modal scroll (✕ stays reachable) on short viewports. */
+.lp-gacha-scrim { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: safe center; justify-content: center; overflow-y: auto; padding: 1.2rem;
   background: rgba(4, 4, 8, 0.74); backdrop-filter: blur(4px); animation: lp-gacha-fade 0.25s ease both; }
 @keyframes lp-gacha-fade { from { opacity: 0; } to { opacity: 1; } }
 .lp-gacha-modal { position: relative; width: min(560px, 96vw); border-radius: 20px; overflow: hidden; outline: none;
@@ -311,7 +316,7 @@
 @media (max-width: 600px) { .lp-gacha-stage { height: 210px; } .lp-gacha-machine { width: 150px; } }
 @media (prefers-reduced-motion: reduce) {
   .lp-gacha-scrim, .lp-gacha-modal { animation: none !important; }
-  .lp-gacha-stage::before, .lp-gacha-machine { animation: none !important; }
+  .lp-gacha-stage::before, .lp-gacha-machine, .lp-gacha-bar { animation: none !important; }
   .lp-gacha-drop { animation: none !important; opacity: 1; top: 56%; }
   .lp-gacha-drop:nth-child(4), .lp-gacha-drop:nth-child(5) { display: none; } /* declutter the static fallback */
 }
