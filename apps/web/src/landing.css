@@ -239,3 +239,79 @@
   .lp-card-a, .lp-card-b, .lp-card-c, .lp-hero-art::before, .lp-step .lp-step-num, .lp-ticker-track { animation: none !important; }
   .lp-chart polyline { animation: none !important; stroke-dashoffset: 0 !important; }
 }
+
+/* ===========================================================================
+ * Classic Gacha launch announcement — dismissible top banner · nav entry (+ NEW badge) · spotlight modal.
+ * Gated in Landing.jsx on the live CLASSIC_GACHA_ENABLED flag; the modal is show-once + auto-closes.
+ * ======================================================================== */
+
+/* ---- top banner (dismissible) ---- */
+.lp-gacha-banner { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0.7rem 0.9rem; padding: 0.55rem 1rem; text-align: center;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--cyan, var(--accent)) 18%, var(--bg-2)), color-mix(in srgb, var(--pink, var(--accent)) 16%, var(--bg-2)));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.lp-gb-txt { font-family: var(--lp-mono); font-size: 0.72rem; letter-spacing: 0.3px; color: var(--text); }
+.lp-gb-txt strong { color: var(--text); font-weight: 700; }
+.lp-gb-star { color: var(--gold, var(--accent)); }
+.lp-gb-cta { font-family: var(--lp-mono); font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; cursor: pointer;
+  background: #06060a; color: var(--text); border: 1px solid color-mix(in srgb, #fff 16%, transparent); border-radius: 6px; padding: 0.34rem 0.7rem;
+  transition: border-color 0.12s, color 0.12s; }
+.lp-gb-cta:hover { border-color: var(--accent); color: var(--accent-lit); }
+.lp-gb-x { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 0.2rem; }
+.lp-gb-x:hover { color: var(--text); }
+
+/* ---- nav entry + NEW badge ---- */
+.lp-nav-links a.lp-nav-gacha { color: var(--accent-lit); display: inline-flex; align-items: center; }
+.lp-nav-links a.lp-nav-gacha:hover { color: var(--text); }
+.lp-new-badge { font-family: var(--lp-mono); font-size: 0.5rem; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: #06060a;
+  background: var(--grad, var(--accent)); border-radius: 4px; padding: 0.06rem 0.3rem; margin-left: 0.34rem; }
+
+/* ---- spotlight modal ---- */
+.lp-gacha-scrim { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 1.2rem;
+  background: rgba(4, 4, 8, 0.74); backdrop-filter: blur(4px); animation: lp-gacha-fade 0.25s ease both; }
+@keyframes lp-gacha-fade { from { opacity: 0; } to { opacity: 1; } }
+.lp-gacha-modal { position: relative; width: min(560px, 96vw); border-radius: 20px; overflow: hidden; outline: none;
+  background: radial-gradient(120% 90% at 50% -10%, color-mix(in srgb, var(--violet, var(--accent)) 26%, var(--bg-2)), var(--bg-2) 62%);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);
+  animation: lp-gacha-pop 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@keyframes lp-gacha-pop { from { transform: translateY(18px) scale(0.94); opacity: 0; } to { transform: none; opacity: 1; } }
+.lp-gacha-x { position: absolute; top: 10px; right: 12px; z-index: 6; width: 30px; height: 30px; border-radius: 8px; cursor: pointer;
+  background: rgba(0, 0, 0, 0.35); border: 1px solid var(--border); color: var(--text); font-size: 1rem; }
+.lp-gacha-x:hover { border-color: var(--accent); }
+.lp-gacha-stage { position: relative; height: 250px; overflow: hidden; }
+.lp-gacha-stage::before { content: ''; position: absolute; left: 50%; top: 54%; width: 340px; height: 340px; transform: translate(-50%, -50%); border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 40%, transparent), transparent 66%); filter: blur(6px); animation: lp-gacha-glow 4s ease-in-out infinite; }
+@keyframes lp-gacha-glow { 0%, 100% { opacity: 0.8; } 50% { opacity: 1; } }
+.lp-gacha-machine { position: absolute; left: 50%; bottom: -6px; transform: translateX(-50%); width: 188px; height: auto; z-index: 3;
+  filter: drop-shadow(0 18px 30px rgba(0, 0, 0, 0.6)); animation: lp-gacha-bob 4.5s ease-in-out infinite; }
+@keyframes lp-gacha-bob { 0%, 100% { transform: translateX(-50%) translateY(0); } 50% { transform: translateX(-50%) translateY(-7px); } }
+.lp-gacha-drop { position: absolute; top: -28%; width: 58px; border-radius: 7px; border: 1px solid rgba(255, 255, 255, 0.16); box-shadow: 0 10px 22px rgba(0, 0, 0, 0.5);
+  z-index: 2; opacity: 0; animation: lp-gacha-fall 3.6s cubic-bezier(0.3, 0.1, 0.3, 1) infinite; animation-delay: calc(var(--n) * 0.7s); }
+.lp-gacha-drop:nth-child(1) { left: 12%; } .lp-gacha-drop:nth-child(2) { left: 30%; } .lp-gacha-drop:nth-child(3) { left: 56%; }
+.lp-gacha-drop:nth-child(4) { left: 74%; } .lp-gacha-drop:nth-child(5) { left: 43%; }
+@keyframes lp-gacha-fall {
+  0% { top: -28%; opacity: 0; transform: rotate(-18deg) scale(0.86); }
+  12% { opacity: 1; }
+  68% { top: 64%; opacity: 1; transform: rotate(10deg) scale(1); }
+  82% { top: 60%; opacity: 1; transform: rotate(6deg) scale(1); }
+  100% { top: 60%; opacity: 0; transform: rotate(6deg) scale(1); }
+}
+.lp-gacha-body { position: relative; z-index: 4; text-align: center; padding: 0.4rem 1.6rem 1.7rem; }
+.lp-gacha-kicker { font-family: var(--lp-mono); font-size: 0.62rem; letter-spacing: 3px; text-transform: uppercase; color: var(--gold, var(--accent)); }
+.lp-gacha-h { font-family: var(--font-display); font-weight: 700; font-size: clamp(1.5rem, 4vw, 2.05rem); line-height: 1.06; margin: 0.5rem 0 0; }
+.lp-gacha-p { font-size: 0.9rem; line-height: 1.6; color: var(--text-muted); max-width: 40ch; margin: 0.7rem auto 1.3rem; }
+.lp-gacha-p strong { color: var(--text); }
+.lp-gacha-actions { display: flex; gap: 0.7rem; justify-content: center; flex-wrap: wrap; }
+.lp-gacha-later { margin-top: 0.9rem; font-family: var(--lp-mono); font-size: 0.58rem; letter-spacing: 0.5px; color: var(--text-muted); background: none; border: none; cursor: pointer; }
+.lp-gacha-later:hover { color: var(--text); }
+.lp-gacha-bar { position: absolute; left: 0; bottom: 0; z-index: 6; height: 3px; width: 100%; transform-origin: left; background: var(--grad, var(--accent));
+  animation: lp-gacha-drain var(--dur, 9000ms) linear forwards; }
+.lp-gacha-bar.paused { animation-play-state: paused; }
+@keyframes lp-gacha-drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+@media (max-width: 600px) { .lp-gacha-stage { height: 210px; } .lp-gacha-machine { width: 150px; } }
+@media (prefers-reduced-motion: reduce) {
+  .lp-gacha-scrim, .lp-gacha-modal { animation: none !important; }
+  .lp-gacha-stage::before, .lp-gacha-machine { animation: none !important; }
+  .lp-gacha-drop { animation: none !important; opacity: 1; top: 56%; }
+  .lp-gacha-drop:nth-child(4), .lp-gacha-drop:nth-child(5) { display: none; } /* declutter the static fallback */
+}
