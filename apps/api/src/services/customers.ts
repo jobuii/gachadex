@@ -15,6 +15,7 @@ export interface CustomerRow {
   joinedAt: string;
   depositAddress: string | null;
   nftCustodyAddress: string | null; // per-user Classic-Gacha NFT custody wallet (derived; holds CC NFTs + buyback USDC)
+  goldEarned: string; // lifetime Gold earned (sum of positive gold_ledger deltas; whole Gold, not micro-USD)
   freeE6: string; // available collateral (USER_COLLATERAL)
   lpE6: string; // current value of their LP-pool stake (shares marked to pool NAV)
   lockedE6: string; // margin locked in open positions (USER_POSITION_MARGIN)
@@ -77,6 +78,7 @@ export async function listCustomers(
     withdrawals_e6: string;
     pending_e6: string;
     open_positions: number;
+    gold_earned: string;
   }>(
     // qty/price are 1e6 fixed-point, so notional (uUSDC) = Σ(qty*price)/1e6; numeric avoids bigint overflow.
     `WITH vol AS (
@@ -123,6 +125,10 @@ export async function listCustomers(
      ),
      tip AS (
        SELECT user_id, SUM(amount_uusdc) AS tipped_e6 FROM drop_tips GROUP BY user_id
+     ),
+     -- lifetime Gold earned: sum of positive ledger deltas (excludes spends + admin resets)
+     gold AS (
+       SELECT user_id, SUM(delta) FILTER (WHERE delta > 0) AS gold_earned FROM gold_ledger GROUP BY user_id
      )
      SELECT u.id, u.solana_pubkey, u.display_name, u.status,
             u.created_at::text AS joined_at,
@@ -140,7 +146,8 @@ export async function listCustomers(
             COALESCE(tip.tipped_e6, 0)::text AS tipped_e6,
             COALESCE(wd.withdrawals_e6, 0)::text AS withdrawals_e6,
             COALESCE(wd.pending_e6, 0)::text AS pending_e6,
-            COALESCE(op.open_positions, 0)::int AS open_positions
+            COALESCE(op.open_positions, 0)::int AS open_positions,
+            COALESCE(gold.gold_earned, 0)::text AS gold_earned
      FROM users u
      LEFT JOIN deposit_addresses da ON da.user_id = u.id
      LEFT JOIN accounts ca ON ca.user_id = u.id AND ca.type = 'USER_COLLATERAL'
@@ -154,6 +161,7 @@ export async function listCustomers(
      LEFT JOIN wd ON wd.user_id = u.id
      LEFT JOIN fund ON fund.user_id = u.id
      LEFT JOIN lp ON lp.user_id = u.id
+     LEFT JOIN gold ON gold.user_id = u.id
      ORDER BY ${orderBy} DESC NULLS LAST, u.created_at DESC
      LIMIT $1 OFFSET $2`,
       [opts.limit, opts.offset],
@@ -172,6 +180,7 @@ export async function listCustomers(
       joinedAt: x.joined_at,
       depositAddress: x.deposit_address,
       nftCustodyAddress: nftCustodyAddr(x.derivation_index),
+      goldEarned: x.gold_earned,
       freeE6: x.free_e6,
       lpE6: lpShareValue(BigInt(x.lp_shares), lpNav, lpTotalShares).toString(),
       lockedE6: x.locked_e6,

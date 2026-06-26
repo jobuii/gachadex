@@ -114,7 +114,11 @@ export function GachaAdminView({ adminKey }) {
 
   if (!cfg) return <p className="ref-blurb">{err || 'Loading gacha config…'}</p>;
 
-  const nameOf = (code) => machines.find((m) => m.code === code)?.name ?? code; // resolve a stat's machine code to its name
+  // resolve a stat's machine code to "Name ($price)" so the operator can tell machines apart at a glance
+  const nameOf = (code) => {
+    const m = machines.find((mm) => mm.code === code);
+    return m ? `${m.name} (${formatUsd(BigInt(m.priceE6)).replace(/\.00$/, '')})` : code;
+  };
 
   return (
     <div className="games-admin gacha-admin">
