@@ -159,8 +159,10 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
     try {
       await api.sellGachaPrize(item.id, instant);
       loadInventory();
+      return true;
     } catch (e) {
       setRipErr(e.message);
+      return false;
     }
   };
 
@@ -345,7 +347,11 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
           instantCutBps={instantCutBps}
           canSell={!!revealItem || previewSellable}
           canTrade={!!revealCard?.marketId}
-          onSellNow={async () => { if (revealItem) await sellBack(revealItem, true); closeReveal(); }}
+          onSellNow={async () => {
+            if (previewSellable) return true;
+            if (revealItem) return await sellBack(revealItem, true);
+            return false;
+          }}
           onTrade={() => { if (revealCard) trade(revealCard); closeReveal(); }}
           onClose={closeReveal}
         />

@@ -471,6 +471,17 @@
 .gacha-reveal-pnl-sub { font-size: 0.64rem; }
 .gacha-reveal-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: center; }
 .gacha-reveal-actions button { font-size: 0.84rem; font-weight: 700; padding: 0.55rem 0.85rem; white-space: nowrap; }
+.gacha-reveal-actions button:disabled { opacity: 0.6; cursor: default; }
+.gacha-reveal-sellerr { font-size: 0.78rem; color: var(--down, #ef4444); margin-top: 0.35rem; }
+/* Sell-back confirmation: the reveal updates in place to SOLD, then auto-closes after ~2s. */
+.gacha-reveal-sold { display: flex; flex-direction: column; align-items: center; gap: 0.2rem; animation: gr-sold-in 0.3s ease-out; }
+.gacha-reveal-sold-badge { font-family: var(--font-display, inherit); font-weight: 800; font-size: 1rem; letter-spacing: 0.06em; color: #22c55e; }
+.gacha-reveal-sold-amt { font-size: 0.86rem; font-weight: 700; }
+@keyframes gr-sold-in { from { opacity: 0; transform: translateY(6px) scale(0.96); } to { opacity: 1; transform: none; } }
+/* Diagonal SOLD stamp over the revealed card. */
+.gacha-card3d-sold { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-18deg); font-family: var(--font-display, inherit); font-weight: 800; font-size: 1.8rem; letter-spacing: 0.12em; color: #22c55e; border: 3px solid #22c55e; border-radius: 8px; padding: 0.1rem 0.6rem; background: rgba(6, 20, 10, 0.55); box-shadow: 0 0 24px rgba(34, 197, 94, 0.5); animation: gr-stamp 0.3s cubic-bezier(0.2, 1.4, 0.4, 1); pointer-events: none; }
+@keyframes gr-stamp { from { opacity: 0; transform: translate(-50%, -50%) rotate(-18deg) scale(1.8); } to { opacity: 1; transform: translate(-50%, -50%) rotate(-18deg) scale(1); } }
+@media (prefers-reduced-motion: reduce) { .gacha-reveal-sold, .gacha-card3d-sold { animation: none; } }
 
 /* epic screen flash + shake on payoff */
 .gr-pop-epic::before { content: ''; position: absolute; inset: 0; background: #fff; pointer-events: none; z-index: 8; animation: gr-flash 0.5s ease-out forwards; }

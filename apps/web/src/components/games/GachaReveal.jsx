@@ -37,6 +37,9 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   const [phase, setPhase] = useState('charging'); // charging | year | grade | tier | flip | done | turbo | pending | failed
   const [muted, setMutedState] = useState(isMuted());
   const [shownE6, setShownE6] = useState(null); // EPIC value count-up
+  const [selling, setSelling] = useState(false); // sell-back in flight
+  const [sold, setSold] = useState(false); // sold → show the SOLD confirmation, then auto-close
+  const [sellErr, setSellErr] = useState(null); // sell-back failed → show it here (the sidebar error is behind this overlay)
   const coinLoop = useRef(null);
   const timers = useRef([]);
   const started = useRef(false);
@@ -111,6 +114,23 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
 
   const close = () => { stopSound(coinLoop.current); onClose(); };
 
+  // Sell back from the reveal: sell, then update IN PLACE to a SOLD confirmation (rare.win-style) and
+  // auto-close after 2s so the player registers it — instead of the screen vanishing instantly.
+  const doSell = async () => {
+    if (selling || sold) return;
+    setSellErr(null);
+    setSelling(true);
+    try {
+      const ok = await onSellNow();
+      if (ok) { setSold(true); playSound('coins', { volume: 0.4 }); timers.current.push(setTimeout(close, 2000)); }
+      else setSellErr('Couldn’t sell back — try again.');
+    } catch {
+      setSellErr('Couldn’t sell back — try again.');
+    } finally {
+      setSelling(false); // never leave the button stuck on "Selling…"
+    }
+  };
+
   return createPortal(
     <div className={`gacha-reveal-overlay ${big && done ? `gr-pop-${big}` : ''} ${phase === 'tier' && big === 'epic' ? 'gr-epic-quake' : ''}`} onClick={close}>
       <div className="gacha-reveal-bg" aria-hidden />
@@ -174,6 +194,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
                   {card?.imageUrl
                     ? <img src={card.imageUrl} alt={card.name ?? ''} referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
                     : <div className="gacha-card3d-noimg" aria-hidden>🃏</div>}
+                  {sold && <span className="gacha-card3d-sold" aria-hidden>SOLD</span>}
                 </div>
               </div>
             </div>
@@ -190,12 +211,20 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
                   <strong>{pnlE6 < 0n ? '−' : '+'}{usd(pnlE6 < 0n ? -pnlE6 : pnlE6)}</strong>
                   <span className="gacha-reveal-pnl-sub muted">paid {usd(spentE6)} · worth {usd(card?.valueE6)}</span>
                 </div>
-                <div className="gacha-reveal-actions">
-                  {canSell && <button className="btn-primary" onClick={onSellNow}>Sell back {usd(sellNetE6)}</button>}
-                  {canTrade && <button className="btn-ghost" onClick={onTrade}>Trade</button>}
-                  <button className="btn-ghost" onClick={close}>Keep</button>
-                </div>
-                {result?.verifyUrl && <a className="gacha-verify" href={result.verifyUrl} target="_blank" rel="noreferrer">Verify this rip ↗</a>}
+                {sold ? (
+                  <div className="gacha-reveal-sold">
+                    <span className="gacha-reveal-sold-badge">✓ SOLD</span>
+                    <span className="gacha-reveal-sold-amt up">+{usd(sellNetE6)} added to your balance</span>
+                  </div>
+                ) : (
+                  <div className="gacha-reveal-actions">
+                    {canSell && <button className="btn-primary" disabled={selling} onClick={doSell}>{selling ? 'Selling…' : `Sell back ${usd(sellNetE6)}`}</button>}
+                    {canTrade && <button className="btn-ghost" disabled={selling} onClick={onTrade}>Trade</button>}
+                    <button className="btn-ghost" disabled={selling} onClick={close}>Keep</button>
+                  </div>
+                )}
+                {sellErr && <div className="gacha-reveal-sellerr">{sellErr}</div>}
+                {!sold && result?.verifyUrl && <a className="gacha-verify" href={result.verifyUrl} target="_blank" rel="noreferrer">Verify this rip ↗</a>}
               </div>
             )}
 
