@@ -61,21 +61,31 @@ export async function unfreezeWithdrawals(db: Db): Promise<void> {
 
 // A small (non-material) PoR breach is most likely a transient measurement blip — e.g. RPC lag at a deposit-sweep
 // hand-off, where a just-swept deposit has dropped out of `unswept` but the hot-balance read hasn't caught up.
-// We only freeze on it if it PERSISTS past treasuryBreachGraceMs. This marker records when the current breach
-// streak began (epoch-ms in the `reason` field), so the persistence check survives restarts + coordinates across
-// instances. A MATERIAL breach skips the grace entirely (see treasuryPass).
+// We only freeze on it if it PERSISTS past treasuryBreachGraceMs. The marker (a `por_breach_since` system_flags
+// row, JSON in `reason`) records when the current breach EPISODE began + a counter of consecutive solvent passes.
+// The episode only ends after treasuryBreachClearPasses solvent passes IN A ROW, so a breach that intermittently
+// flickers solvent (e.g. the over-count window at a sweep hand-off) can't keep resetting the streak and dodging the
+// freeze. Survives restarts + coordinates across instances. A MATERIAL breach skips the grace entirely (see treasuryPass).
 const BREACH_SINCE_KEY = 'por_breach_since';
+interface BreachMarker { start: number; solventPasses: number }
 
-async function breachSince(db: Db): Promise<number | null> {
+async function getBreachMarker(db: Db): Promise<BreachMarker | null> {
   const r = await db.query<{ reason: string }>(`SELECT reason FROM system_flags WHERE key = $1`, [BREACH_SINCE_KEY]);
-  const ms = r.rows[0] ? Number(r.rows[0].reason) : NaN;
-  return Number.isFinite(ms) ? ms : null;
+  if (!r.rows[0]) return null;
+  try {
+    const m = JSON.parse(r.rows[0].reason) as Partial<BreachMarker>;
+    return typeof m.start === 'number' ? { start: m.start, solventPasses: m.solventPasses ?? 0 } : null;
+  } catch {
+    return null;
+  }
 }
-/** Record the start of a breach streak; ON CONFLICT DO NOTHING keeps the ORIGINAL start across passes. */
-async function markBreachSince(db: Db, nowMs: number): Promise<void> {
-  await db.query(`INSERT INTO system_flags(key, reason) VALUES($1, $2) ON CONFLICT(key) DO NOTHING`, [BREACH_SINCE_KEY, String(nowMs)]);
+async function setBreachMarker(db: Db, m: BreachMarker): Promise<void> {
+  await db.query(
+    `INSERT INTO system_flags(key, reason) VALUES($1, $2) ON CONFLICT(key) DO UPDATE SET reason = EXCLUDED.reason, updated_at = now()`,
+    [BREACH_SINCE_KEY, JSON.stringify(m)],
+  );
 }
-async function clearBreachSince(db: Db): Promise<void> {
+async function clearBreachMarker(db: Db): Promise<void> {
   await db.query(`DELETE FROM system_flags WHERE key = $1`, [BREACH_SINCE_KEY]);
 }
 
@@ -192,9 +202,9 @@ export async function treasuryPass(db: Db, chain: TreasuryChain, log?: CustodyLo
     const deficit = s.liabilityE6 - s.onchainE6; // > 0 here (breached)
     const material = s.liabilityE6 > 0n && deficit * 10000n > s.liabilityE6 * BigInt(config.treasuryBreachMaterialBps);
     const t = now();
-    const since = await breachSince(db);
-    const start = since ?? t;
-    if (since === null) await markBreachSince(db, start);
+    const marker = await getBreachMarker(db);
+    const start = marker?.start ?? t;
+    await setBreachMarker(db, { start, solventPasses: 0 }); // a breached pass zeroes the solvent counter — a brief solvent flicker can't reset the episode
     if (material || t - start >= config.treasuryBreachGraceMs) {
       await freezeWithdrawals(db, reason);
       log?.error({ onchainE6: s.onchainE6.toString(), liabilityE6: s.liabilityE6.toString(), material }, reason);
@@ -202,7 +212,14 @@ export async function treasuryPass(db: Db, chain: TreasuryChain, log?: CustodyLo
       log?.error({ deficitE6: deficit.toString(), sinceMs: start }, `${reason} — within grace, not freezing yet`);
     }
   } else {
-    await clearBreachSince(db); // solvent → reset the streak (a freeze flag, if already set, still needs a MANUAL unfreeze)
+    // solvent: end the breach episode only after enough CONSECUTIVE solvent passes, so a flickering sub-material
+    // breach can't dodge the freeze by intermittently reading solvent. (A set freeze flag still needs a MANUAL unfreeze.)
+    const marker = await getBreachMarker(db);
+    if (marker) {
+      const solventPasses = marker.solventPasses + 1;
+      if (solventPasses >= config.treasuryBreachClearPasses) await clearBreachMarker(db);
+      else await setBreachMarker(db, { start: marker.start, solventPasses });
+    }
   }
 
   // --- hot-float management (band: fill to cap via deposits, drain to floor) ----------------

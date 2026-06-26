@@ -263,18 +263,33 @@ test('PoR grace: a small breach that PERSISTS past the grace freezes', async () 
   assert.match((await withdrawalsFrozen(db)) ?? '', /proof-of-reserves breach/);
 });
 
-test('PoR grace: a breach that clears by the next pass resets the streak (never freezes)', async () => {
+test('PoR grace: a flickering breach (a brief solvent blip < clearPasses) keeps accruing and still freezes', async () => {
   await unfreezeWithdrawals(db);
   await clearStreak();
   const L = await liability();
   const unswept = await unsweptNow();
   const broke = fakeTreasury({ hot: L - L / 100n - unswept, cold: 0n }); // 1% deficit
   const solvent = fakeTreasury({ hot: L - unswept, cold: 0n }); // onchain == liability
-  await treasuryPass(db, broke, undefined, () => 3_000_000); // pass 1: streak recorded
+  await treasuryPass(db, broke, undefined, () => 5_000_000); // episode starts
+  await treasuryPass(db, solvent, undefined, () => 5_030_000); // ONE solvent blip (< clearPasses) — episode kept, NOT reset
   assert.equal(await withdrawalsFrozen(db), null);
-  await treasuryPass(db, solvent, undefined, () => 3_030_000); // blip cleared → streak reset
-  await treasuryPass(db, broke, undefined, () => 3_060_000); // breaches again, but the streak just restarted
-  assert.equal(await withdrawalsFrozen(db), null); // still within grace of the NEW streak start
+  await treasuryPass(db, broke, undefined, () => 5_000_000 + 90_001); // past the grace of the ORIGINAL start
+  assert.match((await withdrawalsFrozen(db)) ?? '', /proof-of-reserves breach/); // froze — the blip didn't reset it
+});
+
+test('PoR grace: a SUSTAINED recovery (clearPasses consecutive solvent passes) resets the streak', async () => {
+  await unfreezeWithdrawals(db);
+  await clearStreak();
+  const L = await liability();
+  const unswept = await unsweptNow();
+  const broke = fakeTreasury({ hot: L - L / 100n - unswept, cold: 0n }); // 1% deficit
+  const solvent = fakeTreasury({ hot: L - unswept, cold: 0n });
+  await treasuryPass(db, broke, undefined, () => 6_000_000); // episode starts
+  await treasuryPass(db, solvent, undefined, () => 6_030_000); // solvent pass 1
+  await treasuryPass(db, solvent, undefined, () => 6_060_000); // solvent pass 2 → episode cleared (default clearPasses=2)
+  // a fresh breach long after the original start does NOT freeze — the streak reset, so the grace restarts
+  await treasuryPass(db, broke, undefined, () => 6_000_000 + 200_000);
+  assert.equal(await withdrawalsFrozen(db), null);
 });
 
 test('PoR grace: a MATERIAL breach (> 5% of liabilities) freezes IMMEDIATELY, no grace', async () => {
