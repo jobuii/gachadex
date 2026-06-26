@@ -31,7 +31,7 @@ import { defaultCcClient, ccVerifyUrl, type CcClient, type CcOpenResult } from '
 
 const GACHA_OFF = () => new HttpError(404, 'classic gacha is not available');
 const MAX_REVEAL_ATTEMPTS = 3;
-const REVEAL_RETRY_MS = 1500;
+const REVEAL_RETRY_MS = 1000; // gap between inline reveal-poll attempts (was 1500) — snappier reveal once CC's webhook lands
 const RECONCILE_GRACE_MS = 90_000;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 

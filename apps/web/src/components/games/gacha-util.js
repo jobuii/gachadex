@@ -22,8 +22,8 @@ export const netAfterCutE6 = (valueE6, cutBps) => (BigInt(valueE6 || 0) * (10_00
 // last-known 'paid' open; the reconciler + a later getGachaOpen finish it. Returns the most resolved result seen.
 export async function pollGachaOpen(r) {
   try {
-    for (let i = 0; i < 12 && r.status === 'paid'; i++) {
-      await new Promise((res) => setTimeout(res, 2000));
+    for (let i = 0; i < 20 && r.status === 'paid'; i++) {
+      await new Promise((res) => setTimeout(res, 1000)); // 1s polls (was 2s) → the reveal appears sooner once it lands
       r = await api.getGachaOpen(r.openId);
     }
   } catch { /* keep r at its last-known (paid) state */ }

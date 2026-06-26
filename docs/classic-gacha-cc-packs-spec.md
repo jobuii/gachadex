@@ -437,3 +437,34 @@ Visual: GDEX retro/arcade skin + cyan/violet/pink brand; not a pixel clone of CC
 - Token-bought packs debit `token_balances` (`FOR UPDATE`, never negative) + book `GACHA_REWARDS_BUDGET -price /
   TREASURY_USDC +price`; no `USER_COLLATERAL` debit; Tokens earned only on **paid** opens; reconciler enforces
   `Σ token_ledger == token_balances`; Tokens non-transferable.
+
+## 17. Buy latency — the JIT-fund step + how to streamline it
+
+Because GDEX holds the player's USDC in the **off-chain ledger** (it's a perps exchange), a buy can't pay CC
+directly — it must **JIT-fund a per-user custody wallet** (hot wallet → custody) and *then* have the custody
+wallet pay CC. That extra on-chain funding tx is what makes our pre-reveal wait longer than a thin client
+(collectorroll / Collector Crypt) that pays from a **pre-funded custodial wallet** in one tx.
+
+**Applied (2026-06-26):** `fundCustody` (and `transferNft`) confirm to **`'confirmed'`** (~1-2s), not
+`'finalized'` (~13s on mainnet) — the funding only needs to be spendable by the immediately-following CC
+payment, which `'confirmed'` state satisfies. A rare confirmed-then-dropped funding tx just fails the CC
+payment's preflight → the open refunds via the reconciler (no money risk). This took the pre-reveal wait
+from **~10s → ~3s**. Also tightened the web reveal-poll (2s→1s) and the inline reveal-retry gap (1.5s→1s).
+Applied the same `'confirmed'` to `transferNft` (withdrawals).
+
+**Residual (documented, not fixed — standard `'confirmed'` property):** `fundCustody`'s reorg is self-healing
+(a dropped funding tx makes the CC payment fail → the reconciler catches it). `transferNft` has no downstream
+observer, so a confirmed-then-reorged withdraw would leave the row `'withdrawn'` while the NFT is back in
+custody, and `reconcileStuckPrizes` only scans `'selling'`/`'withdrawing'`. A supermajority-block reorg is
+near-impossible on mainnet (no Solana app finalizes before crediting), so this is accepted as standard.
+**Optional belt-and-suspenders:** have the reconciler also DAS-check *recent* `'withdrawn'` rows and revert to
+`'held'` if the NFT is somehow still in custody.
+
+**Future options to reach ~1-2s parity (not done — bigger changes):**
+1. **Eliminate the JIT-fund** by paying CC **directly from the hot wallet** with the won NFT routed to the
+   user's custody wallet via CC's `altPlayerAddress` (payer ≠ recipient). One tx instead of two. Needs the
+   `altPlayerAddress` behaviour verified live (it's currently demoted to a live-test optimization).
+2. **Pre-fund per-user custody wallets** (keep a working USDC float in each) so a buy is a single custody→CC
+   payment with no funding hop. Capital-inefficient + adds float-management/PoR complexity.
+3. **Overlap** the funding with `generatePack`, and/or submit the fund + pay back-to-back without waiting for
+   the fund to confirm (riskier — the pay can fail preflight if the fund hasn't landed).

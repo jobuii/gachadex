@@ -21,8 +21,8 @@ import { getAssetTransferInfo } from '../das.ts';
 export interface GachaChain {
   /**
    * JIT-fund the user's NFT-custody wallet from the hot wallet so it can pay CC: `usdcE6` (the pack price)
-   * + a little SOL for the CC tx fee and the USDC-ATA rent. Awaits finalized confirmation, so the funds are
-   * in place before CC's payment tx executes. Returns the funding signature.
+   * + a little SOL for the CC tx fee and the USDC-ATA rent. Awaits 'confirmed' (not 'finalized') so the funds
+   * are spendable by CC's payment tx without ~13s of finalization latency. Returns the funding signature.
    */
   fundCustody(dest: string, usdcE6: bigint): Promise<{ sig: string }>;
   /** Sign a CC-provided unsigned base64 tx with `signer` (the user's custody keypair). Local; returns the
@@ -48,7 +48,12 @@ const FUND_SOL_LAMPORTS = 12_000_000; // 0.012 SOL
 const umi = createUmi(config.heliusDasUrl || config.solanaRpcUrl).use(mplCore());
 
 export function solanaGachaChain(): GachaChain {
-  const conn = new Connection(config.solanaRpcUrl, 'finalized');
+  // 'confirmed' (supermajority-voted, ~1-2s), NOT 'finalized' (~13s on mainnet). The JIT-funding tx only
+  // needs to be spendable by the very next step (paying CC); 'confirmed' state satisfies that tx's preflight,
+  // so waiting for finalization just added ~10s of dead pre-reveal latency. A confirmed-then-dropped funding
+  // tx is near-impossible on mainnet (a supermajority-voted-block reorg); if it ever happened the CC payment
+  // would fail → the open is caught + reconciled (refunded, or flagged for an operator credit) — no silent loss.
+  const conn = new Connection(config.solanaRpcUrl, 'confirmed');
   const usdcMint = new PublicKey(config.usdcMint);
 
   return {
@@ -63,11 +68,11 @@ export function solanaGachaChain(): GachaChain {
         createTransferInstruction(fromAta, toAta, hot.publicKey, usdcE6),
       );
       tx.feePayer = hot.publicKey;
-      const bh = await conn.getLatestBlockhash('finalized');
+      const bh = await conn.getLatestBlockhash('confirmed');
       tx.recentBlockhash = bh.blockhash;
       tx.sign(hot);
       const sig = await conn.sendRawTransaction(tx.serialize());
-      await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'finalized');
+      await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
       return { sig };
     },
 
@@ -106,11 +111,11 @@ export function solanaGachaChain(): GachaChain {
         .map(toWeb3JsInstruction);
       const tx = new Transaction().add(...ixs);
       tx.feePayer = hot.publicKey; // gas relay — the custody wallet need not hold SOL
-      const bh = await conn.getLatestBlockhash('finalized');
+      const bh = await conn.getLatestBlockhash('confirmed');
       tx.recentBlockhash = bh.blockhash;
       tx.sign(hot, signer); // hot = fee payer; signer = the asset's owner/authority
       const sig = await conn.sendRawTransaction(tx.serialize());
-      await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'finalized');
+      await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
       return { sig };
     },
   };
