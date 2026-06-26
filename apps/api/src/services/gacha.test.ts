@@ -250,6 +250,38 @@ test('open: YOLO/turbo — CC auto-sells the common, credits buyback minus the 1
   assert.equal((await feeRev()) - feeBefore, 3_000_000n); // 10% cut → FEE_REVENUE
 });
 
+test('open: YOLO/turbo — a Common buyback that ALSO carries nft_address still auto-sells + routes USDC to hot', async () => {
+  // CC's real TURBO_MODE_BUYBACK response carries nft_address + transactionSignature (gacha API docs). The
+  // buyback signal MUST win over the nft_address delivery branch, else the auto-sold common is mis-recorded as a
+  // held slab and never credited (the prod bug). And generatePack must pass altFundsRecipient so the auto-sell
+  // USDC lands in the hot wallet, backing settleTurboSold's TREASURY debit.
+  const user = await newUser();
+  const before = await collOf(user);
+  const cc = fakeCc();
+  let genParams: { altFundsRecipient?: string } = {};
+  cc.generatePack = async (p: unknown) => { genParams = (p as { altFundsRecipient?: string }) ?? {}; return { memo: `m-${randomUUID().slice(0, 8)}`, transaction: 'unsigned' }; };
+  cc.reveals = [{ success: true, nft_address: 'MintTurbo1', transactionSignature: 'sig', code: 'TURBO_MODE_BUYBACK', buybackAmount: 30_000_000, rarity: 'Common' }];
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'yolo-nft', turbo: true }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(r.status, 'turbo_sold'); // auto-sold, NOT 'opened'
+  assert.equal(r.card, null);
+  assert.equal(await collOf(user), before - PRICE + 27_000_000n); // credited 90% of $30
+  assert.ok(genParams.altFundsRecipient, 'turbo routes the auto-sell USDC via altFundsRecipient');
+  const inv = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM gacha_nft_inventory WHERE mint = 'MintTurbo1'`);
+  assert.equal(inv.rows[0].n, 0); // the common was NOT mis-recorded as a held NFT
+});
+
+test('open: normal (non-turbo) delivery is unchanged — no altFundsRecipient, card still recorded as held', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  let genParams: { altFundsRecipient?: string } = {};
+  cc.generatePack = async (p: unknown) => { genParams = (p as { altFundsRecipient?: string }) ?? {}; return { memo: `m-${randomUUID().slice(0, 8)}`, transaction: 'unsigned' }; };
+  cc.reveals = [keptReveal(4475)]; // nft_address, rarity epic, NO buyback signal
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'normal-deliver', turbo: false }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(r.status, 'opened');
+  assert.ok(r.card && r.card.mint.startsWith('Mint'));
+  assert.equal(genParams.altFundsRecipient, undefined, 'normal mode never sends altFundsRecipient');
+});
+
 test('sell-back: 95% to the user, 5% to FEE_REVENUE, prize sold once', async () => {
   const user = await newUser();
   const chain = fakeChain();

@@ -207,8 +207,9 @@ async function gachaPost<T>(path: string, body: unknown, opts: { timeoutMs?: num
 }
 
 /** Step 1 of an open: CC returns a `memo` (receipt) + an unsigned base64 USDC-payment tx the player's wallet
-    must sign + submit. `playerAddress` is the payer AND the NFT recipient (the user's custody wallet). */
-export function generatePack(params: { playerAddress: string; packType: string; turbo?: boolean }, opts: { fetchFn?: typeof fetch } = {}): Promise<{ memo: string; transaction: string }> {
+    must sign + submit. `playerAddress` is the payer AND the NFT recipient (the user's custody wallet).
+    `altFundsRecipient` (TURBO ONLY — CC ignores it for non-turbo) redirects a Common win's auto-sell USDC. */
+export function generatePack(params: { playerAddress: string; packType: string; turbo?: boolean; altFundsRecipient?: string }, opts: { fetchFn?: typeof fetch } = {}): Promise<{ memo: string; transaction: string }> {
   return gachaPost('/api/generatePack', { ...params, turbo: params.turbo ?? false }, opts);
 }
 
