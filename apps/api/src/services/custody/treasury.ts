@@ -1,4 +1,5 @@
 import { getLimits } from './limits.ts';
+import { config } from '../../config.ts';
 import type { Db, Queryer } from '../../db/client.ts';
 import { getOrCreateSystemAccount, getBalance } from '../ledger.ts';
 import { usdc } from '../../money.ts';
@@ -56,6 +57,26 @@ export async function freezeWithdrawals(db: Db, reason: string): Promise<void> {
 /** Operator action — a freeze never clears itself. */
 export async function unfreezeWithdrawals(db: Db): Promise<void> {
   await db.query(`DELETE FROM system_flags WHERE key = $1`, [FROZEN_KEY]);
+}
+
+// A small (non-material) PoR breach is most likely a transient measurement blip — e.g. RPC lag at a deposit-sweep
+// hand-off, where a just-swept deposit has dropped out of `unswept` but the hot-balance read hasn't caught up.
+// We only freeze on it if it PERSISTS past treasuryBreachGraceMs. This marker records when the current breach
+// streak began (epoch-ms in the `reason` field), so the persistence check survives restarts + coordinates across
+// instances. A MATERIAL breach skips the grace entirely (see treasuryPass).
+const BREACH_SINCE_KEY = 'por_breach_since';
+
+async function breachSince(db: Db): Promise<number | null> {
+  const r = await db.query<{ reason: string }>(`SELECT reason FROM system_flags WHERE key = $1`, [BREACH_SINCE_KEY]);
+  const ms = r.rows[0] ? Number(r.rows[0].reason) : NaN;
+  return Number.isFinite(ms) ? ms : null;
+}
+/** Record the start of a breach streak; ON CONFLICT DO NOTHING keeps the ORIGINAL start across passes. */
+async function markBreachSince(db: Db, nowMs: number): Promise<void> {
+  await db.query(`INSERT INTO system_flags(key, reason) VALUES($1, $2) ON CONFLICT(key) DO NOTHING`, [BREACH_SINCE_KEY, String(nowMs)]);
+}
+async function clearBreachSince(db: Db): Promise<void> {
+  await db.query(`DELETE FROM system_flags WHERE key = $1`, [BREACH_SINCE_KEY]);
 }
 
 /** Read-only treasury/PoR state — safe to expose on an admin GET (no sweep, no freeze). */
@@ -155,8 +176,8 @@ export async function customerFunds(db: Db): Promise<{ freeE6: bigint; lockedE6:
   return { freeE6, lockedE6 };
 }
 
-/** One treasury pass: proof-of-reserves (auto-freeze on breach), then hot-float management. */
-export async function treasuryPass(db: Db, chain: TreasuryChain, log?: CustodyLog): Promise<TreasuryReport> {
+/** One treasury pass: proof-of-reserves (auto-freeze on a MATERIAL or PERSISTENT breach), then hot-float management. */
+export async function treasuryPass(db: Db, chain: TreasuryChain, log?: CustodyLog, now: () => number = Date.now): Promise<TreasuryReport> {
   const s = await treasuryState(db, chain);
 
   // --- proof of reserves -------------------------------------------------------------------
@@ -164,8 +185,24 @@ export async function treasuryPass(db: Db, chain: TreasuryChain, log?: CustodyLo
     const reason =
       `proof-of-reserves breach: on-chain custody ${s.onchainE6} uUSDC ` +
       `(hot ${s.hotE6} + cold ${s.coldE6} + unswept ${s.unsweptE6}) < liabilities ${s.liabilityE6} uUSDC`;
-    await freezeWithdrawals(db, reason);
-    log?.error({ onchainE6: s.onchainE6.toString(), liabilityE6: s.liabilityE6.toString() }, reason);
+    // A MATERIAL breach (deficit > treasuryBreachMaterialBps of liabilities) is a real shortfall → freeze NOW.
+    // A small breach is most likely a transient measurement blip (e.g. RPC lag at a deposit-sweep hand-off, where a
+    // just-swept deposit dropped out of `unswept` before the hot read caught up) → only freeze if it PERSISTS past
+    // the grace window, so a momentary blip that clears by the next pass never trips a global freeze.
+    const deficit = s.liabilityE6 - s.onchainE6; // > 0 here (breached)
+    const material = s.liabilityE6 > 0n && deficit * 10000n > s.liabilityE6 * BigInt(config.treasuryBreachMaterialBps);
+    const t = now();
+    const since = await breachSince(db);
+    const start = since ?? t;
+    if (since === null) await markBreachSince(db, start);
+    if (material || t - start >= config.treasuryBreachGraceMs) {
+      await freezeWithdrawals(db, reason);
+      log?.error({ onchainE6: s.onchainE6.toString(), liabilityE6: s.liabilityE6.toString(), material }, reason);
+    } else {
+      log?.error({ deficitE6: deficit.toString(), sinceMs: start }, `${reason} — within grace, not freezing yet`);
+    }
+  } else {
+    await clearBreachSince(db); // solvent → reset the streak (a freeze flag, if already set, still needs a MANUAL unfreeze)
   }
 
   // --- hot-float management (band: fill to cap via deposits, drain to floor) ----------------
