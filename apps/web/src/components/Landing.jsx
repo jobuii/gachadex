@@ -113,9 +113,7 @@ export function Landing() {
   const [bannerDismissed, setBannerDismissed] = useState(() => seenFlag(GACHA_BANNER_KEY));
   const [gachaPaused, setGachaPaused] = useState(false);
   const gachaDialogRef = useRef(null);
-  const gachaTimer = useRef(null);
-  const gachaRemaining = useRef(GACHA_AUTO_CLOSE_MS);
-  const gachaStarted = useRef(0);
+  const gachaRemaining = useRef(GACHA_AUTO_CLOSE_MS); // soft-close budget left (ms), kept across hover-pauses
 
   // is Classic Gacha live? (same /health gate the Exchange uses) — drives the whole announcement + nav entry
   useEffect(() => {
@@ -135,40 +133,50 @@ export function Landing() {
 
   const closeGacha = useCallback(() => { setShowGacha(false); setGachaPaused(false); }, []);
 
-  // auto-close after a readable beat; pause the countdown while the pointer is over the modal so a slow
-  // reader is never cut off mid-sentence
+  // refill the soft-close budget each time the modal opens
+  useEffect(() => { if (showGacha) gachaRemaining.current = GACHA_AUTO_CLOSE_MS; }, [showGacha]);
+
+  // soft auto-close — this effect OWNS the timer. It runs only while open AND not paused; on teardown it
+  // deducts the elapsed slice from the remaining budget, so a hover (gachaPaused=true) stops the clock and a
+  // leave resumes it from where it left off. pause/resume merely flip the flag — that sidesteps the
+  // appear-under-cursor race an imperative start/stop had (a mouseenter firing before this effect could
+  // corrupt the budget to 0 and flash-close the modal).
   useEffect(() => {
-    if (!showGacha) { gachaRemaining.current = GACHA_AUTO_CLOSE_MS; return; }
-    gachaStarted.current = Date.now();
-    gachaTimer.current = setTimeout(closeGacha, gachaRemaining.current);
-    return () => clearTimeout(gachaTimer.current);
-  }, [showGacha, closeGacha]);
-  // hard safety cap — closes the modal by GACHA_MAX_OPEN_MS no matter what (so a missed mouseleave, etc.,
-  // can never leave it stuck open); the soft timer above closes it sooner in the normal case
+    if (!showGacha || gachaPaused) return;
+    const startedAt = Date.now();
+    const t = setTimeout(closeGacha, gachaRemaining.current);
+    return () => {
+      clearTimeout(t);
+      gachaRemaining.current = Math.max(0, gachaRemaining.current - (Date.now() - startedAt));
+    };
+  }, [showGacha, gachaPaused, closeGacha]);
+
+  // hard safety cap — closes by GACHA_MAX_OPEN_MS no matter what (never stuck open, even if left paused)
   useEffect(() => {
     if (!showGacha) return;
     const hard = setTimeout(closeGacha, GACHA_MAX_OPEN_MS);
     return () => clearTimeout(hard);
   }, [showGacha, closeGacha]);
-  const pauseGacha = () => {
-    if (!showGacha || gachaPaused) return;
-    clearTimeout(gachaTimer.current);
-    gachaRemaining.current = Math.max(0, gachaRemaining.current - (Date.now() - gachaStarted.current));
-    setGachaPaused(true);
-  };
-  const resumeGacha = () => {
-    if (!showGacha || !gachaPaused) return;
-    gachaStarted.current = Date.now();
-    gachaTimer.current = setTimeout(closeGacha, gachaRemaining.current);
-    setGachaPaused(false);
-  };
 
-  // ESC closes; focus the dialog when it opens (a11y)
+  const pauseGacha = () => setGachaPaused(true);
+  const resumeGacha = () => setGachaPaused(false);
+
+  // a11y: focus the dialog on open, ESC closes, and Tab is trapped inside it (so aria-modal is honoured)
   useEffect(() => {
     if (!showGacha) return;
-    const onKey = (e) => { if (e.key === 'Escape') closeGacha(); };
+    const dialog = gachaDialogRef.current;
+    const onKey = (e) => {
+      if (e.key === 'Escape') { closeGacha(); return; }
+      if (e.key === 'Tab' && dialog) {
+        const f = dialog.querySelectorAll('button, [href], [tabindex]:not([tabindex="-1"])');
+        if (!f.length) return;
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
     document.addEventListener('keydown', onKey);
-    gachaDialogRef.current?.focus();
+    dialog?.focus({ preventScroll: true }); // don't scroll a too-tall modal off the top on short viewports
     return () => document.removeEventListener('keydown', onKey);
   }, [showGacha, closeGacha]);
 
