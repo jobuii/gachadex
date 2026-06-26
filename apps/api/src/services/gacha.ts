@@ -12,6 +12,9 @@ import { lastMarkE6 } from './marks.ts';
 import { gachaConfig, gachaMarkupE6 } from './gacha-config.ts';
 import type { GachaChain } from './custody/gacha-chain.ts';
 import { defaultCcClient, ccVerifyUrl, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
+import { getAssetTransferInfo } from './das.ts';
+import { settleSoldPrize, type SellBackResult } from './gacha-settle.ts';
+export type { SellBackResult } from './gacha-settle.ts';
 
 /**
  * Classic Gacha service (docs/classic-gacha-cc-packs-spec.md, P1–P4 — buy → open → sell-back / withdraw,
@@ -40,6 +43,7 @@ export interface GachaDeps {
   cc?: CcClient;
   sleepMs?: (ms: number) => Promise<void>;
   now?: () => number; // injectable clock for the reconcile grace window (tests)
+  getAssetInfo?: typeof getAssetTransferInfo; // injectable DAS owner lookup (tests); used to gate sell-back/withdraw reverts
 }
 
 export interface GachaCard { mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; rarity: string | null; marketId: string | null; year: string | null }
@@ -444,12 +448,11 @@ export async function listInventory(db: Db, userId: string): Promise<InventoryIt
   return r.rows.map((x) => ({ id: x.id, mint: x.mint, name: x.name, grade: x.grade, imageUrl: x.image_url, valueE6: x.insured_value_e6 ?? '0', marketId: x.market_id, status: x.status, rarity: x.rarity }));
 }
 
-export interface SellBackResult { prizeId: string; payoutE6: string; cutE6: string }
-
 export async function sellBack(db: Db, userId: string, prizeId: string, deps: GachaDeps, opts: { instant?: boolean } = {}): Promise<SellBackResult> {
   if (!config.classicGachaEnabled) throw GACHA_OFF();
   const cc = deps.cc ?? defaultCcClient;
   const { chain } = deps;
+  const getInfo = deps.getAssetInfo ?? getAssetTransferInfo; // DAS owner lookup to gate the revert
   const cutBps = BigInt(opts.instant ? gachaConfig.turboCutBps.get() : gachaConfig.buybackCutBps.get()); // 10% instant vs 5% manual (live knobs)
 
   // Claim the prize (held → selling) under a row lock BEFORE the irreversible on-chain buyback, so two
@@ -477,35 +480,24 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
     if (!submit.success && !submit.signature) throw new HttpError(502, 'buyback submission failed');
     gross = BigInt(Math.trunc(quote.refundAmount)); // base units CC commits to pay the hot wallet
   } catch (e) {
-    // Release the claim (selling → held) so the user can retry. Most submit failures mean nothing moved (build
-    // error / 4xx / pre-broadcast timeout). The rare broadcast-then-timeout leaves the NFT gone yet the row back at
-    // 'held' — log so an operator can reconcile (no inventory reconciler yet; mirrors the withdraw path's logging).
-    await db.query(`UPDATE gacha_nft_inventory SET status = 'held' WHERE id = $1 AND status = 'selling'`, [prizeId])
-      .catch((revertErr) => console.error('[gacha] sell-back revert failed — prize stuck "selling":', prizeId, revertErr));
-    console.error('[gacha] sell-back failed (released to held — verify the NFT is still in custody):', prizeId, e instanceof Error ? e.message : e);
+    // Release the claim (selling → held) so the user can retry — but ONLY if the NFT is CONFIRMED still in
+    // custody (the common pre-broadcast failure). If it has LEFT (the rare broadcast-then-timeout: the buyback
+    // actually landed) or DAS is unavailable, leave the row 'selling' for the reconciler to settle on-chain.
+    // Reverting to 'held' on a gone NFT would strand a sold slab as a phantom — mis-crediting the seller AND
+    // (since CC re-circulates bought-back NFTs) misfiring a later open's phantom guard on the re-rolled mint.
+    const info = await getInfo(claimed.mint).catch(() => null);
+    if (info && info.owner === claimed.custodyPubkey) {
+      await db.query(`UPDATE gacha_nft_inventory SET status = 'held' WHERE id = $1 AND status = 'selling'`, [prizeId])
+        .catch((revertErr) => console.error('[gacha] sell-back revert failed — prize stuck "selling":', prizeId, revertErr));
+    } else {
+      console.error('[gacha] sell-back submit failed; NFT not confirmed in custody — left "selling" for the reconciler:', prizeId, claimed.mint, { owner: info?.owner ?? null });
+    }
+    console.error('[gacha] sell-back failed:', prizeId, e instanceof Error ? e.message : e);
     throw e;
   }
 
-  // Settle the ledger from the committed refund amount.
-  return await db.tx(async (q) => {
-    const cur = (await q.query<{ status: string }>(`SELECT status FROM gacha_nft_inventory WHERE id = $1 FOR UPDATE`, [prizeId])).rows[0];
-    if (!cur || cur.status !== 'selling') throw new HttpError(409, 'prize already settled'); // settle exactly once
-    const payout = (gross * (10_000n - cutBps)) / 10_000n; // floor; user gets (1 − cut)
-    const cut = gross - payout; // GDEX keeps the remainder
-    const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
-    const fee = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
-    const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
-    const txnId = await postTxn(q, {
-      reason: 'GACHA_SELLBACK', refType: 'gacha_prize', refId: prizeId,
-      entries: [
-        { accountId: coll, amount: payout },
-        { accountId: fee, amount: cut },
-        { accountId: treasury, amount: -gross }, // liability up by the USDC that landed in the hot wallet
-      ],
-    });
-    await q.query(`UPDATE gacha_nft_inventory SET status='sold', sell_value_e6=$2, sell_cut_e6=$3, txn_id=$4, settled_at=now() WHERE id=$1`, [prizeId, payout.toString(), cut.toString(), txnId]);
-    return { prizeId, payoutE6: payout.toString(), cutE6: cut.toString() };
-  });
+  // Settle the ledger from the committed refund amount (shared with the reconciler's auto-settle).
+  return await db.tx((q) => settleSoldPrize(q, prizeId, userId, gross, cutBps));
 }
 
 // ─────────────────────────────── convert: sell-back → open a perp (lever C, P3) ───────────────────────────────
@@ -562,16 +554,17 @@ export async function requestNftWithdraw(
 ): Promise<{ status: string; sig?: string }> {
   if (!config.classicGachaEnabled) throw GACHA_OFF();
   const { chain } = deps;
+  const getInfo = deps.getAssetInfo ?? getAssetTransferInfo; // DAS owner lookup to gate the revert
   // Claim held → withdrawing AND verify the step-up in one tx (a rollback un-claims the nonce, like the USDC
   // withdrawal). A stolen access token alone can't move the asset — the dest is bound by a fresh wallet sig.
   const claimed = await db.tx(async (q) => {
-    const row = (await q.query<{ mint: string; status: string }>(`SELECT mint, status FROM gacha_nft_inventory WHERE id = $1 AND user_id = $2 FOR UPDATE`, [prizeId, userId])).rows[0];
+    const row = (await q.query<{ mint: string; custody_pubkey: string; status: string }>(`SELECT mint, custody_pubkey, status FROM gacha_nft_inventory WHERE id = $1 AND user_id = $2 FOR UPDATE`, [prizeId, userId])).rows[0];
     if (!row) throw new HttpError(404, 'prize not found');
     if (row.status !== 'held') throw new HttpError(409, 'prize not withdrawable');
     await verifyNftWithdrawStepUp(q, { pubkey, mint: row.mint, dest: p.dest, message: p.message, signature: p.signature });
     // settled_at = last-state-change marker (grace anchor for the stuck-row reconciler).
     await q.query(`UPDATE gacha_nft_inventory SET status = 'withdrawing', withdraw_dest = $2, settled_at = now() WHERE id = $1`, [prizeId, p.dest]);
-    return { mint: row.mint };
+    return { mint: row.mint, custodyPubkey: row.custody_pubkey };
   });
 
   let sig: string;
@@ -579,11 +572,18 @@ export async function requestNftWithdraw(
     const custody = await getNftCustodyKeypair(db, userId);
     ({ sig } = await chain.transferNft(claimed.mint, p.dest, custody));
   } catch (e) {
-    // Release the claim (withdrawing → held) so the user can re-authorize. If the revert ITSELF fails, surface
-    // it (don't swallow) — the row is then stuck 'withdrawing' with the NFT still in custody, an operator fix.
-    await db
-      .query(`UPDATE gacha_nft_inventory SET status = 'held', withdraw_dest = NULL WHERE id = $1 AND status = 'withdrawing'`, [prizeId])
-      .catch((revertErr) => console.error('[gacha] NFT-withdraw revert failed — prize stuck "withdrawing", NFT still in custody:', prizeId, revertErr));
+    // Release the claim (withdrawing → held) so the user can re-authorize — but ONLY if the NFT is CONFIRMED
+    // still in custody. If it has LEFT (a broadcast-then-timeout: the transfer landed at dest) or DAS is
+    // unavailable, leave the row 'withdrawing' for the reconciler to finalize to 'withdrawn' — reverting to
+    // 'held' on an already-transferred NFT would strand a phantom (user thinks they hold a card that's gone).
+    const info = await getInfo(claimed.mint).catch(() => null);
+    if (info && info.owner === claimed.custodyPubkey) {
+      await db
+        .query(`UPDATE gacha_nft_inventory SET status = 'held', withdraw_dest = NULL WHERE id = $1 AND status = 'withdrawing'`, [prizeId])
+        .catch((revertErr) => console.error('[gacha] NFT-withdraw revert failed — prize stuck "withdrawing":', prizeId, revertErr));
+    } else {
+      console.error('[gacha] NFT-withdraw failed; NFT not confirmed in custody — left "withdrawing" for the reconciler:', prizeId, claimed.mint, { owner: info?.owner ?? null });
+    }
     throw e;
   }
   await db.query(`UPDATE gacha_nft_inventory SET status = 'withdrawn', withdraw_sig = $2, settled_at = now() WHERE id = $1 AND status = 'withdrawing'`, [prizeId, sig]);

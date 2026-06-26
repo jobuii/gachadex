@@ -659,11 +659,11 @@ test('reconcile-stuck: selling + NFT still in custody → released to held', asy
   assert.equal(await statusOf(id), 'held');
 });
 
-test('reconcile-stuck: selling + NFT gone (sold on-chain, unsettled) → flagged, left for an operator', async () => {
+test('reconcile-stuck: selling + NFT gone but NO CC buyback amount (no open_id) → flagged for a manual settle', async () => {
   const id = await seedStuck(await newUser(), 'RC-S-GONE', 'selling', 'CUSTODY2', STALE);
   const r = await reconcileStuckPrizes(db, { getAssetInfo: dasFor('RC-S-GONE', 'COLLECTORCRYPT') });
   assert.equal(r.flaggedSelling, 1);
-  assert.equal(await statusOf(id), 'selling'); // can't auto-credit → needs a manual settle
+  assert.equal(await statusOf(id), 'selling'); // no memo → no verified amount → fall back to a manual settle
 });
 
 test('reconcile-stuck: withdrawing + NFT left custody → marked withdrawn', async () => {
@@ -793,4 +793,45 @@ test('phantom delivery: a reveal mint still ACTIVELY held elsewhere refunds inst
   assert.equal(rb.status, 'failed');          // refunded, not falsely delivered
   assert.equal(await collOf(b), before);      // charged then refunded → net zero
   assert.equal((await listInventory(db, b)).length, 0); // no phantom inventory row
+});
+
+// ── sell-back / reconciler: DAS-gated revert + auto-settle (no stale 'held'; the seller is made whole) ──
+test('sell-back failure + NFT CONFIRMED still in custody → reverts to held (safe retry)', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'sbf-cust' }, { chain: fakeChain(), cc, ...noWait });
+  const row = (await db.query<{ id: string; mint: string; custody_pubkey: string }>(`SELECT id, mint, custody_pubkey FROM gacha_nft_inventory WHERE user_id=$1`, [user])).rows[0];
+  cc.submitThrow = true; // buyback broadcast fails AFTER the held→selling claim
+  await assert.rejects(sellBack(db, user, row.id, { chain: fakeChain(), cc, ...noWait, getAssetInfo: dasFor(row.mint, row.custody_pubkey) }));
+  assert.equal(await statusOf(row.id), 'held'); // NFT still ours → released for retry
+});
+
+test('sell-back failure + NFT NOT in custody (broadcast-then-timeout) → left "selling" for the reconciler (no stale held)', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'sbf-gone' }, { chain: fakeChain(), cc, ...noWait });
+  const row = (await db.query<{ id: string; mint: string }>(`SELECT id, mint FROM gacha_nft_inventory WHERE user_id=$1`, [user])).rows[0];
+  cc.submitThrow = true;
+  await assert.rejects(sellBack(db, user, row.id, { chain: fakeChain(), cc, ...noWait, getAssetInfo: dasFor(row.mint, 'COLLECTORCRYPT') }));
+  assert.equal(await statusOf(row.id), 'selling'); // NFT gone → NOT reverted to 'held' (a stale held would be a phantom)
+});
+
+test('reconcile-stuck: selling + NFT gone + CC confirmed buyback → AUTO-SETTLED (credits the seller, marks sold)', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'rc-settle' }, { chain: fakeChain(), cc, ...noWait });
+  const row = (await db.query<{ id: string; mint: string }>(`SELECT id, mint FROM gacha_nft_inventory WHERE user_id=$1`, [user])).rows[0];
+  await db.query(`UPDATE gacha_nft_inventory SET status='selling', settled_at=$2 WHERE id=$1`, [row.id, STALE]); // crashed sell-back: stuck 'selling', NFT gone
+  const collBefore = await collOf(user); const feeBefore = await feeRev();
+  const GROSS = 40_000_000n;
+  const r = await reconcileStuckPrizes(db, {
+    getAssetInfo: dasFor(row.mint, 'COLLECTORCRYPT'),
+    cc: { getPackStatus: async () => ({ memo: 'm', pack: { refunded: false }, send: null, buyback: [{ refund_amount: GROSS.toString(), status: 'confirmed' }] }) },
+  });
+  assert.equal(r.settledSelling, 1);
+  assert.equal(await statusOf(row.id), 'sold');
+  const collDelta = (await collOf(user)) - collBefore;
+  const feeDelta = (await feeRev()) - feeBefore;
+  assert.ok(collDelta > 0n, 'seller credited the payout');
+  assert.equal(collDelta + feeDelta, GROSS); // the full gross splits: payout → user, cut → FEE_REVENUE
 });
