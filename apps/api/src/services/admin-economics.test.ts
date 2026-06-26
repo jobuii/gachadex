@@ -21,10 +21,10 @@ test('/admin/economics serves in play-money; /admin/treasury stays gated off', a
   const econ = await app.inject({ method: 'GET', url: '/admin/economics', headers: KEY });
   assert.equal(econ.statusCode, 200, 'economics serves in play-money mode');
   const b = econ.json();
-  for (const k of ['freeE6', 'lockedE6', 'customerLpE6', 'insuranceE6', 'feeRevenueE6', 'fundingCollectedE6', 'fundingRevenueE6', 'pnlBreakdown']) {
+  for (const k of ['freeE6', 'lockedE6', 'customerLpE6', 'insuranceE6', 'surplusE6', 'feeRevenueE6', 'fundingHouseE6', 'fundingLpE6', 'fundingCollectedE6', 'pnlBreakdown']) {
     assert.ok(k in b, `economics response missing ${k}`);
   }
-  assert.ok('totalE6' in b.pnlBreakdown, 'pnlBreakdown included');
+  assert.ok('surplusE6' in b.pnlBreakdown, 'pnlBreakdown included');
   const treas = await app.inject({ method: 'GET', url: '/admin/treasury', headers: KEY });
   assert.equal(treas.statusCode, 404, 'treasury route correctly gated off in play-money (economics unaffected)');
 });
