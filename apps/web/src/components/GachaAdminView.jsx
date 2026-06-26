@@ -41,6 +41,7 @@ export function GachaAdminView({ adminKey }) {
   const [onlyVisible, setOnlyVisible] = useState(false); // Live-machines filter: only machines shown in the lobby
   const [refreshSecs, setRefreshSecs] = useState(''); // the global refresh-interval input (seconds)
   const refreshFocusedRef = useRef(false); // while the admin is editing the interval, don't let a poll overwrite it
+  const [fundAmt, setFundAmt] = useState(''); // USD to sweep FEE_REVENUE → rewards budget
 
   const load = useCallback((force = false) => {
     return Promise.all([api.adminGetGachaConfig(adminKey, force), api.adminGetGachaMonitoring(adminKey)])
@@ -118,6 +119,12 @@ export function GachaAdminView({ adminKey }) {
   const resetGold = () => {
     if (window.prompt('Type RESET to zero EVERY customer’s Gold balance. This cannot be undone.') !== 'RESET') return;
     act(async () => { const r = await api.adminResetGold(adminKey); setMsg(`Reset ${r.usersReset} Gold balance(s) to zero.`); });
+  };
+  // Sweep earned platform fees into the Gold rewards budget (capped server-side at the FEE_REVENUE balance).
+  const fundBudget = () => {
+    const usd = parseFloat(fundAmt);
+    if (!Number.isFinite(usd) || usd <= 0) { setErr('Enter a positive amount to sweep.'); return; }
+    act(async () => { const r = await api.adminFundGachaRewardsBudget(usd, adminKey); setFundAmt(''); setMsg(`Swept ${formatUsd(BigInt(r.movedE6))} into the rewards budget.`); });
   };
 
   const reconcileStuck = () => act(async () => {
@@ -214,7 +221,25 @@ export function GachaAdminView({ adminKey }) {
           <span>Pay with Gold on machines <span className="muted">· off = USDC only (free-pack claim still works); needs the system on</span></span>
         </label>
       </div>
-      <button className="btn-ghost" disabled={busy} onClick={resetGold} style={{ marginTop: '0.5rem', color: 'var(--down, #ef4444)' }}>Reset all Gold balances…</button>
+
+      <div style={{ marginTop: '0.8rem' }}>
+        <div className="admin-stats">
+          <div className="stat-card"><span className="sc-label">Rewards budget</span><span className="sc-val">{formatUsd(BigInt(mon?.rewardsBudgetE6 ?? '0'))}</span></div>
+          <div className="stat-card"><span className="sc-label">Earned fees available</span><span className="sc-val">{formatUsd(BigInt(mon?.feeRevenueE6 ?? '0'))}</span></div>
+        </div>
+        <div className="games-admin-row" style={{ gap: '0.5rem', alignItems: 'center', marginTop: '0.45rem', flexWrap: 'wrap' }}>
+          <label className="field-label" style={{ flexDirection: 'row', alignItems: 'center', gap: '0.4rem' }}>
+            <span>Sweep $</span>
+            <input type="number" min="0" step="1" value={fundAmt} disabled={busy} style={{ width: 100 }} onChange={(e) => setFundAmt(e.target.value)} />
+          </label>
+          <button className="btn-primary" disabled={busy} onClick={fundBudget}>Sweep fees → rewards budget</button>
+        </div>
+        <p className="muted" style={{ fontSize: '0.74rem', margin: '0.3rem 0 0' }}>
+          Moves earned platform fees into the Gold rewards budget (which pays Collector Crypt for Gold-bought packs) — a ledger move, no on-chain transfer. Pre-fund this before turning on “Pay with Gold”; you can only sweep up to the earned fees shown.
+        </p>
+      </div>
+
+      <button className="btn-ghost" disabled={busy} onClick={resetGold} style={{ marginTop: '0.8rem', color: 'var(--down, #ef4444)' }}>Reset all Gold balances…</button>
       <p className="muted" style={{ fontSize: '0.76rem' }}>Destructive: zeroes every customer’s Gold (writes an ADMIN_RESET ledger entry per user). Type-to-confirm.</p>
 
       <h3 style={{ marginTop: '1.5rem' }}>Machines ({machines.length})</h3>

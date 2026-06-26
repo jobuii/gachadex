@@ -1,4 +1,6 @@
 import type { Db } from '../db/client.ts';
+import { HttpError } from '../errors.ts';
+import { getOrCreateSystemAccount, getBalance, postTxn } from './ledger.ts';
 
 /**
  * Classic Gacha economics + activity readout (docs/classic-gacha-cc-packs-spec.md §6/§12, plus operator stats).
@@ -21,7 +23,7 @@ export interface GachaMachineStats {
 }
 export interface GachaMonitoring {
   // economics
-  sellBackCutE6: string; markupE6: string; revenueE6: string; rebateCostE6: string; netE6: string; rewardsBudgetE6: string;
+  sellBackCutE6: string; markupE6: string; revenueE6: string; rebateCostE6: string; netE6: string; rewardsBudgetE6: string; feeRevenueE6: string;
   deliveredCards: number; soldBack: number; kept: number; sellBackRatePct: number;
   // activity
   packsOpened: number; packsOpened24h: number; volumeUsdcE6: string; goldPacks: number; prizeValueE6: string;
@@ -43,7 +45,7 @@ const num = (v: string | number | null | undefined): number => Number(v ?? 0) ||
 
 export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
   const OPENED = `status IN ('opened', 'turbo_sold')`;
-  const [fee, rebate, budget, inv, activity, perMachine, machineNet] = await Promise.all([
+  const [fee, rebate, budget, feeBal, inv, activity, perMachine, machineNet] = await Promise.all([
     // FEE_REVENUE credited per gacha reason (join to the unique system account to isolate the fee leg).
     db.query<{ reason: string; total: string }>(
       `SELECT le.reason, COALESCE(SUM(le.amount_uusdc::numeric), 0)::text AS total
@@ -61,6 +63,11 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
     db.query<{ amount_uusdc: string }>(
       `SELECT b.amount_uusdc FROM balances b JOIN accounts a ON a.id = b.account_id
         WHERE a.user_id IS NULL AND a.type = 'GACHA_REWARDS_BUDGET'`,
+    ),
+    // FEE_REVENUE balance = the earned platform fees available to sweep into the rewards budget.
+    db.query<{ amount_uusdc: string }>(
+      `SELECT b.amount_uusdc FROM balances b JOIN accounts a ON a.id = b.account_id
+        WHERE a.user_id IS NULL AND a.type = 'FEE_REVENUE'`,
     ),
     // Inventory by status → sell-back rate (sold) + the withdraw count.
     db.query<{ status: string; n: string }>(`SELECT status, COUNT(*)::text AS n FROM gacha_nft_inventory GROUP BY status`),
@@ -160,6 +167,7 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
     rebateCostE6: rebateCost.toString(),
     netE6: (revenue - rebateCost).toString(),
     rewardsBudgetE6: rewardsBudget.toString(),
+    feeRevenueE6: intStr(feeBal.rows[0]?.amount_uusdc).toString(),
     deliveredCards: delivered,
     soldBack,
     kept: delivered - soldBack,
@@ -178,4 +186,32 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
     stuckWithdrawing,
     machines,
   };
+}
+
+/**
+ * Pre-fund the Gold rewards budget by sweeping earned platform fees into it. A pure ledger reallocation
+ * FEE_REVENUE → GACHA_REWARDS_BUDGET (Σ=0, no on-chain move — both are house buckets backed by the same
+ * treasury/hot-wallet USDC). Capped at the current FEE_REVENUE balance: you can only earmark fees you've
+ * actually earned, never invent USDC or drive FEE_REVENUE negative. The budget is what funds Gold-bought packs
+ * (PACK_BUY_GOLD_FUND debits it), so the operator runs this before enabling pay-with-Gold.
+ */
+export async function fundGachaRewardsBudget(db: Db, amountE6: bigint): Promise<{ rewardsBudgetE6: string; feeRevenueE6: string; movedE6: string }> {
+  if (amountE6 <= 0n) throw new HttpError(400, 'amount must be positive');
+  return db.tx(async (q) => {
+    const fee = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
+    const budget = await getOrCreateSystemAccount(q, 'GACHA_REWARDS_BUDGET');
+    // Lock the FEE_REVENUE balance row so two concurrent sweeps can't both pass the cap and over-draw it.
+    const lock = await q.query<{ amount_uusdc: string }>(`SELECT amount_uusdc FROM balances WHERE account_id = $1 FOR UPDATE`, [fee]);
+    const feeBal = lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n;
+    if (feeBal < amountE6) throw new HttpError(400, 'amount exceeds the earned fee revenue available to sweep', 'insufficient_fee_revenue');
+    await postTxn(q, {
+      reason: 'GACHA_REWARDS_FUND', refType: 'admin', refId: null,
+      entries: [{ accountId: fee, amount: -amountE6 }, { accountId: budget, amount: amountE6 }],
+    });
+    return {
+      rewardsBudgetE6: (await getBalance(q, budget)).toString(),
+      feeRevenueE6: (await getBalance(q, fee)).toString(),
+      movedE6: amountE6.toString(),
+    };
+  });
 }

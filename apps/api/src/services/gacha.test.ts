@@ -22,7 +22,8 @@ const { reconcileStuckPrizes } = await import('./gacha-reconcile.ts');
 const { pollMachineStock, recentRestocks } = await import('./gacha-stock.ts');
 const { goldEarnedForOpen, goldPriceForPack, earnGold, getGoldSummary, resetGoldBalances } = await import('./gold.ts');
 const { setGachaConfig, gachaAdminConfig } = await import('./gacha-config.ts');
-const { gachaMonitoring } = await import('./gacha-monitoring.ts');
+const { gachaMonitoring, fundGachaRewardsBudget } = await import('./gacha-monitoring.ts');
+const { postTxn: ledgerPostTxn, getOrCreateSystemAccount: sysAcct } = await import('./ledger.ts');
 
 const db = await getDb();
 await migrate();
@@ -644,4 +645,30 @@ test('stock poll: a decrease (pulls) updates the stock but logs no event', async
   await pollMachineStock(db, { getMachinesFn: machinesFn(code, { rare: 30 }) });
   assert.equal((await restocksOf(code)).length, 0);
   assert.equal(await stockOf(code, 'rare'), 30);
+});
+
+test('fundGachaRewardsBudget: sweeps FEE_REVENUE → rewards budget, capped at fees, balanced', async () => {
+  // Seed a known FEE_REVENUE amount (balanced against TREASURY_USDC). Appended last so the seed can't skew earlier tests.
+  await db.tx(async (q) => {
+    const fee = await sysAcct(q, 'FEE_REVENUE');
+    const tre = await sysAcct(q, 'TREASURY_USDC');
+    await ledgerPostTxn(q, { reason: 'TEST_SEED', entries: [{ accountId: fee, amount: 10_000_000n }, { accountId: tre, amount: -10_000_000n }] });
+  });
+  const feeAvail = await feeRev();
+  const budgetBefore = BigInt((await gachaMonitoring(db)).rewardsBudgetE6);
+
+  const r = await fundGachaRewardsBudget(db, 4_000_000n); // sweep $4
+  assert.equal(BigInt(r.movedE6), 4_000_000n);
+  assert.equal(BigInt(r.feeRevenueE6), feeAvail - 4_000_000n); // fees drop by the swept amount
+  assert.equal(BigInt(r.rewardsBudgetE6), budgetBefore + 4_000_000n); // budget rises by it
+  assert.equal(await feeRev(), feeAvail - 4_000_000n);
+
+  // Can't sweep more than the remaining earned fees (no inventing USDC / negative FEE_REVENUE).
+  await assert.rejects(() => fundGachaRewardsBudget(db, feeAvail), /exceeds|insufficient/i);
+  await assert.rejects(() => fundGachaRewardsBudget(db, 0n), /positive/i);
+  assert.equal(await feeRev(), feeAvail - 4_000_000n); // unchanged after the rejected sweeps
+
+  // Double-entry holds across the whole ledger.
+  const sum = await db.query<{ s: string }>(`SELECT COALESCE(SUM(amount_uusdc), 0)::text AS s FROM ledger_entries`);
+  assert.equal(BigInt(sum.rows[0].s), 0n);
 });

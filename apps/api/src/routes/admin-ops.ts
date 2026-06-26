@@ -6,7 +6,7 @@ import { getDb } from '../db/client.ts';
 import { rl } from './_ratelimit.ts';
 import { requireAdminKey } from './admin.ts';
 import { gachaAdminConfig, setGachaConfig } from '../services/gacha-config.ts';
-import { gachaMonitoring } from '../services/gacha-monitoring.ts';
+import { gachaMonitoring, fundGachaRewardsBudget } from '../services/gacha-monitoring.ts';
 import { reconcileStuckPrizes } from '../services/gacha-reconcile.ts'; // web3-free (DB + DAS) → eager-safe
 import { recentRestocks } from '../services/gacha-stock.ts'; // web3-free (DB + CC read client) → eager-safe
 import { resetGoldBalances } from '../services/gold.ts'; // web3-free (DB only) → eager-safe
@@ -349,6 +349,14 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/admin/gacha/monitoring', rl(config.routeRateLimits.admin), async () => {
     const db = await getDb();
     return { ...(await gachaMonitoring(db)), recentRestocks: await recentRestocks(db, { limit: 50 }), config: gachaAdminConfig() };
+  });
+
+  // Sweep earned platform fees into the Gold rewards budget (FEE_REVENUE → GACHA_REWARDS_BUDGET, capped at the
+  // fee balance) — the operator pre-funds the budget here before enabling pay-with-Gold.
+  app.post('/admin/gacha/fund-rewards-budget', rl(config.routeRateLimits.admin), async (req) => {
+    const usd = Number((req.body as { amountUsd?: unknown } | undefined)?.amountUsd);
+    if (!Number.isFinite(usd) || usd <= 0) throw new HttpError(400, 'amountUsd must be a positive number');
+    return fundGachaRewardsBudget(await getDb(), BigInt(Math.round(usd * 1e6)));
   });
 
   // Recover inventory rows stranded in 'selling'/'withdrawing' by a crash mid-flight (DAS owner is the oracle).
