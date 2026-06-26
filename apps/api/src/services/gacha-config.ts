@@ -44,14 +44,22 @@ const freePackThresholdUsd = liveKnob('gacha_free_pack_threshold_usd', config.ga
 const buybackCutBps = liveKnob('gacha_buyback_cut_bps', config.gachaBuybackCutBps, bpsValidator('buyback cut'));
 const turboCutBps = liveKnob('gacha_turbo_cut_bps', config.gachaTurboCutBps, bpsValidator('turbo cut'));
 const markupBps = liveKnob('gacha_markup_bps', config.gachaMarkupBps, bpsValidator('markup'));
-const disabledMachines = liveKnob<string[]>('gacha_disabled_machines', [], machineListValidator, (a) => a.join(','));
+// Hidden-from-the-lobby machines (admin-controlled, the SOLE visibility gate — the client no longer hardcodes a
+// hidden list). Default seeds the three biggest packs off so flipping this feature on doesn't change the live
+// customer view; the operator ticks any of the 34 CC machines on to reveal it.
+const disabledMachines = liveKnob<string[]>('gacha_disabled_machines', ['pokemon_2500', 'pokemon_5000', 'pokemon_151'], machineListValidator, (a) => a.join(','));
 // Loyalty Gold master switch — OFF hides Gold in the UI but earn keeps accruing silently (env GOLD_ENABLED is the
 // default; the admin toggle overrides). payWithGold gates the "pay with Gold" option on machine purchases (default
 // OFF) — when off, customers still earn/see Gold and can claim a free pack, just can't spend Gold on any machine.
 const goldEnabled = liveKnob('gacha_gold_enabled', config.goldEnabled, bool);
 const payWithGoldEnabled = liveKnob('gacha_pay_with_gold', false, bool);
+// Global live-machines refresh: how often the server may re-query CC (seconds, floored at 15 to respect CC's rate
+// limit) + a global pause. Drives the server-side getMachines cache (1 CC call per interval for ALL admin tabs +
+// the customer lobby) and the admin tab's display poll. Last-writer-wins across admins (shared, not per-browser).
+const stockRefreshSecs = liveKnob('gacha_stock_refresh_secs', 30, (v) => Math.max(15, Math.floor(Number(v) || 30)));
+const stockPaused = liveKnob('gacha_stock_paused', false, bool);
 
-export const gachaConfig = { freePackThresholdUsd, buybackCutBps, turboCutBps, markupBps, disabledMachines, goldEnabled, payWithGoldEnabled };
+export const gachaConfig = { freePackThresholdUsd, buybackCutBps, turboCutBps, markupBps, disabledMachines, goldEnabled, payWithGoldEnabled, stockRefreshSecs, stockPaused };
 
 /** The GDEX markup amount (micro-USDC, floor) over a base CC price — one formula for the charge + the displayed
  *  price so they can never drift (a mismatch would trip the open's expected-price drift guard). */
@@ -61,7 +69,7 @@ export const gachaMarkupE6 = (priceE6: bigint | string, markupBps: number): bigi
 export async function loadGachaConfig(db: Db): Promise<void> {
   await Promise.all([
     freePackThresholdUsd.load(db), buybackCutBps.load(db), turboCutBps.load(db), markupBps.load(db), disabledMachines.load(db),
-    goldEnabled.load(db), payWithGoldEnabled.load(db),
+    goldEnabled.load(db), payWithGoldEnabled.load(db), stockRefreshSecs.load(db), stockPaused.load(db),
   ]);
 }
 
@@ -75,6 +83,8 @@ export function gachaAdminConfig() {
     disabledMachines: disabledMachines.get(),
     goldEnabled: goldEnabled.get(),
     payWithGoldEnabled: payWithGoldEnabled.get(),
+    stockRefreshSecs: stockRefreshSecs.get(),
+    stockPaused: stockPaused.get(),
   };
 }
 
@@ -88,6 +98,8 @@ export async function setGachaConfig(db: Db, patch: Record<string, unknown>): Pr
   if (p.disabledMachines !== undefined) await disabledMachines.set(db, p.disabledMachines);
   if (p.goldEnabled !== undefined) await goldEnabled.set(db, p.goldEnabled);
   if (p.payWithGoldEnabled !== undefined) await payWithGoldEnabled.set(db, p.payWithGoldEnabled);
+  if (p.stockRefreshSecs !== undefined) await stockRefreshSecs.set(db, p.stockRefreshSecs);
+  if (p.stockPaused !== undefined) await stockPaused.set(db, p.stockPaused);
   return gachaAdminConfig();
 }
 

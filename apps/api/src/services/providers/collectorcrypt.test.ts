@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toLobbyMachine, toLobbyCard, toLobbyWinner, type CcMachine, type CcPackNft, type CcWinner } from './collectorcrypt.ts';
+import { toLobbyMachine, toLobbyCard, toLobbyWinner, getMachinesCached, __resetMachinesCache, type CcMachine, type CcPackNft, type CcWinner } from './collectorcrypt.ts';
 
 // The mappers are where the money bugs live: CC's gacha reads are in DOLLARS and must become micro-USDC
 // strings on the wire. These cover the dollar→e6 conversion, the tier-legend shaping, and missing fields.
@@ -73,4 +73,37 @@ test('toLobbyWinner: missing nested nft metadata → null name/image, still maps
   assert.equal(out.name, null);
   assert.equal(out.imageUrl, null);
   assert.equal(out.valueE6, '12500000'); // $12.50 → 12.5e6
+});
+
+test('getMachinesCached: ≤ 1 CC call per interval (cache hit, force, pause, stale-on-error)', async () => {
+  __resetMachinesCache();
+  let calls = 0;
+  const okFetch = (async () => { calls++; return { ok: true, status: 200, json: async () => ({ machines: [{ code: 'pokemon_50', name: 'Elite', price: 50 }] }) }; }) as unknown as typeof fetch;
+
+  // cold → one CC fetch
+  let r = await getMachinesCached({ ttlMs: 10_000, paused: false, fetchFn: okFetch });
+  assert.equal(calls, 1);
+  assert.equal(r.machines.length, 1);
+  // within the interval → served from cache, no new CC call
+  await getMachinesCached({ ttlMs: 10_000, paused: false, fetchFn: okFetch });
+  assert.equal(calls, 1);
+  // force ("Refresh now") → re-queries CC
+  await getMachinesCached({ ttlMs: 10_000, paused: false, force: true, fetchFn: okFetch });
+  assert.equal(calls, 2);
+  // paused → never re-queries, even when stale
+  await getMachinesCached({ ttlMs: 0, paused: true, fetchFn: okFetch });
+  assert.equal(calls, 2);
+  // stale + not paused → re-queries
+  await getMachinesCached({ ttlMs: 0, paused: false, fetchFn: okFetch });
+  assert.equal(calls, 3);
+  // CC error with a warm cache → serve the last-known list, don't throw
+  const errFetch = (async () => ({ ok: false, status: 404, text: async () => 'down' })) as unknown as typeof fetch;
+  r = await getMachinesCached({ ttlMs: 0, paused: false, fetchFn: errFetch });
+  assert.equal(r.machines.length, 1);
+
+  // concurrent cold requests → single-flight dedupes them into ONE CC call (no thundering herd)
+  __resetMachinesCache();
+  calls = 0;
+  await Promise.all([0, 1, 2].map(() => getMachinesCached({ ttlMs: 10_000, paused: false, fetchFn: okFetch })));
+  assert.equal(calls, 1);
 });

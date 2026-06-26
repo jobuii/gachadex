@@ -38,9 +38,12 @@ export function GachaAdminView({ adminKey }) {
   const [busy, setBusy] = useState(false);
   const [restocks, setRestocks] = useState({}); // { [code]: { [tier]: delta } } — stock increases since the last poll
   const prevStockRef = useRef({}); // { [code]: { [tier]: count } } from the previous poll (in-memory baseline)
+  const [onlyVisible, setOnlyVisible] = useState(false); // Live-machines filter: only machines shown in the lobby
+  const [refreshSecs, setRefreshSecs] = useState(''); // the global refresh-interval input (seconds)
+  const refreshFocusedRef = useRef(false); // while the admin is editing the interval, don't let a poll overwrite it
 
-  const load = useCallback(() => {
-    return Promise.all([api.adminGetGachaConfig(adminKey), api.adminGetGachaMonitoring(adminKey)])
+  const load = useCallback((force = false) => {
+    return Promise.all([api.adminGetGachaConfig(adminKey, force), api.adminGetGachaMonitoring(adminKey)])
       .then(([c, m]) => {
         const list = c.machines ?? [];
         // Restock diff: flag any tier whose CC stock went UP vs the previous poll (no baseline on the first load).
@@ -61,15 +64,17 @@ export function GachaAdminView({ adminKey }) {
         setBuyback((c.config.buybackCutBps / 100).toString());
         setTurbo((c.config.turboCutBps / 100).toString());
         setMarkup((c.config.markupBps / 100).toString());
+        if (!refreshFocusedRef.current) setRefreshSecs(String(c.config.stockRefreshSecs)); // keep the field if mid-edit
       })
       .catch((e) => setErr(e.message));
   }, [adminKey]);
 
+  useEffect(() => { load(); }, [load]); // initial load
   useEffect(() => {
-    load();
-    const id = setInterval(load, 30_000);
+    if (cfg?.stockPaused) return; // global pause → no auto-refresh (the server stops re-querying CC too)
+    const id = setInterval(load, Math.max(15, cfg?.stockRefreshSecs ?? 30) * 1000);
     return () => clearInterval(id);
-  }, [load]);
+  }, [load, cfg?.stockPaused, cfg?.stockRefreshSecs]);
 
   const act = async (fn, okMsg) => {
     setErr(null); setMsg(null); setBusy(true);
@@ -101,6 +106,14 @@ export function GachaAdminView({ adminKey }) {
     act(() => api.adminSetGachaConfig({ disabledMachines: [...disabled] }, adminKey));
   };
 
+  // Global live-machines refresh controls (shared across admins + the lobby; last change wins).
+  const saveRefreshSecs = () => {
+    const secs = Math.max(15, parseInt(refreshSecs, 10) || 30);
+    if (secs === cfg?.stockRefreshSecs) { setRefreshSecs(String(secs)); return; } // no-op if unchanged
+    act(() => api.adminSetGachaConfig({ stockRefreshSecs: secs }, adminKey));
+  };
+  const togglePause = (paused) => act(() => api.adminSetGachaConfig({ stockPaused: paused }, adminKey));
+
   const setGold = (patch) => act(() => api.adminSetGachaConfig(patch, adminKey));
   const resetGold = () => {
     if (window.prompt('Type RESET to zero EVERY customer’s Gold balance. This cannot be undone.') !== 'RESET') return;
@@ -115,6 +128,7 @@ export function GachaAdminView({ adminKey }) {
   if (!cfg) return <p className="ref-blurb">{err || 'Loading gacha config…'}</p>;
 
   const nameOf = (code) => machines.find((m) => m.code === code)?.name ?? code; // resolve a stat's machine code to its name
+  const priceOf = (code) => { const m = machines.find((x) => x.code === code); return m ? formatUsd(BigInt(m.priceE6)) : ''; }; // pack $ for the restock labels
 
   return (
     <div className="games-admin gacha-admin">
@@ -216,8 +230,29 @@ export function GachaAdminView({ adminKey }) {
       </div>
 
       <h3 style={{ marginTop: '1.5rem' }}>Live machines — stock &amp; odds{' '}
-        <span className="muted" style={{ fontSize: '0.7rem', fontWeight: 400 }}>· live from Collector Crypt · ▲ = restocked since the last 30s refresh</span>
+        <span className="muted" style={{ fontSize: '0.7rem', fontWeight: 400 }}>· live from Collector Crypt · ▲ = restocked since the last refresh</span>
       </h3>
+      <div className="games-admin-row" style={{ gap: '0.9rem', flexWrap: 'wrap', alignItems: 'center', margin: '0.3rem 0 0.3rem' }}>
+        <label className="field-label" style={{ flexDirection: 'row', alignItems: 'center', gap: '0.4rem' }}>
+          <span>Refresh every</span>
+          <input type="number" min="15" step="5" value={refreshSecs} disabled={busy} style={{ width: 70 }}
+            onFocus={() => { refreshFocusedRef.current = true; }}
+            onChange={(e) => setRefreshSecs(e.target.value)}
+            onBlur={() => { refreshFocusedRef.current = false; saveRefreshSecs(); }}
+            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()} />
+          <span>s</span>
+        </label>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+          <input type="checkbox" checked={!!cfg.stockPaused} disabled={busy} onChange={(e) => togglePause(e.target.checked)} /> Pause auto-refresh
+        </label>
+        <button className="btn-ghost" disabled={busy} onClick={() => load(true)}>Refresh now</button>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', marginLeft: 'auto' }}>
+          <input type="checkbox" checked={onlyVisible} onChange={(e) => setOnlyVisible(e.target.checked)} /> Only visible
+        </label>
+      </div>
+      <p className="muted" style={{ fontSize: '0.74rem', margin: '0 0 0.6rem' }}>
+        Global — applies to every admin tab and the customer lobby (last change wins). The server re-queries Collector Crypt once per interval for everyone; <strong>below ~15s risks rate-limit errors</strong>.
+      </p>
 
       {mon?.recentRestocks?.length > 0 && (
         <div style={{ margin: '0.2rem 0 0.8rem' }}>
@@ -226,7 +261,7 @@ export function GachaAdminView({ adminKey }) {
             {mon.recentRestocks.slice(0, 24).map((e, i) => (
               <span key={i} className="stat-card" style={{ flexDirection: 'row', alignItems: 'center', gap: '0.35rem', padding: '0.25rem 0.55rem', fontSize: '0.76rem' }}>
                 <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: tierColor(e.tier) }} />
-                <strong>{nameOf(e.machineCode)}</strong> {titleCase(e.tier)}
+                <strong>{nameOf(e.machineCode)}</strong> {titleCase(e.tier)} <span className="muted">({priceOf(e.machineCode)})</span>
                 <span style={{ color: 'var(--up, #22c55e)', fontWeight: 600 }}>▲ +{e.delta}</span>
                 <span className="muted">· {ago(e.detectedAt)}</span>
               </span>
@@ -236,7 +271,11 @@ export function GachaAdminView({ adminKey }) {
       )}
 
       <div className="gacha-live-machines">
-        {machines.filter((m) => (m.tiers?.length ?? 0) > 0 || Object.keys(m.stock ?? {}).length > 0).map((m) => (
+        {machines
+          .filter((m) => (m.tiers?.length ?? 0) > 0 || Object.keys(m.stock ?? {}).length > 0)
+          .filter((m) => !onlyVisible || !m.disabled)
+          .slice().sort((a, b) => Number(a.priceE6) - Number(b.priceE6)) // ascending pack cost
+          .map((m) => (
           <div key={m.code} style={{ margin: '0.7rem 0' }}>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
               <strong>{m.name}</strong>

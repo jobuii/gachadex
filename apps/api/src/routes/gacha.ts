@@ -4,7 +4,7 @@ import { HttpError } from '../errors.ts';
 import { rl } from './_ratelimit.ts';
 import { authenticate } from '../plugins/auth.ts';
 import { getDb } from '../db/client.ts';
-import { getMachines, getNfts, getAllWinners, toLobbyMachine, toLobbyCard, toLobbyWinner, defaultCcClient } from '../services/providers/collectorcrypt.ts';
+import { getNfts, getAllWinners, getMachinesCached, toLobbyMachine, toLobbyCard, toLobbyWinner, defaultCcClient } from '../services/providers/collectorcrypt.ts';
 import { getGoldSummary, getGoldHistory } from '../services/gold.ts'; // no @solana/web3.js dep → safe to load eagerly (unlike gacha.ts)
 import { gachaConfig, gachaMarkupE6 } from '../services/gacha-config.ts'; // settings-only, no web3 dep → eager-safe
 import type { GachaChain } from '../services/custody/gacha-chain.ts';
@@ -38,7 +38,7 @@ export async function gachaRoutes(app: FastifyInstance): Promise<void> {
   // hidden, and the displayed price carries any GDEX markup so the client sends it back as the expected price.
   app.get('/gacha/machines', rl(config.routeRateLimits.gameFairness), async () => {
     gate();
-    const { machines } = await getMachines();
+    const { machines } = await getMachinesCached({ ttlMs: gachaConfig.stockRefreshSecs.get() * 1000, paused: gachaConfig.stockPaused.get() });
     const disabled = new Set(gachaConfig.disabledMachines.get());
     const markupBps = gachaConfig.markupBps.get();
     const out = (machines ?? [])

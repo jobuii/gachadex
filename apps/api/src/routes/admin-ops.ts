@@ -10,7 +10,7 @@ import { gachaMonitoring } from '../services/gacha-monitoring.ts';
 import { reconcileStuckPrizes } from '../services/gacha-reconcile.ts'; // web3-free (DB + DAS) → eager-safe
 import { recentRestocks } from '../services/gacha-stock.ts'; // web3-free (DB + CC read client) → eager-safe
 import { resetGoldBalances } from '../services/gold.ts'; // web3-free (DB only) → eager-safe
-import { getMachines, toLobbyMachine } from '../services/providers/collectorcrypt.ts';
+import { getMachinesCached, toLobbyMachine } from '../services/providers/collectorcrypt.ts';
 import { setManualPrice, setPricePin } from '../services/admin-pricing.ts';
 import { allocateFeesToInsurance, deallocateInsuranceToFees, getInsurance } from '../services/insurance.ts';
 import { feeView, setFee, liqFeeView, setLiqFee, fundingFactorView, setFundingFactor, lpTradingPctView, setLpTradingPct, lpFundingPctView, setLpFundingPct, lpLiquidationPctView, setLpLiquidationPct } from '../services/fees.ts';
@@ -325,14 +325,16 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   // threshold, per-machine enable) + the economics readout (cut revenue vs Token-rebate cost + sell-back rate).
 
   // Current knobs + the live CC machine list (each flagged enabled/disabled for the per-machine toggles).
-  app.get('/admin/gacha/config', rl(config.routeRateLimits.admin), async () => {
+  app.get('/admin/gacha/config', rl(config.routeRateLimits.admin), async (req) => {
     const cfg = gachaAdminConfig();
     const disabled = new Set(cfg.disabledMachines);
-    // The full lobby machine (incl. live CC stock per tier, odds, $ ranges, EV, buyback) + the operator's
-    // disabled flag, so the admin "Live machines" panel can surface stock/odds the player lobby doesn't.
+    const force = (req.query as { force?: string } | undefined)?.force === '1'; // admin "Refresh now" bypasses the cache once
+    // The full lobby machine (incl. live CC stock per tier, odds, $ ranges, EV, buyback) + the operator's disabled
+    // flag, so the admin "Live machines" panel can surface stock/odds the player lobby doesn't. Served from the
+    // shared cache (≤ one CC call per the global refresh interval, across every admin tab + the lobby).
     let machines: Array<ReturnType<typeof toLobbyMachine> & { disabled: boolean }> = [];
     try {
-      const { machines: ccm } = await getMachines();
+      const { machines: ccm } = await getMachinesCached({ ttlMs: cfg.stockRefreshSecs * 1000, paused: cfg.stockPaused, force });
       machines = (ccm ?? []).map(toLobbyMachine).map((m) => ({ ...m, disabled: disabled.has(m.code) }));
     } catch { /* CC unreachable → still return the knobs (the machine toggles just won't list this load) */ }
     return { config: cfg, machines };

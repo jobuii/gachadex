@@ -84,6 +84,38 @@ export type CcWinner = {
 export function getMachines(opts: { fetchFn?: typeof fetch } = {}): Promise<{ machines: CcMachine[] }> {
   return gachaGet('/api/machines', opts);
 }
+
+// Shared, process-wide cache of the CC machine list so the admin tabs + the customer lobby don't each hit CC on
+// every request: CC is re-queried at most once per `ttlMs` (never while `paused`, unless `force`). On a CC error we
+// serve the last-known list rather than break the lobby. `force` (admin "Refresh now") bypasses the timer + pause.
+let machinesCache: { at: number; machines: CcMachine[] } | null = null;
+let machinesInflight: Promise<{ machines: CcMachine[]; cachedAt: number }> | null = null;
+export async function getMachinesCached(
+  opts: { ttlMs: number; paused: boolean; force?: boolean; fetchFn?: typeof fetch },
+): Promise<{ machines: CcMachine[]; cachedAt: number }> {
+  if (machinesCache && !opts.force && (opts.paused || Date.now() - machinesCache.at < opts.ttlMs)) {
+    return { machines: machinesCache.machines, cachedAt: machinesCache.at };
+  }
+  if (machinesInflight) return machinesInflight; // single-flight: a refresh is already running → share it (no herd of CC calls)
+  machinesInflight = (async () => {
+    try {
+      const { machines } = await getMachines({ fetchFn: opts.fetchFn });
+      machinesCache = { at: Date.now(), machines: machines ?? [] };
+      return { machines: machinesCache.machines, cachedAt: machinesCache.at };
+    } catch (e) {
+      if (machinesCache) return { machines: machinesCache.machines, cachedAt: machinesCache.at }; // serve stale on a CC blip
+      throw e;
+    } finally {
+      machinesInflight = null;
+    }
+  })();
+  return machinesInflight;
+}
+/** Test hook: clear the machines cache so each test starts cold. */
+export function __resetMachinesCache(): void {
+  machinesCache = null;
+  machinesInflight = null;
+}
 /** Cards in a machine's pool. `code` = machine code (e.g. "pokemon_50"). */
 export function getNfts(code: string, opts: { rarity?: string; page?: number; limit?: number; fetchFn?: typeof fetch } = {}): Promise<{ nfts: CcPackNft[] }> {
   const q = new URLSearchParams({ code });

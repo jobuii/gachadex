@@ -14,9 +14,9 @@ import { RARITY_COLORS, usd, usdWhole, pollGachaOpen } from './gacha-util.js';
 
 const goldPrice = (e6) => Math.floor(Number(e6 || 0) / 1000).toLocaleString(); // a pack's Gold price = USD×1000 = priceE6/1000
 const tierColor = (label, i) => RARITY_COLORS[(label ?? '').toLowerCase()] ?? Object.values(RARITY_COLORS)[i] ?? '#ef4444';
-const GAMES = [['all', 'All'], ['pokemon', 'Pokémon'], ['onepiece', 'One Piece']];
-const ALLOWED_GAMES = new Set(['pokemon', 'onepiece']);
-const HIDDEN_MACHINES = new Set(['pokemon_2500', 'pokemon_5000', 'pokemon_151']); // hidden per operator
+// Nice labels for the game tabs; the set of tabs is derived from whatever machines the admin has enabled (the
+// admin Machines toggle / disabledMachines knob is the SOLE visibility gate — the API already drops disabled ones).
+const GAME_LABELS = { pokemon: 'Pokémon', onepiece: 'One Piece' };
 // CC files some Pokémon-themed packs under their own game key; surface them under the Pokémon tab.
 const GAME_REMAP = { water_100: 'pokemon' };
 const gameOf = (m) => GAME_REMAP[m.code] ?? m.game;
@@ -63,7 +63,7 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
         if (!alive) return;
         const list = m.machines ?? [];
         setMachines(list);
-        setSelected((cur) => cur ?? list.find((x) => ALLOWED_GAMES.has(gameOf(x)) && !HIDDEN_MACHINES.has(x.code))?.code ?? null);
+        setSelected((cur) => cur ?? list.slice().sort((a, b) => Number(a.priceE6) - Number(b.priceE6))[0]?.code ?? null);
         setLoading(false);
       })
       .catch((e) => { if (alive) { setErr(e.message); setLoading(false); } });
@@ -181,9 +181,11 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
   if (err) return <div className="order-error">Couldn’t load packs: {err}</div>;
   if (machines.length === 0) return <div className="empty-state">No packs available right now.</div>;
 
-  const base = machines.filter((m) => ALLOWED_GAMES.has(gameOf(m)) && !HIDDEN_MACHINES.has(m.code)); // Pokémon / One Piece, minus hidden
-  const shown = (game === 'all' ? base : base.filter((m) => gameOf(m) === game)).slice().sort((a, b) => Number(a.priceE6) - Number(b.priceE6)); // ascending price
-  const machine = machines.find((m) => m.code === selected) ?? shown[0] ?? base[0] ?? machines[0];
+  // The API already served only the admin-enabled (non-disabled) machines — that's the visibility gate.
+  const gameKeys = ['all', ...new Set(machines.map(gameOf).filter(Boolean))]; // tabs derived from the visible machines
+  const activeGame = gameKeys.includes(game) ? game : 'all'; // fall back to All if the operator hid every machine of the chosen tab
+  const shown = (activeGame === 'all' ? machines : machines.filter((m) => gameOf(m) === activeGame)).slice().sort((a, b) => Number(a.priceE6) - Number(b.priceE6)); // ascending price
+  const machine = machines.find((m) => m.code === selected) ?? shown[0] ?? machines[0];
   const topCards = cards ? [...cards].sort((a, b) => Number(b.valueE6) - Number(a.valueE6)).slice(0, 25) : null; // top 25 by value
   const totalE6 = String(Number(machine.priceE6 || 0) * qty);
   const revealCard = revealResult?.card ?? null;
@@ -209,9 +211,9 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
       )}
 
       <div className="gacha-tabs">
-        {GAMES.map(([key, label]) => (
-          <button key={key} className={`gacha-tab ${key === game ? 'active' : ''}`} onClick={() => setGame(key)}>
-            {label}
+        {gameKeys.map((key) => (
+          <button key={key} className={`gacha-tab ${key === activeGame ? 'active' : ''}`} onClick={() => setGame(key)}>
+            {key === 'all' ? 'All' : (GAME_LABELS[key] ?? titleCase(key))}
           </button>
         ))}
       </div>
