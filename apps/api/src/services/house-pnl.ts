@@ -4,25 +4,41 @@ import { customerFunds } from './custody/treasury.ts';
 import { customerLpTotal } from './lp.ts';
 
 /**
- * House P/L breakdown for the admin Overview. Decomposes the platform's net equity into where it
- * actually comes from, by summing the house system-account ledger legs by reason. The lines sum
- * EXACTLY to `totalE6` = bal(FEE_REVENUE) + bal(LP_POOL) + bal(INSURANCE_FUND) — the house's ledger
- * equity, which the custody P/L (treasury − customer − pending) tracks.
+ * House P/L breakdown for the admin Overview. The house's actual earned surplus is the FEE_REVENUE
+ * balance — what the platform keeps after every customer AND every LP provider is paid what they're
+ * owed. So the breakdown has two halves:
  *
- * LP_POOL holds several streams (its share of trading fees, funding, trader P/L, plus margin/LP
- * capital), so it's decomposed by reason with `lpOtherE6` as the reconciling remainder. Strings, not
- * bigints, so the route can return it without per-field serialization (the funding-box bug class).
+ *  • House earnings — FEE_REVENUE decomposed by source (trading / gacha / funding / liq cuts). These
+ *    sum EXACTLY to `surplusE6` (= the FEE_REVENUE balance), with `feesOtherE6` the reconciling
+ *    remainder (e.g. fees moved to/from the insurance fund).
+ *  • LP side — the LP_POOL streams (its share of trading fees, the funding paid into the pool, trader
+ *    P/L it absorbed, plus LP capital). These are owed to LP PROVIDERS, NOT house P/L, so they are
+ *    shown for transparency only and reconcile to `lpPoolE6` (the LP_POOL balance) — excluded from
+ *    the surplus.
+ *
+ * The funding split was previously mislabeled: `FUNDING` legs on LP_POOL are the LP pool's funding
+ * (`fundingLpE6`), while the house's funding cut is the `FUNDING` legs on FEE_REVENUE (`fundingHouseE6`).
+ * Strings, not bigints, so the route can return it without per-field serialization.
  */
 export interface HousePnlBreakdown {
-  feesHouseE6: string; // FEE_REVENUE balance — the house's cut of trading fees (net of insurance moves)
-  feesLpE6: string; // the LP pool's share of trading fees (OPEN_FEE/CLOSE_FEE legs on LP_POOL)
-  fundingNetE6: string; // net funding the house kept (FUNDING legs on LP_POOL)
-  fundingGrossE6: string; // gross funding customers paid in (positive FUNDING legs on LP_POOL)
-  traderPnlE6: string; // net trader P/L the house absorbed (REALIZED_PNL legs on LP_POOL; +ve = house gained)
-  liqPenaltiesE6: string; // total liquidation penalties collected (LIQUIDATION_FEE; split LP_POOL + FEE_REVENUE). A memo — the shares are already counted inside feesHouse + lpOther.
+  // House earnings — these five sum EXACTLY to surplusE6 (the FEE_REVENUE balance).
+  feesTradingE6: string; // trading-fee house cut: OPEN_FEE + CLOSE_FEE + REFERRAL_CASHBACK (rebate) legs on FEE_REVENUE
+  feesGachaE6: string; // gacha house cut: GACHA_* + GAME_REVENUE_SHARE (rebate) legs on FEE_REVENUE
+  fundingHouseE6: string; // funding house cut: FUNDING legs on FEE_REVENUE
+  liqHouseE6: string; // liquidation-penalty house cut: LIQUIDATION_FEE legs on FEE_REVENUE
+  feesOtherE6: string; // reconciling remainder on FEE_REVENUE (e.g. insurance moves) so the lines sum to surplus
+  surplusE6: string; // = FEE_REVENUE balance = the house's net earned surplus (the P/L box; excludes the LP pool)
+
+  // LP side — owed to LP providers, NOT house P/L. These four reconcile to lpPoolE6.
+  feesLpE6: string; // LP pool's share of trading fees (OPEN_FEE/CLOSE_FEE legs on LP_POOL)
+  fundingLpE6: string; // funding paid into the LP pool (FUNDING legs on LP_POOL) — was the mislabeled "funding net kept"
+  fundingLpGrossE6: string; // gross (positive) FUNDING legs on LP_POOL
+  traderPnlE6: string; // net trader P/L absorbed by the LP pool (REALIZED_PNL legs on LP_POOL; +ve = LP gained vs traders)
+  lpOtherE6: string; // LP_POOL remainder (LP capital in/out) so the LP lines reconcile to lpPoolE6
+  lpPoolE6: string; // LP_POOL balance — owed to LP providers (excluded from the house surplus)
+
   insuranceE6: string; // INSURANCE_FUND balance (incl. liq penalties + insurance transfers)
-  lpOtherE6: string; // LP_POOL remainder (LP capital in/out + insurance draws) so the LP lines reconcile
-  totalE6: string; // = feesHouse + LP balance + insurance = the house's ledger equity (≈ the P/L box)
+  liqPenaltiesE6: string; // total liquidation penalties collected (LIQUIDATION_FEE; LP + house shares). A memo.
 }
 
 export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
@@ -31,11 +47,21 @@ export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
     getOrCreateSystemAccount(db, 'FEE_REVENUE'),
     getOrCreateSystemAccount(db, 'INSURANCE_FUND'),
   ]);
-  const [lpBal, feeBal, insBal, lpRows, liqRows] = await Promise.all([
+  const [lpBal, feeBal, insBal, feeRows, lpRows, liqRows] = await Promise.all([
     getBalance(db, lp),
     getBalance(db, fee),
     getBalance(db, ins),
-    // LP_POOL legs split by source (CASE, not FILTER, for PGlite compatibility).
+    // FEE_REVENUE legs split by source — the house's actual earnings (CASE, not FILTER, for PGlite).
+    db.query<{ trading: string; gacha: string; funding: string; liq: string }>(
+      `SELECT
+         COALESCE(SUM(CASE WHEN reason IN ('OPEN_FEE','CLOSE_FEE','REFERRAL_CASHBACK') THEN amount_uusdc ELSE 0 END), 0)::text AS trading,
+         COALESCE(SUM(CASE WHEN reason LIKE 'GACHA%' OR reason = 'GAME_REVENUE_SHARE' THEN amount_uusdc ELSE 0 END), 0)::text AS gacha,
+         COALESCE(SUM(CASE WHEN reason = 'FUNDING' THEN amount_uusdc ELSE 0 END), 0)::text AS funding,
+         COALESCE(SUM(CASE WHEN reason = 'LIQUIDATION_FEE' THEN amount_uusdc ELSE 0 END), 0)::text AS liq
+       FROM ledger_entries WHERE account_id = $1`,
+      [fee],
+    ),
+    // LP_POOL legs split by source — informational (owed to LP providers, not house P/L).
     db.query<{ fees: string; funding: string; funding_gross: string; pnl: string }>(
       `SELECT
          COALESCE(SUM(CASE WHEN reason IN ('OPEN_FEE','CLOSE_FEE') THEN amount_uusdc ELSE 0 END), 0)::text AS fees,
@@ -45,8 +71,8 @@ export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
        FROM ledger_entries WHERE account_id = $1`,
       [lp],
     ),
-    // Liquidation penalties now split LP_POOL + FEE_REVENUE (no longer routed to insurance). Sum the
-    // positive (credit) legs across BOTH for the memo total; the shares already sit inside feesHouse + lpOther.
+    // Liquidation penalties split LP_POOL + FEE_REVENUE. Sum the positive (credit) legs across BOTH for
+    // the memo total; the house share is also counted in liqHouse, the LP share in lpOther.
     db.query<{ liq: string }>(
       `SELECT COALESCE(SUM(CASE WHEN reason = 'LIQUIDATION_FEE' AND amount_uusdc > 0 THEN amount_uusdc ELSE 0 END), 0)::text AS liq
        FROM ledger_entries WHERE account_id IN ($1, $2)`,
@@ -54,21 +80,34 @@ export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
     ),
   ]);
 
+  // House earnings: FEE_REVENUE decomposed; feesOther is the remainder so the lines sum to the balance.
+  const feesTrading = BigInt(feeRows.rows[0].trading);
+  const feesGacha = BigInt(feeRows.rows[0].gacha);
+  const fundingHouse = BigInt(feeRows.rows[0].funding);
+  const liqHouse = BigInt(feeRows.rows[0].liq);
+  const feesOther = feeBal - feesTrading - feesGacha - fundingHouse - liqHouse;
+
+  // LP side: LP_POOL decomposed; lpOther is the remainder so the lines sum to the pool balance.
   const feesLp = BigInt(lpRows.rows[0].fees);
-  const fundingNet = BigInt(lpRows.rows[0].funding);
+  const fundingLp = BigInt(lpRows.rows[0].funding);
   const traderPnl = BigInt(lpRows.rows[0].pnl);
-  const lpOther = lpBal - feesLp - fundingNet - traderPnl; // whatever else sits in LP (margin/LP capital)
-  const total = feeBal + lpBal + insBal;
+  const lpOther = lpBal - feesLp - fundingLp - traderPnl;
+
   return {
-    feesHouseE6: feeBal.toString(),
+    feesTradingE6: feesTrading.toString(),
+    feesGachaE6: feesGacha.toString(),
+    fundingHouseE6: fundingHouse.toString(),
+    liqHouseE6: liqHouse.toString(),
+    feesOtherE6: feesOther.toString(),
+    surplusE6: feeBal.toString(),
     feesLpE6: feesLp.toString(),
-    fundingNetE6: fundingNet.toString(),
-    fundingGrossE6: BigInt(lpRows.rows[0].funding_gross).toString(),
+    fundingLpE6: fundingLp.toString(),
+    fundingLpGrossE6: BigInt(lpRows.rows[0].funding_gross).toString(),
     traderPnlE6: traderPnl.toString(),
-    liqPenaltiesE6: BigInt(liqRows.rows[0].liq).toString(),
-    insuranceE6: insBal.toString(),
     lpOtherE6: lpOther.toString(),
-    totalE6: total.toString(),
+    lpPoolE6: lpBal.toString(),
+    insuranceE6: insBal.toString(),
+    liqPenaltiesE6: BigInt(liqRows.rows[0].liq).toString(),
   };
 }
 
@@ -77,9 +116,11 @@ export interface HouseEconomics {
   lockedE6: string; // total customer margin locked in open positions
   customerLpE6: string; // total current value of customers' LP-pool stakes
   insuranceE6: string; // insurance-fund balance
-  feeRevenueE6: string; // house cut of trading fees (FEE_REVENUE)
-  fundingCollectedE6: string; // gross funding customers paid in
-  fundingRevenueE6: string; // net funding the house kept
+  surplusE6: string; // house net earned surplus = FEE_REVENUE balance (fees earned, excl. the LP pool) — the P/L box
+  feeRevenueE6: string; // = surplus (kept for the fees → insurance allocatable readout)
+  fundingHouseE6: string; // house cut of funding (FUNDING legs on FEE_REVENUE)
+  fundingLpE6: string; // funding paid into the LP pool (FUNDING legs on LP_POOL) — owed to LP providers, NOT house
+  fundingCollectedE6: string; // gross funding into the LP pool (positive FUNDING legs on LP_POOL)
   totalDepositsE6: string; // lifetime credited customer deposits (real-funds; 0 in play-money)
   totalWithdrawalsE6: string; // lifetime confirmed customer withdrawals (real-funds; 0 in play-money)
   pnlBreakdown: HousePnlBreakdown;
@@ -113,11 +154,13 @@ export async function houseEconomics(db: Db): Promise<HouseEconomics> {
     lockedE6: cust.lockedE6.toString(),
     customerLpE6: customerLp.toString(),
     insuranceE6: bd.insuranceE6, // INSURANCE_FUND balance (same source as treasuryState's)
-    feeRevenueE6: bd.feesHouseE6, // FEE_REVENUE balance
-    // gross + net funding come from the SAME query (housePnlBreakdown's LP scan), so gross >= net always
-    // holds — no race between two snapshots (the same approach treasuryState uses).
-    fundingCollectedE6: bd.fundingGrossE6,
-    fundingRevenueE6: bd.fundingNetE6,
+    surplusE6: bd.surplusE6, // FEE_REVENUE balance — the house's earned surplus (the P/L box)
+    feeRevenueE6: bd.surplusE6, // = surplus; kept for the fees → insurance allocatable readout
+    fundingHouseE6: bd.fundingHouseE6, // house's funding cut (FUNDING on FEE_REVENUE)
+    fundingLpE6: bd.fundingLpE6, // funding paid into the LP pool (FUNDING on LP_POOL) — owed to LP providers
+    // gross + LP funding come from the SAME query (housePnlBreakdown's LP scan), so gross >= the net LP
+    // share always holds — no race between two snapshots (the same approach treasuryState uses).
+    fundingCollectedE6: bd.fundingLpGrossE6,
     totalDepositsE6: flows.deposits.toString(),
     totalWithdrawalsE6: flows.withdrawals.toString(),
     pnlBreakdown: bd,

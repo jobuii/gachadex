@@ -19,7 +19,7 @@ await initDb();
 const db = await getDb();
 after(() => closeDb());
 
-test('housePnlBreakdown decomposes house equity by source and the lines reconcile to the total', async () => {
+test('housePnlBreakdown: house earnings sum to the surplus; the LP side sums to the LP pool', async () => {
   const lp = await getOrCreateSystemAccount(db, 'LP_POOL');
   const fee = await getOrCreateSystemAccount(db, 'FEE_REVENUE');
   const cp = await getOrCreateSystemAccount(db, 'TREASURY_USDC'); // dummy counterparty for the test legs
@@ -31,25 +31,41 @@ test('housePnlBreakdown decomposes house equity by source and the lines reconcil
     await postTxn(q, { reason: 'OPEN_FEE', refType: 'fee', refId: 'f1', entries: [
       { accountId: cp, amount: -usdc(2) }, { accountId: fee, amount: usdc(1) }, { accountId: lp, amount: usdc(1) },
     ] });
-    // $3 funding to LP, $0.50 trader loss to LP (house gained), $0.25 liquidation penalty split 60/40 LP/house
-    await postTxn(q, { reason: 'FUNDING', refType: 'position', refId: 'fn1', entries: [{ accountId: cp, amount: -usdc(3) }, { accountId: lp, amount: usdc(3) }] });
+    // $3.20 funding split: $3 to the LP pool + $0.20 house cut to FEE_REVENUE
+    await postTxn(q, { reason: 'FUNDING', refType: 'position', refId: 'fn1', entries: [
+      { accountId: cp, amount: -usdc(3.2) }, { accountId: lp, amount: usdc(3) }, { accountId: fee, amount: usdc(0.2) },
+    ] });
+    // a gacha sell-back cut of $0.40 to FEE_REVENUE
+    await postTxn(q, { reason: 'GACHA_SELLBACK', refType: 'gacha', refId: 'g1', entries: [{ accountId: cp, amount: -usdc(0.4) }, { accountId: fee, amount: usdc(0.4) }] });
+    // $0.50 trader loss to LP (LP gained), $0.25 liquidation penalty split 60/40 LP/house
     await postTxn(q, { reason: 'REALIZED_PNL', refType: 'position', refId: 'p1', entries: [{ accountId: cp, amount: -usdc(0.5) }, { accountId: lp, amount: usdc(0.5) }] });
     await postTxn(q, { reason: 'LIQUIDATION_FEE', refType: 'liquidation', refId: 'l1', entries: [{ accountId: cp, amount: -usdc(0.25) }, { accountId: lp, amount: usdc(0.15) }, { accountId: fee, amount: usdc(0.1) }] });
   });
 
   const a = await housePnlBreakdown(db);
   const d = (k: keyof typeof a) => BigInt(a[k]) - BigInt(before[k]);
-  assert.equal(d('feesHouseE6'), usdc(1.1), 'house fee cut $1 + liq-penalty house share $0.10');
+  // House earnings — FEE_REVENUE decomposed by source.
+  assert.equal(d('feesTradingE6'), usdc(1), 'trading-fee house cut $1');
+  assert.equal(d('feesGachaE6'), usdc(0.4), 'gacha sell-back cut $0.40');
+  assert.equal(d('fundingHouseE6'), usdc(0.2), 'funding house cut $0.20 (FEE_REVENUE leg)');
+  assert.equal(d('liqHouseE6'), usdc(0.1), 'liq-penalty house share $0.10');
+  assert.equal(d('feesOtherE6'), usdc(0), 'no insurance moves — remainder is zero');
+  assert.equal(d('surplusE6'), usdc(1.7), 'surplus = FEE_REVENUE delta = 1 + 0.4 + 0.2 + 0.1');
+  // LP side — owed to LP providers, not house P/L.
   assert.equal(d('feesLpE6'), usdc(1), 'LP fee share');
-  assert.equal(d('fundingNetE6'), usdc(3), 'funding net');
-  assert.equal(d('traderPnlE6'), usdc(0.5), 'net trader P/L (house side)');
+  assert.equal(d('fundingLpE6'), usdc(3), 'funding paid into the LP pool (FUNDING leg on LP_POOL)');
+  assert.equal(d('traderPnlE6'), usdc(0.5), 'net trader P/L absorbed by the LP pool');
+  assert.equal(d('lpOtherE6'), usdc(0.15), 'liq-penalty LP share $0.15 (LP remainder)');
+  assert.equal(d('lpPoolE6'), usdc(4.65), 'LP pool delta = 1 + 3 + 0.5 + 0.15');
   assert.equal(d('liqPenaltiesE6'), usdc(0.25), 'total liquidation penalties (LP $0.15 + house $0.10)');
-  assert.equal(d('insuranceE6'), usdc(0), 'insurance no longer funded by the liquidation penalty');
-  assert.equal(d('totalE6'), usdc(5.75), 'total house equity delta = 1+1+3+0.5+0.25');
+  assert.equal(d('insuranceE6'), usdc(0), 'insurance not funded by the liquidation penalty');
 
-  // the displayed lines must sum EXACTLY to the total (the whole point of the card)
-  const sum = BigInt(a.feesHouseE6) + BigInt(a.feesLpE6) + BigInt(a.fundingNetE6) + BigInt(a.traderPnlE6) + BigInt(a.lpOtherE6) + BigInt(a.insuranceE6);
-  assert.equal(sum, BigInt(a.totalE6), 'fees(house+LP) + funding + traderPnl + lpOther + insurance = total');
+  // House-earning lines must sum EXACTLY to the surplus (the whole point of the card).
+  const houseSum = BigInt(a.feesTradingE6) + BigInt(a.feesGachaE6) + BigInt(a.fundingHouseE6) + BigInt(a.liqHouseE6) + BigInt(a.feesOtherE6);
+  assert.equal(houseSum, BigInt(a.surplusE6), 'trading + gacha + funding + liq + other = surplus');
+  // LP-side lines must sum EXACTLY to the LP pool balance.
+  const lpSum = BigInt(a.feesLpE6) + BigInt(a.fundingLpE6) + BigInt(a.traderPnlE6) + BigInt(a.lpOtherE6);
+  assert.equal(lpSum, BigInt(a.lpPoolE6), 'LP fees + LP funding + trader P/L + LP capital = LP pool balance');
 });
 
 test('houseEconomics is ledger-derived (no chain / no real-funds needed) and mirrors its sources', async () => {
@@ -66,10 +82,12 @@ test('houseEconomics is ledger-derived (no chain / no real-funds needed) and mir
   // customer LP value reflects the new $200 stake
   assert.ok(BigInt(after.customerLpE6) - BigInt(before.customerLpE6) >= usdc(200) - 5n, 'LP value reflects the deposit');
   // the economics fields are the single source of truth shared with the P/L breakdown
-  assert.equal(after.feeRevenueE6, after.pnlBreakdown.feesHouseE6);
-  assert.equal(after.fundingRevenueE6, after.pnlBreakdown.fundingNetE6);
+  assert.equal(after.surplusE6, after.pnlBreakdown.surplusE6);
+  assert.equal(after.feeRevenueE6, after.pnlBreakdown.surplusE6); // feeRevenueE6 is an alias of the surplus
+  assert.equal(after.fundingHouseE6, after.pnlBreakdown.fundingHouseE6);
+  assert.equal(after.fundingLpE6, after.pnlBreakdown.fundingLpE6);
   assert.equal(after.insuranceE6, after.pnlBreakdown.insuranceE6);
-  // gross funding collected is never below net kept (net = gross − funding paid back out)
-  assert.ok(BigInt(after.fundingCollectedE6) >= BigInt(after.fundingRevenueE6));
-  assert.equal(typeof after.pnlBreakdown.totalE6, 'string');
+  // gross funding into the pool is never below the net LP share (net = gross − funding paid back out)
+  assert.ok(BigInt(after.fundingCollectedE6) >= BigInt(after.fundingLpE6));
+  assert.equal(typeof after.pnlBreakdown.surplusE6, 'string');
 });
