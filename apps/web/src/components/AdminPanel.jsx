@@ -483,6 +483,40 @@ export function AdminPanel({ onGoToMarket } = {}) {
     }
   };
 
+  // Withdrawal freeze toggle. A PoR breach auto-freezes; unfreezing is ALWAYS a manual operator action (it never
+  // self-clears), so surface it here. Re-fetch the treasury after either so the banner reflects the new state.
+  const unfreeze = async () => {
+    setErr(null);
+    setMsg(null);
+    if (!window.confirm('Unfreeze withdrawals?\n\nConfirm proof-of-reserves is healthy FIRST — this re-opens ALL withdrawals.')) return;
+    setBusy('freeze');
+    try {
+      await api.adminUnfreeze(adminKey.trim());
+      setTreasury(await api.adminGetTreasury(adminKey.trim()));
+      setMsg('Withdrawals unfrozen — payouts will process again.');
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const freeze = async () => {
+    setErr(null);
+    setMsg(null);
+    const reason = window.prompt('Freeze ALL withdrawals — enter a reason (logged):');
+    if (reason == null || !reason.trim()) return;
+    setBusy('freeze');
+    try {
+      await api.adminFreeze(reason.trim(), adminKey.trim());
+      setTreasury(await api.adminGetTreasury(adminKey.trim()));
+      setMsg('Withdrawals frozen.');
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   // Approve = sign + broadcast the payout; reverse = re-credit a row that provably never paid.
   const approveWithdrawal = async (w) => {
     setErr(null);
@@ -635,6 +669,27 @@ export function AdminPanel({ onGoToMarket } = {}) {
 
       {msg && <div className="ref-msg up">{msg}</div>}
       {err && <div className="order-error">{err}</div>}
+
+      {/* Withdrawal-freeze status + toggle (real-funds only; treasury is null in play-money). A PoR breach
+          auto-freezes and stays frozen until an operator unfreezes — surface it loudly on every tab. */}
+      {treasury &&
+        (treasury.frozen ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', background: 'rgba(220,38,38,0.14)', border: '1px solid #dc2626', borderRadius: 8, padding: '0.7rem 1rem', margin: '0.6rem 0' }}>
+            <span style={{ color: '#fca5a5', fontSize: '0.84rem' }}>
+              <strong style={{ color: '#fecaca' }}>⚠️ Withdrawals are FROZEN.</strong> {treasury.frozen}
+            </span>
+            <button className="btn-primary sm" disabled={busy === 'freeze'} onClick={unfreeze} style={{ whiteSpace: 'nowrap' }}>
+              {busy === 'freeze' ? '…' : 'Unfreeze withdrawals'}
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', background: 'rgba(16,185,129,0.07)', border: '1px solid #1f6f54', borderRadius: 8, padding: '0.45rem 0.9rem', margin: '0.6rem 0' }}>
+            <span style={{ color: '#6ee7b7', fontSize: '0.8rem' }}>✓ Withdrawals are open.</span>
+            <button className="btn-ghost sm" disabled={busy === 'freeze'} onClick={freeze}>
+              {busy === 'freeze' ? '…' : 'Freeze'}
+            </button>
+          </div>
+        ))}
 
       <div className="admin-tabs">
         <button className={`admin-tab ${tab === 'main' ? 'active' : ''}`} onClick={() => setTab('main')}>Main</button>
