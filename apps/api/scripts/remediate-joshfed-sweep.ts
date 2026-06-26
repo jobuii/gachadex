@@ -81,9 +81,17 @@ tx.sign(hot, custody); // hot = fee-payer; custody = ATA authority
 const sig = await conn.sendRawTransaction(tx.serialize());
 await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'finalized');
 
-let after = 0n;
-try { after = (await getAccount(conn, custodyAta)).amount; } catch { /* ATA gone → 0 */ }
-console.log(`\n✅ swept. sig: ${sig}`);
-console.log(`custody USDC now: $${(Number(after) / 1e6).toFixed(2)}`);
+console.log(`\n✅ swept $${(Number(usdcRaw) / 1e6).toFixed(2)} USDC → hot (tx finalized). sig: ${sig}`);
+// Re-read the custody balance to show it landed, but RETRY: an RPC node can lag reflecting a just-finalized
+// balance change, so a single immediate read may still return the pre-transfer amount. Poll until it reflects
+// the move (or the ATA is closed), and if it's still stale after the retries, say so rather than mislead.
+let after = usdcRaw;
+for (let i = 0; i < 6; i++) {
+  try { after = (await getAccount(conn, custodyAta)).amount; } catch { after = 0n; break; }
+  if (after < usdcRaw) break;
+  await new Promise((r) => setTimeout(r, 1500));
+}
+const stale = after >= usdcRaw;
+console.log(`custody USDC now: $${(Number(after) / 1e6).toFixed(2)}${stale ? '  ⚠️ (RPC read still lagging — trust the finalized sig above; verify on a explorer)' : ''}`);
 console.log(`\nNext: run remediate-joshfed-turbo.ts --apply to credit joshfed + post the ledger.`);
 await closeDb();
