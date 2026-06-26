@@ -810,7 +810,7 @@ CREATE TABLE IF NOT EXISTS gacha_nft_inventory (
   id               TEXT PRIMARY KEY,
   user_id          TEXT NOT NULL REFERENCES users(id),
   open_id          TEXT REFERENCES gacha_pack_opens(id),
-  mint             TEXT NOT NULL UNIQUE,            -- on-chain truth; UNIQUE makes the reveal write idempotent
+  mint             TEXT NOT NULL,                   -- on-chain truth; NOT globally unique (see the partial unique below)
   custody_pubkey   TEXT NOT NULL,
   name TEXT, grade TEXT, set_name TEXT, year TEXT, image_url TEXT,
   insured_value_e6 BIGINT,                           -- CC insured value at win (advisory)
@@ -822,6 +822,13 @@ CREATE TABLE IF NOT EXISTS gacha_nft_inventory (
   settled_at       TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_gacha_inventory_user ON gacha_nft_inventory(user_id, status);
+-- A mint is unique only among ACTIVE holders: CC's buyback returns a sold-back NFT to its pool, where it can be
+-- re-rolled to a NEW owner — so historical 'sold'/'withdrawn' rows for the same mint must NOT block the new
+-- delivery's row (the old global UNIQUE(mint) did, causing "paid but no card in inventory"). Drop it; enforce
+-- the real invariant (one active holder per mint), and move recordReveal's idempotency to the open (one row/open).
+ALTER TABLE IF EXISTS gacha_nft_inventory DROP CONSTRAINT IF EXISTS gacha_nft_inventory_mint_key;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_gacha_inv_active_mint ON gacha_nft_inventory(mint) WHERE status IN ('held','withdrawing');
+CREATE UNIQUE INDEX IF NOT EXISTS uq_gacha_inv_open ON gacha_nft_inventory(open_id);
 
 -- Loyalty Gold (P4; 1 Gold = $0.001). A per-player points currency, separate from the USDC ledger and from
 -- on-chain $GDEX: non-transferable, non-withdrawable. Earned on paid (USDC) opens; spent to buy packs. The

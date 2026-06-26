@@ -760,3 +760,37 @@ test('listInventory: surfaces each held card’s rarity (joined from its open �
   assert.equal(inv[0].status, 'held');
   assert.equal(inv[0].rarity, 'epic'); // the fake reveal is an epic → pulled through the LEFT JOIN to gacha_pack_opens
 });
+
+test('re-circulated mint: an NFT a prior holder SOLD BACK records to the new owner (no longer blocked by the stale sold row)', async () => {
+  const a = await newUser(); const b = await newUser();
+  const cc = fakeCc();
+  const reveal = keptReveal();            // one specific mint
+  const mint = reveal.nft_address;
+  cc.reveals = [reveal];
+  await openPack(db, a, { machineCode: 'pokemon_50', idempotencyKey: 'recirc-a' }, { chain: fakeChain(), cc, ...noWait });
+  const aRow = (await db.query<{ id: string }>(`SELECT id FROM gacha_nft_inventory WHERE user_id=$1 AND mint=$2`, [a, mint])).rows[0];
+  assert.ok(aRow, 'A received the held row');
+  await sellBack(db, a, aRow.id, { chain: fakeChain(), cc, ...noWait }); // → A's row goes 'sold' (NFT back to CC's pool)
+  // B opens; CC re-rolls the SAME mint back out of the pool
+  cc.reveals = [{ ...reveal }];
+  const rb = await openPack(db, b, { machineCode: 'pokemon_50', idempotencyKey: 'recirc-b' }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(rb.status, 'opened');
+  const bInv = await listInventory(db, b);
+  assert.equal(bInv.length, 1);          // THE FIX: B gets the held row (old global-unique code recorded 0)
+  assert.equal(bInv[0].mint, mint);
+});
+
+test('phantom delivery: a reveal mint still ACTIVELY held elsewhere refunds instead of double-recording', async () => {
+  const a = await newUser(); const b = await newUser();
+  const cc = fakeCc();
+  const reveal = keptReveal();
+  cc.reveals = [reveal];
+  await openPack(db, a, { machineCode: 'pokemon_50', idempotencyKey: 'phantom-a' }, { chain: fakeChain(), cc, ...noWait });
+  // A KEEPS it ('held'); CC erroneously re-reports the SAME mint for B — it can't be in two custodies at once.
+  cc.reveals = [{ ...reveal }];
+  const before = await collOf(b);
+  const rb = await openPack(db, b, { machineCode: 'pokemon_50', idempotencyKey: 'phantom-b' }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(rb.status, 'failed');          // refunded, not falsely delivered
+  assert.equal(await collOf(b), before);      // charged then refunded → net zero
+  assert.equal((await listInventory(db, b)).length, 0); // no phantom inventory row
+});

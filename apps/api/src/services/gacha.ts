@@ -231,7 +231,18 @@ async function deliverOpen(db: Db, openId: string, deps: GachaDeps): Promise<Ope
     if ((reveal.code === 'TURBO_MODE_BUYBACK' || reveal.buybackAmount != null) && Number(reveal.buybackAmount) > 0) {
       return await settleTurboSold(db, openId, reveal.buybackAmount as number);
     }
-    if (reveal.nft_address) return await recordReveal(db, openId, reveal); // delivered slab (normal mode + turbo non-Common)
+    if (reveal.nft_address) {
+      // A re-circulated mint (a prior holder sold it back → its row is 'sold') is a legit re-roll — deliver it.
+      // But if this exact mint is CURRENTLY actively held (held/withdrawing), the on-chain NFT can't also be ours
+      // → phantom delivery; refund rather than record a card the customer doesn't actually hold. (recordReveal's
+      // partial-unique index is the atomic backstop against a race.)
+      const heldElsewhere = (await db.query(`SELECT 1 FROM gacha_nft_inventory WHERE mint = $1 AND status IN ('held','withdrawing') LIMIT 1`, [reveal.nft_address])).rows[0];
+      if (heldElsewhere) {
+        console.error('[gacha] reveal mint already actively held — phantom delivery, refunding open', openId, reveal.nft_address);
+        return await settleRefund(db, openId, 'failed');
+      }
+      return await recordReveal(db, openId, reveal); // delivered slab (normal mode + turbo non-Common)
+    }
     if (reveal.code === 'WAITING_FOR_WEBHOOK') {
       if (attempt < MAX_REVEAL_ATTEMPTS - 1) { await sleepFn(REVEAL_RETRY_MS); continue; }
       break; // still waiting after retries → leave 'paid' for the reconciler
@@ -326,7 +337,7 @@ async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promi
     const marketId = await matchMarket(q, card.name); // best-effort GDEX market for the trade tie-in (often null)
     await q.query(
       `INSERT INTO gacha_nft_inventory(id, user_id, open_id, mint, custody_pubkey, name, grade, set_name, year, image_url, insured_value_e6, market_id, status)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'held') ON CONFLICT (mint) DO NOTHING`,
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'held') ON CONFLICT (open_id) DO NOTHING`,
       [randomUUID(), cur.user_id, openId, card.mint, cur.custody_pubkey, card.name, card.grade, card.setName, card.year, card.imageUrl, card.insuredValueE6, marketId],
     );
     await q.query(
