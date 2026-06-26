@@ -38,7 +38,7 @@ function fmtVol(usd) {
 
 export function MarketsScreener({ markets, loading, onTradeMarket }) {
   const [game, setGame] = useState('all');
-  const [sort, setSort] = useState('top');
+  const [sort, setSort] = useState('gainers'); // default to biggest 24h gainers (matches the Exchange sidebar)
   const [rarity, setRarity] = useState('all');
   const [search, setSearch] = useState('');
   const [showJpy, setShowJpy] = useStickyState('pokeX_showJpy', false); // persists across refresh (shared key with the sidebar toggle)
