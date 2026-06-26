@@ -267,6 +267,56 @@ async function settleTurboSold(db: Db, openId: string, buybackAmount: number): P
   });
 }
 
+/**
+ * One-off recovery for the pre-fix YOLO/turbo bug: CC auto-sold a Common (TURBO_MODE_BUYBACK) but the old
+ * nft_address-first `deliverOpen` recorded it as a delivered `held` slab — the open stayed 'opened' and the user
+ * was never credited. This retroactively books the auto-sell EXACTLY as `settleTurboSold` would have: credit the
+ * user the buyback minus the turbo cut, book the cut to FEE_REVENUE, debit TREASURY by the gross (the gross USDC
+ * is swept custody→hot separately so the TREASURY debit stays backed), flip the open to 'turbo_sold', and retire
+ * the phantom inventory row to 'sold'. `grossE6` is CC's CONFIRMED buyback amount (base units) for the prize's
+ * open — the caller fetches + verifies it. Strictly guarded + idempotent: it acts ONLY on a turbo Common still in
+ * the exact mis-recorded state, and a re-run (already 'turbo_sold'/'sold') is a no-op. `dryRun` computes without
+ * writing. The double-entry (coll +payout, fee +cut, treasury −gross) sums to zero, identical to a normal turbo sell.
+ */
+export async function remediateMisrecordedTurboCommon(
+  db: Db, prizeId: string, grossE6: bigint, opts: { dryRun?: boolean } = {},
+): Promise<{ status: 'applied' | 'already_done' | 'dry_run'; openId: string; userId: string; grossE6: string; payoutE6: string; cutE6: string }> {
+  if (grossE6 <= 0n) throw new HttpError(400, 'gross must be positive');
+  return await db.tx(async (q) => {
+    const inv = (await q.query<{ open_id: string; user_id: string; status: string }>(
+      `SELECT open_id, user_id, status FROM gacha_nft_inventory WHERE id = $1 FOR UPDATE`, [prizeId])).rows[0];
+    if (!inv) throw new HttpError(404, 'prize not found');
+    const open = (await q.query<{ id: string; status: string; turbo: boolean; rarity: string | null; turbo_refund_e6: string | null }>(
+      `SELECT id, status, turbo, rarity, turbo_refund_e6 FROM gacha_pack_opens WHERE id = $1 FOR UPDATE`, [inv.open_id])).rows[0];
+    if (!open) throw new HttpError(404, 'open not found');
+
+    const cut = (grossE6 * BigInt(gachaConfig.turboCutBps.get())) / 10000n; // same 10% turbo knob as settleTurboSold
+    const payout = grossE6 - cut;
+
+    // Idempotent: already remediated → no-op (report the prior payout, don't double-credit).
+    if (open.status === 'turbo_sold' && inv.status === 'sold') {
+      return { status: 'already_done', openId: open.id, userId: inv.user_id, grossE6: grossE6.toString(), payoutE6: open.turbo_refund_e6 ?? payout.toString(), cutE6: cut.toString() };
+    }
+    // Refuse anything not in the EXACT mis-recorded state — never touch a normal held card or an already-settled open.
+    if (!open.turbo || open.rarity !== 'Common' || open.status !== 'opened' || open.turbo_refund_e6 !== null || inv.status !== 'held') {
+      throw new HttpError(409, `prize ${prizeId} not in mis-recorded turbo-Common state (open=${open.status}/${open.rarity}/turbo=${open.turbo}/refund=${open.turbo_refund_e6 ?? 'null'}, inv=${inv.status})`);
+    }
+    if (opts.dryRun) {
+      return { status: 'dry_run', openId: open.id, userId: inv.user_id, grossE6: grossE6.toString(), payoutE6: payout.toString(), cutE6: cut.toString() };
+    }
+    const coll = await getOrCreateUserAccount(q, inv.user_id, 'USER_COLLATERAL');
+    const fee = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
+    const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
+    const txnId = await postTxn(q, {
+      reason: 'GACHA_TURBO_SELL', refType: 'gacha_open', refId: open.id,
+      entries: [{ accountId: coll, amount: payout }, { accountId: fee, amount: cut }, { accountId: treasury, amount: -grossE6 }],
+    });
+    await q.query(`UPDATE gacha_pack_opens SET status='turbo_sold', turbo_refund_e6=$2, settled_at=now() WHERE id=$1`, [open.id, payout.toString()]);
+    await q.query(`UPDATE gacha_nft_inventory SET status='sold', sell_value_e6=$2, sell_cut_e6=$3, txn_id=$4, settled_at=now() WHERE id=$1`, [prizeId, payout.toString(), cut.toString(), txnId]);
+    return { status: 'applied', openId: open.id, userId: inv.user_id, grossE6: grossE6.toString(), payoutE6: payout.toString(), cutE6: cut.toString() };
+  });
+}
+
 async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promise<OpenResult> {
   const card = extractCard(reveal);
   return await db.tx(async (q) => {

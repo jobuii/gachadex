@@ -38,10 +38,13 @@ export interface GachaChain {
   transferNft(mint: string, dest: string, signer: Keypair): Promise<{ sig: string }>;
 }
 
-// SOL top-up sent alongside the pack-price USDC so the custody wallet can cover the CC payment tx fee + its
-// USDC-ATA rent. A guess for now — the live test confirms whether CC forces the signer to pay gas + the real
-// cost; tune then. (If CC supports altPlayerAddress, JIT funding is skipped entirely — spec §5.)
-const FUND_SOL_LAMPORTS = 12_000_000; // 0.012 SOL
+// Optional SOL top-up to the custody wallet alongside the pack-price USDC. DEFAULT 0: verified on mainnet that
+// the custody wallet never spends its own SOL — across every custody tx the HOT wallet is the fee-payer and pays
+// the USDC-ATA rent, and CC covers the pack-payment gas — so a top-up only locks SOL idle (the old 0.012/open
+// default accumulated, never spent). Override via GACHA_CUSTODY_FUND_LAMPORTS only if a future flow makes the
+// custody wallet a fee-payer (opens would then fail "insufficient lamports" until topped up). (CC altPlayerAddress
+// would skip funding entirely — spec §5.)
+const FUND_SOL_LAMPORTS = Number(process.env.GACHA_CUSTODY_FUND_LAMPORTS ?? 0);
 
 // MPL Core instruction-builder (transferV1). Used ONLY to build the instruction — the RPC endpoint is never hit
 // by `.getInstructions()`, so the URL just needs to be valid; the tx is signed + sent via web3.js below.
@@ -62,11 +65,16 @@ export function solanaGachaChain(): GachaChain {
       const destOwner = new PublicKey(dest);
       const fromAta = getAssociatedTokenAddressSync(usdcMint, hot.publicKey);
       const toAta = getAssociatedTokenAddressSync(usdcMint, destOwner);
-      const tx = new Transaction().add(
-        SystemProgram.transfer({ fromPubkey: hot.publicKey, toPubkey: destOwner, lamports: FUND_SOL_LAMPORTS }),
+      // Create the custody USDC ATA (hot pays rent) + move the pack-price USDC. The SOL top-up is prepended only
+      // when configured (default 0) — see FUND_SOL_LAMPORTS; hot is the fee-payer regardless.
+      const ixs = [
         createAssociatedTokenAccountIdempotentInstruction(hot.publicKey, toAta, destOwner, usdcMint),
         createTransferInstruction(fromAta, toAta, hot.publicKey, usdcE6),
-      );
+      ];
+      if (FUND_SOL_LAMPORTS > 0) {
+        ixs.unshift(SystemProgram.transfer({ fromPubkey: hot.publicKey, toPubkey: destOwner, lamports: FUND_SOL_LAMPORTS }));
+      }
+      const tx = new Transaction().add(...ixs);
       tx.feePayer = hot.publicKey;
       const bh = await conn.getLatestBlockhash('confirmed');
       tx.recentBlockhash = bh.blockhash;
