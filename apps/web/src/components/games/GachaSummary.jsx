@@ -18,6 +18,7 @@ export function GachaSummary({ results, spentE6, onSell, onClose, instantCutBps 
 
   const isSellable = (r) => r.card?.mint && Number(r.card.valueE6) > 0 && !sold[r.card.mint];
   const sellable = results.filter(isSellable);
+  const oneSellable = sellable.length === 1; // single-card summary (a YOLO Uncommon) → "Sell"/"Keep", not "…All (1)"
   const anySold = Object.keys(sold).length > 0; // once anything's been sold, "Keep All" no longer applies → "Done"
   const selectedRows = sellable.filter((r) => selected[r.card.mint]);
   const selectedPayout = selectedRows.reduce((s, r) => s + netE6(r.card.valueE6), 0n);
@@ -43,7 +44,7 @@ export function GachaSummary({ results, spentE6, onSell, onClose, instantCutBps 
     <div className="gacha-reveal-overlay" onClick={onClose}>
       <div className="gacha-reveal-bg" aria-hidden />
       <div className="gacha-reveal-stage gacha-summary" onClick={(e) => e.stopPropagation()}>
-        <h3>Your {results.length} pulls</h3>
+        <h3>Your {results.length === 1 ? 'pull' : `${results.length} pulls`}</h3>
         <div className="gacha-summary-net">
           <strong className={net < 0 ? 'down' : 'up'}>{net < 0 ? '−' : '+'}{usd(String(Math.abs(net)))}</strong>
           <span className="muted">spent {usd(String(spent))} · value {usd(String(value))}</span>
@@ -82,7 +83,7 @@ export function GachaSummary({ results, spentE6, onSell, onClose, instantCutBps 
           <div className="gacha-summary-payout">
             {selectedRows.length > 0
               ? <>Sell {selectedRows.length} back to Collector Crypt for <strong className="up">~{usd(selectedPayout)}</strong> USDC</>
-              : <span className="muted">Tap any pull to select it, then Sell — or Sell All</span>}
+              : <span className="muted">{oneSellable ? 'Sell it back to Collector Crypt, or keep it.' : 'Tap any pull to select it, then Sell — or Sell All'}</span>}
           </div>
         )}
         <div className="gacha-summary-actions">
@@ -92,10 +93,10 @@ export function GachaSummary({ results, spentE6, onSell, onClose, instantCutBps 
             </button>
           )}
           <button className="btn-ghost" disabled={busy || sellable.length === 0} onClick={() => sellRows(sellable)}>
-            {busy && selectedRows.length === 0 ? 'Selling…' : `Sell All${sellable.length ? ` (${sellable.length})` : ''}`}
+            {busy && selectedRows.length === 0 ? 'Selling…' : oneSellable ? 'Sell' : `Sell All${sellable.length ? ` (${sellable.length})` : ''}`}
           </button>
           <button className="btn-ghost" disabled={busy} onClick={onClose}>
-            {anySold ? 'Done' : `Keep All${sellable.length ? ` (${sellable.length})` : ''}`}
+            {anySold ? 'Done' : oneSellable ? 'Keep' : `Keep All${sellable.length ? ` (${sellable.length})` : ''}`}
           </button>
         </div>
       </div>

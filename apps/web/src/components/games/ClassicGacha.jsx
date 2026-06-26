@@ -108,7 +108,10 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
       if (n === 1) {
         const r = await openOne(m);
         await loadInventory(); // so the reveal's Sell-now can resolve the held row
-        setRevealResult(r);
+        // YOLO only: an Uncommon skips the beat reveal → straight to the summary (Keep/Sell), like a multi-open.
+        // (Common is auto-sold to its own ⚡ panel; Rare/Epic still get the full reveal. Normal mode is unchanged.)
+        if (yolo && r.status === 'opened' && (r.card?.rarity || '').toLowerCase() === 'uncommon') setSummaryResults([r]);
+        else setRevealResult(r);
       } else {
         const results = [];
         for (let i = 0; i < n; i++) results.push(await openOne(m)); // sequential = qty separate charges
