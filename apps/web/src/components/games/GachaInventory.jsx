@@ -2,7 +2,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import * as api from '../../lib/api.js';
 import { signAndSubmitNftWithdrawal } from '../../lib/withdraw.js';
-import { usd } from './gacha-util.js';
+import { usd, RARITY_COLORS } from './gacha-util.js';
+
+const tierColor = (r) => RARITY_COLORS[(r || '').toLowerCase()] ?? '#9aa0aa'; // rarity → its tier colour (grey fallback)
 
 // The player's Classic Gacha NFT inventory (docs/classic-gacha-cc-packs-spec.md §12 + decision #4). Held graded
 // slabs with per-row Sell back (−cut, instant) / Trade (when the card matched a GDEX market) / Withdraw (the real
@@ -60,6 +62,7 @@ export function GachaInventory({ onTradeMarket, refreshKey = 0, heading = 'Your 
             {it.imageUrl && <img src={it.imageUrl} alt={it.name ?? ''} loading="lazy" referrerPolicy="no-referrer" onError={hideBrokenImg} />}
             <span className="gacha-card-name" title={it.name ?? ''}>{it.name ?? 'card'}{it.grade ? ` · ${it.grade}` : ''}</span>
             <span className="gacha-card-val">{usd(it.valueE6)}</span>
+            {it.rarity && <span className="gacha-card-tier" style={{ color: tierColor(it.rarity) }}>{it.rarity}</span>}
             {it.status === 'held' ? (
               <>
                 <button className="btn-ghost sm" onClick={() => sellBack(it)}>Sell back</button>

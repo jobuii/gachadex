@@ -17,7 +17,7 @@ const { getDb } = await import('../db/client.ts');
 const { migrate } = await import('../db/migrate.ts');
 const { usdc } = await import('../money.ts');
 const { fund, sign } = await import('../test-helpers.ts');
-const { openPack, sellBack, convert, reconcilePending, nftWithdrawNonce, requestNftWithdraw, extractCard } = await import('./gacha.ts');
+const { openPack, sellBack, convert, reconcilePending, nftWithdrawNonce, requestNftWithdraw, extractCard, listInventory } = await import('./gacha.ts');
 const { reconcileStuckPrizes } = await import('./gacha-reconcile.ts');
 const { pollMachineStock, recentRestocks } = await import('./gacha-stock.ts');
 const { goldEarnedForOpen, goldPriceForPack, earnGold, getGoldSummary, resetGoldBalances } = await import('./gold.ts');
@@ -703,4 +703,13 @@ test('fundGachaRewardsBudget: sweeps FEE_REVENUE → rewards budget, capped at f
   // Double-entry holds across the whole ledger.
   const sum = await db.query<{ s: string }>(`SELECT COALESCE(SUM(amount_uusdc), 0)::text AS s FROM ledger_entries`);
   assert.equal(BigInt(sum.rows[0].s), 0n);
+});
+
+test('listInventory: surfaces each held card’s rarity (joined from its open — no rarity column on the inventory row)', async () => {
+  const user = await newUser();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'inv-rarity' }, { chain: fakeChain(), cc: fakeCc(), ...noWait });
+  const inv = await listInventory(db, user);
+  assert.equal(inv.length, 1);
+  assert.equal(inv[0].status, 'held');
+  assert.equal(inv[0].rarity, 'epic'); // the fake reveal is an epic → pulled through the LEFT JOIN to gacha_pack_opens
 });

@@ -370,15 +370,17 @@ export async function getOpen(db: Db, userId: string, openId: string): Promise<O
 }
 
 // ─────────────────────────────── sell-back ───────────────────────────────
-export interface InventoryItem { id: string; mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; marketId: string | null; status: string }
+export interface InventoryItem { id: string; mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; marketId: string | null; status: string; rarity: string | null }
 
 export async function listInventory(db: Db, userId: string): Promise<InventoryItem[]> {
-  const r = await db.query<{ id: string; mint: string; name: string | null; grade: string | null; image_url: string | null; insured_value_e6: string | null; market_id: string | null; status: string }>(
-    `SELECT id, mint, name, grade, image_url, insured_value_e6::text AS insured_value_e6, market_id, status
-       FROM gacha_nft_inventory WHERE user_id = $1 AND status IN ('held','withdrawing') ORDER BY acquired_at DESC`,
+  // rarity isn't on the inventory row — pull it from the linked open (LEFT JOIN so a row without an open still shows).
+  const r = await db.query<{ id: string; mint: string; name: string | null; grade: string | null; image_url: string | null; insured_value_e6: string | null; market_id: string | null; status: string; rarity: string | null }>(
+    `SELECT i.id, i.mint, i.name, i.grade, i.image_url, i.insured_value_e6::text AS insured_value_e6, i.market_id, i.status, o.rarity
+       FROM gacha_nft_inventory i LEFT JOIN gacha_pack_opens o ON o.id = i.open_id
+      WHERE i.user_id = $1 AND i.status IN ('held','withdrawing') ORDER BY i.acquired_at DESC`,
     [userId],
   );
-  return r.rows.map((x) => ({ id: x.id, mint: x.mint, name: x.name, grade: x.grade, imageUrl: x.image_url, valueE6: x.insured_value_e6 ?? '0', marketId: x.market_id, status: x.status }));
+  return r.rows.map((x) => ({ id: x.id, mint: x.mint, name: x.name, grade: x.grade, imageUrl: x.image_url, valueE6: x.insured_value_e6 ?? '0', marketId: x.market_id, status: x.status, rarity: x.rarity }));
 }
 
 export interface SellBackResult { prizeId: string; payoutE6: string; cutE6: string }
