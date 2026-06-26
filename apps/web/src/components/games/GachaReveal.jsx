@@ -30,7 +30,12 @@ const BEATS = { gradeGap: 1200, typeGap: 1200, flipGap: 2500, hold: 2500 };
 const RIP_AUDIBLE_MS = 2300;
 const MIN_SETTLE_MS = 350;
 
-export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onTrade, onClose, instantCutBps = 1000 }) {
+// Sequence mode (normal-mode multi-open): after each card's reveal lands, hold this long so the player can
+// read it, then auto-advance to the next card (a Skip-all button jumps straight to the summary).
+const SEQ_HOLD_MS = 3000;
+
+export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onTrade, onClose, instantCutBps = 1000, seqPos = null, onNext, onSkipAll }) {
+  const inSeq = !!onNext; // driving a multi-open reveal sequence → auto-advance + Skip-all, no per-card Sell/Keep
   const card = result?.card ?? null;
   const tier = card ? tierOf(card.rarity) : null;
   const big = tier?.fx ?? null; // 'rare' | 'epic' | null
@@ -67,6 +72,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
       // refund — the payment went through and the reconciler will finish it. Never tell the user "refunded" here.
       else if (result.status === 'paid' || result.status === 'pending') setPhase('pending');
       else setPhase('failed'); // refunded / failed → the money was genuinely returned
+      if (onNext) timers.current.push(setTimeout(onNext, SEQ_HOLD_MS)); // sequence: auto-advance after a hold
       return;
     }
     // Start the beats only once the rip has finished (and the card-in animation has played). If the open+poll
@@ -100,6 +106,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
       } else if (big === 'rare') {
         playSound('confetti', { volume: 0.5 });
       }
+      if (onNext) timers.current.push(setTimeout(onNext, SEQ_HOLD_MS)); // sequence: auto-advance once the player has read it
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
@@ -132,7 +139,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   };
 
   return createPortal(
-    <div className={`gacha-reveal-overlay ${big && done ? `gr-pop-${big}` : ''} ${phase === 'tier' && big === 'epic' ? 'gr-epic-quake' : ''}`} onClick={close}>
+    <div className={`gacha-reveal-overlay ${big && done ? `gr-pop-${big}` : ''} ${phase === 'tier' && big === 'epic' ? 'gr-epic-quake' : ''}`} onClick={inSeq ? undefined : close}>
       <div className="gacha-reveal-bg" aria-hidden />
       {done && big && <RevealFX kind={big} color={tier.color} />}
 
@@ -145,25 +152,29 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
         {muted ? '🔇' : '🔊'}
       </button>
 
+      {inSeq && onSkipAll && (
+        <button className="gacha-reveal-skipall" onClick={(e) => { e.stopPropagation(); onSkipAll(); }}>Skip all →</button>
+      )}
+
       <div className="gacha-reveal-stage" onClick={(e) => e.stopPropagation()}>
         {phase === 'failed' ? (
           <div className="gacha-reveal-failed">
             <h3>The pack didn’t open</h3>
             <p className="muted">Your payment was refunded. Try again in a moment.</p>
-            <button className="btn-primary" onClick={close}>Done</button>
+            <button className="btn-primary" onClick={inSeq ? onNext : close}>Done</button>
           </div>
         ) : phase === 'pending' ? (
           <div className="gacha-reveal-failed">
             <h3>Still opening…</h3>
             <p className="muted">Your payment went through — the reveal is taking a moment. We’ll finish it automatically; your card will appear in your inventory shortly. You were <strong>not</strong> charged twice.</p>
-            <button className="btn-primary" onClick={close}>Done</button>
+            <button className="btn-primary" onClick={inSeq ? onNext : close}>Done</button>
           </div>
         ) : phase === 'turbo' ? (
           <div className="gacha-reveal-failed">
             <div className="gacha-reveal-banner" style={{ color: '#f59e0b' }}>⚡ YOLO</div>
             <div className="gacha-reveal-val" style={{ color: '#22c55e' }}>+{usd(result.turboRefundE6)}</div>
             <p className="muted">Your common was instantly auto-sold for USDC.</p>
-            <button className="btn-primary" onClick={close}>Done</button>
+            <button className="btn-primary" onClick={inSeq ? onNext : close}>Done</button>
           </div>
         ) : (
           <>
@@ -211,7 +222,9 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
                   <strong>{pnlE6 < 0n ? '−' : '+'}{usd(pnlE6 < 0n ? -pnlE6 : pnlE6)}</strong>
                   <span className="gacha-reveal-pnl-sub muted">paid {usd(spentE6)} · worth {usd(card?.valueE6)}</span>
                 </div>
-                {sold ? (
+                {inSeq ? (
+                  <div className="gacha-reveal-seqpos muted">{seqPos?.pos} / {seqPos?.total}{seqPos && seqPos.pos < seqPos.total ? ' · next card…' : ' · finishing…'}</div>
+                ) : sold ? (
                   <div className="gacha-reveal-sold">
                     <span className="gacha-reveal-sold-badge">✓ SOLD</span>
                     <span className="gacha-reveal-sold-amt up">+{usd(sellNetE6)} added to your balance</span>
@@ -224,7 +237,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
                   </div>
                 )}
                 {sellErr && <div className="gacha-reveal-sellerr">{sellErr}</div>}
-                {!sold && result?.verifyUrl && <a className="gacha-verify" href={result.verifyUrl} target="_blank" rel="noreferrer">Verify this rip ↗</a>}
+                {!inSeq && !sold && result?.verifyUrl && <a className="gacha-verify" href={result.verifyUrl} target="_blank" rel="noreferrer">Verify this rip ↗</a>}
               </div>
             )}
 
