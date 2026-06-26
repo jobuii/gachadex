@@ -121,15 +121,15 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
 
   const close = () => { stopSound(coinLoop.current); onClose(); };
 
-  // Sell back from the reveal: sell, then update IN PLACE to a SOLD confirmation (rare.win-style) and
-  // auto-close after 2s so the player registers it — instead of the screen vanishing instantly.
+  // Sell back from the reveal: sell, then update IN PLACE to a SOLD confirmation (rare.win-style). The player
+  // can hit Close to dismiss it whenever, and it auto-closes after 5s if they don't — instead of vanishing instantly.
   const doSell = async () => {
     if (selling || sold) return;
     setSellErr(null);
     setSelling(true);
     try {
       const ok = await onSellNow();
-      if (ok) { setSold(true); playSound('coins', { volume: 0.4 }); timers.current.push(setTimeout(close, 2000)); }
+      if (ok) { setSold(true); playSound('coins', { volume: 0.4 }); timers.current.push(setTimeout(close, 5000)); }
       else setSellErr('Couldn’t sell back — try again.');
     } catch {
       setSellErr('Couldn’t sell back — try again.');
@@ -139,7 +139,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   };
 
   return createPortal(
-    <div className={`gacha-reveal-overlay ${big && done ? `gr-pop-${big}` : ''} ${phase === 'tier' && big === 'epic' ? 'gr-epic-quake' : ''}`} onClick={inSeq ? undefined : close}>
+    <div className={`gacha-reveal-overlay ${big && done ? `gr-pop-${big}` : ''} ${phase === 'tier' && big === 'epic' ? 'gr-epic-quake' : ''}`} onClick={inSeq || selling ? undefined : close}>
       <div className="gacha-reveal-bg" aria-hidden />
       {done && big && <RevealFX kind={big} color={tier.color} />}
 
@@ -228,6 +228,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
                   <div className="gacha-reveal-sold">
                     <span className="gacha-reveal-sold-badge">✓ SOLD</span>
                     <span className="gacha-reveal-sold-amt up">+{usd(sellNetE6)} added to your balance</span>
+                    <button className="btn-primary" onClick={close}>Close</button>
                   </div>
                 ) : (
                   <div className="gacha-reveal-actions">
