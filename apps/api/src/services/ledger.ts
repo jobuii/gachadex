@@ -136,3 +136,15 @@ export async function getBalance(q: Queryer, accountId: string): Promise<bigint>
   );
   return r.rows[0] ? BigInt(r.rows[0].amt) : 0n;
 }
+
+/** Like getBalance, but takes a row-lock (SELECT … FOR UPDATE) on the balance row inside the caller's tx, so a
+ *  check-then-debit is atomic: concurrent debits on the same account serialize, and two callers can't both pass
+ *  a balance guard and over-draw it. Use this (not getBalance) whenever the read gates a debit in the same tx.
+ *  A missing balances row → no lock + 0n, which correctly fails any positive guard (nothing to debit). */
+export async function getBalanceForUpdate(q: Queryer, accountId: string): Promise<bigint> {
+  const r = await q.query<{ amt: string }>(
+    `SELECT amount_uusdc::text AS amt FROM balances WHERE account_id = $1 FOR UPDATE`,
+    [accountId],
+  );
+  return r.rows[0] ? BigInt(r.rows[0].amt) : 0n;
+}

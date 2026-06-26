@@ -1,6 +1,6 @@
 import type { Db } from '../db/client.ts';
 import { HttpError } from '../errors.ts';
-import { getOrCreateSystemAccount, getBalance, postTxn } from './ledger.ts';
+import { getOrCreateSystemAccount, getBalance, getBalanceForUpdate, postTxn } from './ledger.ts';
 
 /**
  * Classic Gacha economics + activity readout (docs/classic-gacha-cc-packs-spec.md §6/§12, plus operator stats).
@@ -200,10 +200,9 @@ export async function fundGachaRewardsBudget(db: Db, amountE6: bigint): Promise<
   return db.tx(async (q) => {
     const fee = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
     const budget = await getOrCreateSystemAccount(q, 'GACHA_REWARDS_BUDGET');
-    // Lock the FEE_REVENUE balance row so two concurrent sweeps can't both pass the cap and over-draw it.
-    const lock = await q.query<{ amount_uusdc: string }>(`SELECT amount_uusdc FROM balances WHERE account_id = $1 FOR UPDATE`, [fee]);
-    const feeBal = lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n;
-    if (feeBal < amountE6) throw new HttpError(400, 'amount exceeds the earned fee revenue available to sweep', 'insufficient_fee_revenue');
+    // Lock the FEE_REVENUE balance row so concurrent debits (another sweep, a fee→insurance move) can't both
+    // pass the cap and over-draw it.
+    if ((await getBalanceForUpdate(q, fee)) < amountE6) throw new HttpError(400, 'amount exceeds the earned fee revenue available to sweep', 'insufficient_fee_revenue');
     await postTxn(q, {
       reason: 'GACHA_REWARDS_FUND', refType: 'admin', refId: null,
       entries: [{ accountId: fee, amount: -amountE6 }, { accountId: budget, amount: amountE6 }],

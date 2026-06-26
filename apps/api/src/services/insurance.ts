@@ -1,6 +1,6 @@
 import { HttpError } from '../errors.ts';
 import type { Db } from '../db/client.ts';
-import { getOrCreateSystemAccount, getBalance, postTxn } from './ledger.ts';
+import { getOrCreateSystemAccount, getBalance, getBalanceForUpdate, postTxn } from './ledger.ts';
 
 /**
  * The insurance fund is the buffer that absorbs gap-driven bad debt (a liquidation that blows past
@@ -21,7 +21,7 @@ export async function allocateFeesToInsurance(db: Db, amountUusdc: bigint): Prom
   return db.tx(async (q) => {
     const fees = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
     const ins = await getOrCreateSystemAccount(q, 'INSURANCE_FUND');
-    if ((await getBalance(q, fees)) < amountUusdc) throw new HttpError(400, 'fee revenue balance too low');
+    if ((await getBalanceForUpdate(q, fees)) < amountUusdc) throw new HttpError(400, 'fee revenue balance too low'); // lock: no concurrent over-draw
     await postTxn(q, {
       reason: 'INSURANCE_FROM_FEES',
       entries: [
@@ -39,7 +39,10 @@ export async function deallocateInsuranceToFees(db: Db, amountUusdc: bigint): Pr
   return db.tx(async (q) => {
     const fees = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
     const ins = await getOrCreateSystemAccount(q, 'INSURANCE_FUND');
-    if ((await getBalance(q, ins)) < amountUusdc) throw new HttpError(400, 'insurance fund balance too low');
+    // Canonical lock order — take the FEE_REVENUE row-lock FIRST (matching allocateFeesToInsurance + the gacha
+    // sweep) so these inverse house-account moves can never ABBA-deadlock; then lock + cap-check the source.
+    await getBalanceForUpdate(q, fees);
+    if ((await getBalanceForUpdate(q, ins)) < amountUusdc) throw new HttpError(400, 'insurance fund balance too low');
     await postTxn(q, {
       reason: 'INSURANCE_TO_FEES',
       entries: [
