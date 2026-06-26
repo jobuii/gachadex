@@ -333,6 +333,34 @@ test('sell-back: 95% to the user, 5% to FEE_REVENUE, prize sold once', async () 
   await assert.rejects(sellBack(db, user, prize, { chain, cc, ...noWait }), /already settled/i);
 });
 
+test('gacha affiliate: a referred player\'s sell-back pays the referrer their game-revenue share of the cut', async () => {
+  const affiliate = await newUser();
+  await db.query(`INSERT INTO affiliate_terms(user_id, game_revenue_bps, active) VALUES($1, 2000, true)`, [affiliate]); // 20% of gacha house revenue
+  const player = await newUser();
+  await db.query(`UPDATE users SET referred_by = $2 WHERE id = $1`, [player, affiliate]);
+  const cc = fakeCc();
+  cc.buybackAmount = 100_000_000; // CC buys back $100 → the sell-back cut hits FEE_REVENUE
+  const affBefore = await collOf(affiliate);
+  const r = await openPack(db, player, { machineCode: 'pokemon_50', idempotencyKey: 'refsell' }, { chain: fakeChain(), cc, ...noWait });
+  const prizeId = (await db.query<{ id: string }>(`SELECT id FROM gacha_nft_inventory WHERE open_id=$1`, [r.openId])).rows[0].id;
+  await sellBack(db, player, prizeId, { chain: fakeChain(), cc, ...noWait });
+  const cut = BigInt((await db.query<{ c: string }>(`SELECT sell_cut_e6 AS c FROM gacha_nft_inventory WHERE id=$1`, [prizeId])).rows[0].c);
+  assert.ok(cut > 0n); // GDEX kept a cut
+  assert.equal(await collOf(affiliate) - affBefore, (cut * 2000n) / 10000n); // referrer got 20% of that cut
+});
+
+test('gacha affiliate: a NON-referred player\'s sell-back keeps the full cut in FEE_REVENUE', async () => {
+  const player = await newUser(); // no referrer
+  const cc = fakeCc();
+  cc.buybackAmount = 100_000_000;
+  const feeBefore = await feeRev();
+  const r = await openPack(db, player, { machineCode: 'pokemon_50', idempotencyKey: 'norefsell' }, { chain: fakeChain(), cc, ...noWait });
+  const prizeId = (await db.query<{ id: string }>(`SELECT id FROM gacha_nft_inventory WHERE open_id=$1`, [r.openId])).rows[0].id;
+  await sellBack(db, player, prizeId, { chain: fakeChain(), cc, ...noWait });
+  const cut = BigInt((await db.query<{ c: string }>(`SELECT sell_cut_e6 AS c FROM gacha_nft_inventory WHERE id=$1`, [prizeId])).rows[0].c);
+  assert.equal((await feeRev()) - feeBefore, cut); // full cut stays — no affiliate slice
+});
+
 // A user with a REAL keypair, so the withdraw step-up signature verifies.
 async function newSignerUser(faucetUsd = 10_000): Promise<{ userId: string; kp: InstanceType<typeof Keypair>; pubkey: string }> {
   const kp = Keypair.generate();

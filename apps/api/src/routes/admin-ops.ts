@@ -61,14 +61,14 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   app.post('/admin/affiliates', rl(config.routeRateLimits.admin), async (req) => {
     // setAffiliateTerms validates pubkey + the bps bounds itself, so pass the body straight through.
     const b = (req.body ?? {}) as {
-      pubkey?: string; code?: string; cashbackBps: unknown; feeDiscountBps: unknown; label?: string; active?: boolean;
+      pubkey?: string; code?: string; cashbackBps: unknown; feeDiscountBps: unknown; gameRevenueBps?: unknown; label?: string; active?: boolean;
     };
     return setAffiliateTerms(await getDb(), { ...b, pubkey: b.pubkey ?? '' });
   });
-  // Platform-wide default cashback + fee-discount applied to every referral code that has no active per-wallet
-  // terms. setPlatformAffiliateDefaults validates both bps bounds (incl. the cashback ceiling).
+  // Platform-wide default cashback + fee-discount + game-revenue share applied to every referral code that has no
+  // active per-wallet terms. setPlatformAffiliateDefaults validates all bps bounds (incl. the cashback ceiling).
   app.post('/admin/affiliate-defaults', rl(config.routeRateLimits.admin), async (req) => {
-    const b = (req.body ?? {}) as { cashbackBps: unknown; feeDiscountBps: unknown };
+    const b = (req.body ?? {}) as { cashbackBps: unknown; feeDiscountBps: unknown; gameRevenueBps: unknown };
     return setPlatformAffiliateDefaults(await getDb(), b);
   });
 

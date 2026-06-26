@@ -23,7 +23,8 @@ const { getFeeBps } = await import('./fees.ts');
 const { getBalance, getOrCreateUserAccount, getOrCreateSystemAccount } = await import('./ledger.ts');
 const {
   resolveFeeAffiliate, applyFeeDiscount, maxCashbackBps, setAffiliateTerms, getCashbackTotal, listAffiliates,
-  setPlatformAffiliateDefaults, getPlatformCashbackBps, getPlatformFeeDiscountBps,
+  setPlatformAffiliateDefaults, getPlatformCashbackBps, getPlatformFeeDiscountBps, getPlatformGameRevenueBps,
+  resolveGameRevenueAffiliate, maxGameRevenueBps,
 } = await import('./affiliate.ts');
 
 await initDb();
@@ -60,7 +61,7 @@ async function lastFill(user: string): Promise<{ net: bigint; gross: bigint }> {
 }
 
 // the platform defaults are a process-global knob; reset after every test so a setter can't leak into the next.
-afterEach(() => setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 0 }));
+afterEach(() => setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 0, gameRevenueBps: 0 }));
 
 test('applyFeeDiscount + maxCashbackBps', () => {
   assert.equal(applyFeeDiscount(1000n, 5000), 500n); // 50% off
@@ -181,7 +182,7 @@ test('platform defaults apply to codes without per-wallet terms, and individual 
   assert.equal(r.cashback, null);
 
   // set platform-wide defaults
-  const view = await setPlatformAffiliateDefaults(db, { cashbackBps: 1000, feeDiscountBps: 500 });
+  const view = await setPlatformAffiliateDefaults(db, { cashbackBps: 1000, feeDiscountBps: 500, gameRevenueBps: 0 });
   assert.deepEqual({ c: view.cashbackBps, d: view.feeDiscountBps }, { c: 1000, d: 500 });
   assert.equal(getPlatformCashbackBps(), 1000);
   assert.equal(getPlatformFeeDiscountBps(), 500);
@@ -203,23 +204,23 @@ test('platform defaults apply to codes without per-wallet terms, and individual 
   const refOfAff = await fundedUser(aff.userId);
   assert.deepEqual((await resolveFeeAffiliate(db, refOfAff)).cashback, { userId: aff.userId, bps: 2000 }); // 2000, not 1000
 
-  await setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 0 }); // reset to dormant
+  await setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 0, gameRevenueBps: 0 }); // reset to dormant
   assert.equal(getPlatformCashbackBps(), 0);
 });
 
 test('platform fee discount reduces a normal trader’s own fee end-to-end', async () => {
-  await setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 5000 }); // 50% off for everyone
+  await setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 5000, gameRevenueBps: 0 }); // 50% off for everyone
   await setMark(1000);
   const u = await fundedUser();
   await trade(u);
   const f = await lastFill(u);
   assert.equal(f.net, applyFeeDiscount(f.gross, 5000)); // platform discount applied to a wallet with no terms
   assert.ok(f.net < f.gross);
-  await setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 0 }); // reset
+  await setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 0, gameRevenueBps: 0 }); // reset
 });
 
 test('a deactivated per-wallet term falls back to the platform default (not zero)', async () => {
-  await setPlatformAffiliateDefaults(db, { cashbackBps: 800, feeDiscountBps: 300 });
+  await setPlatformAffiliateDefaults(db, { cashbackBps: 800, feeDiscountBps: 300, gameRevenueBps: 0 });
   // an affiliate the operator deactivated — their custom rates are dormant, so the wallet behaves as a normal
   // one and picks up the platform default (NOT 0, and NOT their own inactive 2500/6000).
   const aff = await setAffiliateTerms(db, { pubkey: 'pf-inact-' + randomUUID().slice(0, 8), cashbackBps: 2500, feeDiscountBps: 6000, active: false });
@@ -229,12 +230,43 @@ test('a deactivated per-wallet term falls back to the platform default (not zero
 });
 
 test('setPlatformAffiliateDefaults validates bounds and never partially applies', async () => {
-  await assert.rejects(() => setPlatformAffiliateDefaults(db, { cashbackBps: 6000, feeDiscountBps: 0 }), /cashbackBps/); // > 5000 ceiling
-  await assert.rejects(() => setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 20000 }), /feeDiscountBps/); // > 10000
-  await assert.rejects(() => setPlatformAffiliateDefaults(db, { cashbackBps: -1, feeDiscountBps: 0 }), /cashbackBps/);
-  // a rejected write leaves BOTH knobs untouched (validated before either is persisted)
+  await assert.rejects(() => setPlatformAffiliateDefaults(db, { cashbackBps: 6000, feeDiscountBps: 0, gameRevenueBps: 0 }), /cashbackBps/); // > 5000 ceiling
+  await assert.rejects(() => setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 20000, gameRevenueBps: 0 }), /feeDiscountBps/); // > 10000
+  await assert.rejects(() => setPlatformAffiliateDefaults(db, { cashbackBps: -1, feeDiscountBps: 0, gameRevenueBps: 0 }), /cashbackBps/);
+  await assert.rejects(() => setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 0, gameRevenueBps: 20000 }), /gameRevenueBps/); // > 10000
+  // a rejected write leaves ALL knobs untouched (validated before any is persisted)
   assert.equal(getPlatformCashbackBps(), 0);
   assert.equal(getPlatformFeeDiscountBps(), 0);
+  assert.equal(getPlatformGameRevenueBps(), 0);
+});
+
+test('resolveGameRevenueAffiliate: referred player → referrer + game_revenue_bps; not referred → null', async () => {
+  const aff = await setAffiliateTerms(db, { pubkey: 'gr-' + randomUUID().slice(0, 8), cashbackBps: 0, feeDiscountBps: 0, gameRevenueBps: 1500 });
+  assert.equal(await resolveGameRevenueAffiliate(db, aff.userId), null); // the affiliate themselves wasn't referred
+  const referee = await fundedUser(aff.userId);
+  assert.deepEqual(await resolveGameRevenueAffiliate(db, referee), { userId: aff.userId, bps: 1500 });
+  assert.equal(await resolveGameRevenueAffiliate(db, await fundedUser()), null); // no referrer → null
+});
+
+test('game-revenue: a per-wallet term (incl. 0) overrides the platform default', async () => {
+  await setPlatformAffiliateDefaults(db, { cashbackBps: 0, feeDiscountBps: 0, gameRevenueBps: 1000 }); // 10% default for every code
+  // a referrer WITHOUT per-wallet terms → the platform default applies
+  const plain = await fundedUser();
+  assert.deepEqual(await resolveGameRevenueAffiliate(db, await fundedUser(plain)), { userId: plain, bps: 1000 });
+  // a referrer WITH an active term whose game rate is 0 → overrides the default to 0 (null)
+  const aff = await setAffiliateTerms(db, { pubkey: 'grd-' + randomUUID().slice(0, 8), cashbackBps: 0, feeDiscountBps: 0, gameRevenueBps: 0 });
+  assert.equal(await resolveGameRevenueAffiliate(db, await fundedUser(aff.userId)), null);
+});
+
+test('setAffiliateTerms stores game_revenue_bps + listAffiliates surfaces it; bounds enforced', async () => {
+  const pubkey = 'grs-' + randomUUID().slice(0, 8);
+  const row = await setAffiliateTerms(db, { pubkey, cashbackBps: 0, feeDiscountBps: 0, gameRevenueBps: 2500 });
+  assert.equal(row.gameRevenueBps, 2500);
+  assert.equal(maxGameRevenueBps(), 10000);
+  const listed = (await listAffiliates(db)).find((a) => a.pubkey === pubkey);
+  assert.equal(listed?.gameRevenueBps, 2500);
+  assert.equal(listed?.gameRevenuePaidUusdc, '0'); // nothing earned yet
+  await assert.rejects(() => setAffiliateTerms(db, { pubkey, cashbackBps: 0, feeDiscountBps: 0, gameRevenueBps: 20000 }), /gameRevenueBps/);
 });
 
 after(async () => {
