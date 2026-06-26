@@ -4,6 +4,7 @@ import { config } from '../config.ts';
 import { HttpError } from '../errors.ts';
 import { usdc } from '../money.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './ledger.ts';
+import { resolveGameRevenueAffiliate } from './affiliate.ts';
 import { getNftCustodyKeypair } from './custody/wallet.ts';
 import { createNftWithdrawNonce, verifyNftWithdrawStepUp } from './auth.ts';
 import { spendGold, earnGold, goldEarnedForOpen, goldPriceForPack, FREE_PACK_GOLD } from './gold.ts';
@@ -111,6 +112,25 @@ async function getOpenRow(db: Db, openId: string): Promise<OpenRow | null> {
   return r.rows[0] ?? null;
 }
 
+/** Pay the referring affiliate their game-revenue share of `revenueE6` (the gacha house revenue — sell-back cut or
+ *  pack markup — GDEX just booked to FEE_REVENUE for this player). Moves bps% from FEE_REVENUE → the affiliate,
+ *  clamped to the revenue so FEE_REVENUE can't underflow. No-op when the player wasn't referred or no rate is set.
+ *  Mirrors the perp cashback (engine.ts) but keyed off gacha revenue + a SEPARATE knob (cashback stays perps-only).
+ *  Call inside the same db.tx that posted the revenue, with `feeAccId` = that FEE_REVENUE account. */
+async function accrueGachaAffiliateShare(q: Queryer, playerUserId: string, feeAccId: string, revenueE6: bigint, refId: string): Promise<void> {
+  if (revenueE6 <= 0n) return;
+  const aff = await resolveGameRevenueAffiliate(q, playerUserId);
+  if (!aff || aff.userId === playerUserId) return;
+  const want = (revenueE6 * BigInt(aff.bps)) / 10000n;
+  const share = want > revenueE6 ? revenueE6 : want; // clamp so FEE_REVENUE never goes negative
+  if (share <= 0n) return;
+  const affColl = await getOrCreateUserAccount(q, aff.userId, 'USER_COLLATERAL');
+  await postTxn(q, {
+    reason: 'GAME_REVENUE_SHARE', refType: 'gacha', refId,
+    entries: [{ accountId: feeAccId, amount: -share }, { accountId: affColl, amount: share }],
+  });
+}
+
 // ─────────────────────────────── open ───────────────────────────────
 export async function openPack(db: Db, userId: string, opts: { machineCode: string; idempotencyKey: string; expectedPriceE6?: string; payWith?: 'usdc' | 'gold'; turbo?: boolean; claim?: boolean }, deps: GachaDeps): Promise<OpenResult> {
   if (!config.classicGachaEnabled) throw GACHA_OFF();
@@ -170,8 +190,10 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
       if (avail < allIn) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
       // user pays allIn; CC's base goes to treasury; any markup is GDEX revenue (entry omitted when markup=0).
       const entries = [{ accountId: coll, amount: -allIn }, { accountId: treasury, amount: price }];
-      if (markup > 0n) entries.push({ accountId: await getOrCreateSystemAccount(q, 'FEE_REVENUE'), amount: markup });
+      const feeAcc = markup > 0n ? await getOrCreateSystemAccount(q, 'FEE_REVENUE') : null;
+      if (feeAcc) entries.push({ accountId: feeAcc, amount: markup });
       await postTxn(q, { reason: 'GACHA_PACK_BUY', refType: 'gacha_open', refId: id, entries });
+      if (feeAcc) await accrueGachaAffiliateShare(q, userId, feeAcc, markup, id); // affiliate share of the pack markup
       // Loyalty earn — only on paid (USDC) opens (spec §6b); floored, derived from the admin threshold knob.
       await earnGold(q, userId, goldEarnedForOpen(price, gachaConfig.freePackThresholdUsd.get()), 'PACK_OPEN_EARN', { refType: 'gacha_open', refId: id });
     }
@@ -259,6 +281,7 @@ async function settleTurboSold(db: Db, openId: string, buybackAmount: number): P
       reason: 'GACHA_TURBO_SELL', refType: 'gacha_open', refId: openId,
       entries: [{ accountId: coll, amount: payout }, { accountId: fee, amount: cut }, { accountId: treasury, amount: -gross }],
     });
+    await accrueGachaAffiliateShare(q, row.user_id, fee, cut, openId); // affiliate share of the turbo sell-back cut
     await q.query(`UPDATE gacha_pack_opens SET status = 'turbo_sold', turbo_refund_e6 = $2, settled_at = now() WHERE id = $1`, [openId, payout.toString()]);
     return { openId, status: 'turbo_sold', verifyUrl: verifyUrlFor(row.cc_memo), card: null, turboRefundE6: payout.toString() };
   });
@@ -487,6 +510,7 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
         { accountId: treasury, amount: -gross }, // liability up by the USDC that landed in the hot wallet
       ],
     });
+    await accrueGachaAffiliateShare(q, userId, fee, cut, prizeId); // affiliate share of the manual sell-back cut
     await q.query(`UPDATE gacha_nft_inventory SET status='sold', sell_value_e6=$2, sell_cut_e6=$3, txn_id=$4, settled_at=now() WHERE id=$1`, [prizeId, payout.toString(), cut.toString(), txnId]);
     return { prizeId, payoutE6: payout.toString(), cutE6: cut.toString() };
   });

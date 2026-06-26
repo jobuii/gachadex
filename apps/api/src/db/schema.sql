@@ -108,6 +108,9 @@ CREATE TABLE IF NOT EXISTS affiliate_terms (
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Third operator knob (added later): % of GACHA house revenue (the sell-back cut + pack markup GDEX keeps) paid
+-- to the player's referrer. Separate from cashback (which stays perps-only). Default 0 = dormant, no behaviour change.
+ALTER TABLE affiliate_terms ADD COLUMN IF NOT EXISTS game_revenue_bps INT NOT NULL DEFAULT 0;
 -- Cashback lookups (an affiliate's lifetime total on the Portfolio card + the admin list) filter
 -- ledger_entries by account + reason; index it so /account/balance never scans a trader's full ledger.
 CREATE INDEX IF NOT EXISTS idx_ledger_account_reason ON ledger_entries(account_id, reason);
