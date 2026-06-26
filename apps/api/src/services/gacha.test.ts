@@ -17,7 +17,7 @@ const { getDb } = await import('../db/client.ts');
 const { migrate } = await import('../db/migrate.ts');
 const { usdc } = await import('../money.ts');
 const { fund, sign } = await import('../test-helpers.ts');
-const { openPack, sellBack, convert, reconcilePending, nftWithdrawNonce, requestNftWithdraw } = await import('./gacha.ts');
+const { openPack, sellBack, convert, reconcilePending, nftWithdrawNonce, requestNftWithdraw, extractCard } = await import('./gacha.ts');
 const { reconcileStuckPrizes } = await import('./gacha-reconcile.ts');
 const { pollMachineStock, recentRestocks } = await import('./gacha-stock.ts');
 const { goldEarnedForOpen, goldPriceForPack, earnGold, getGoldSummary, resetGoldBalances } = await import('./gold.ts');
@@ -91,6 +91,19 @@ const feeRev = async (): Promise<bigint> =>
 
 const noWait = { sleepMs: async () => {} };
 const PRICE = usdc(50);
+
+test('extractCard: grade number falls back to "The Grade" when GradeNum is absent (PSA 10 / CGC 8.5, not bare "PSA")', () => {
+  const reveal = (attrs: Array<{ trait_type: string; value: string }>) =>
+    ({ success: true, nft_address: 'M1', rarity: 'rare', nftWon: { content: { metadata: { name: 'Card', attributes: attrs }, links: { image: 'x' } } } }) as never;
+  // GradeNum present → used directly (unchanged behaviour)
+  assert.equal(extractCard(reveal([{ trait_type: 'Grading Company', value: 'PSA' }, { trait_type: 'GradeNum', value: '10' }])).grade, 'PSA 10');
+  // only 'The Grade' (e.g. CC's "GEM-MT 10") → parse the number → "PSA 10" (was a bare "PSA" before the fix)
+  assert.equal(extractCard(reveal([{ trait_type: 'Grading Company', value: 'PSA' }, { trait_type: 'The Grade', value: 'GEM-MT 10' }])).grade, 'PSA 10');
+  // decimal grade out of 'The Grade'
+  assert.equal(extractCard(reveal([{ trait_type: 'Grading Company', value: 'CGC' }, { trait_type: 'The Grade', value: 'GEM MINT 8.5' }])).grade, 'CGC 8.5');
+  // no grade attributes at all → null (no crash)
+  assert.equal(extractCard(reveal([])).grade, null);
+});
 
 test('open: debits the price, records the held NFT, funds + pays CC', async () => {
   const user = await newUser();

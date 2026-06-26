@@ -91,7 +91,10 @@ export function extractCard(reveal: CcOpenResult): {
   mint: string; name: string | null; grade: string | null; imageUrl: string | null; insuredValueE6: string; year: string | null; setName: string | null; rarity: string | null;
 } {
   const company = attr(reveal, 'Grading Company');
-  const num = attr(reveal, 'GradeNum') ?? attr(reveal, 'Grade');
+  // The grade number is on 'GradeNum' for some cards, but many CC cards only carry 'The Grade' (e.g.
+  // "GEM-MT 10", "GEM MINT 10", "GEM-MT 8.5") — pull the numeric grade out of that as a fallback so we
+  // don't drop it and render a bare "PSA" instead of "PSA 10".
+  const num = attr(reveal, 'GradeNum') ?? attr(reveal, 'Grade') ?? attr(reveal, 'The Grade')?.match(/\d+(\.\d+)?/)?.[0] ?? null;
   const grade = company ? `${company} ${num ?? ''}`.trim() : num;
   const insured = Number(attr(reveal, 'insured value') ?? attr(reveal, 'Insured Value') ?? 0);
   return {
