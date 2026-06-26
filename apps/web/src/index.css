@@ -1545,6 +1545,17 @@ button { border-radius: var(--pill); }
   font-family: var(--font-base); font-size: 0.55rem; padding: 0.55rem; /* base font: typed addresses must render true-case */
 }
 .wallet-input:focus { border-color: var(--gold); outline: none; }
+/* Every input/select/textarea on every admin page inherits the styled look (not raw browser default) — matches
+   .wallet-input + the .admin-panel ops-font override, so a raw <input> anywhere in the panel still looks right. */
+.admin-panel input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]),
+.admin-panel select,
+.admin-panel textarea {
+  background: var(--bg); border: 1px solid var(--border); color: var(--text);
+  font-family: var(--ops-font); font-size: 0.82rem; padding: 0.5rem 0.55rem;
+}
+.admin-panel input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):focus,
+.admin-panel select:focus,
+.admin-panel textarea:focus { border-color: var(--gold); outline: none; }
 .wallet-txs-label { display: block; margin: 1rem 0 0.4rem; }
 .wallet-kind { text-transform: capitalize; }
 
