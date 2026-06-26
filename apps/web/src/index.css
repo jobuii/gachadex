@@ -1903,6 +1903,7 @@ td.addr:hover { text-decoration: underline; }
 /* content — fills the column; prose capped for readability, tables/code go full-bleed */
 .docs-content { min-width: 0; padding: 2.6rem 3.2rem 5rem; }
 .docs-content :is(h1, h2, h3, p, ul, ol, blockquote), .docs-foot { max-width: 82ch; }
+.docs-content img { display: block; max-width: min(100%, 560px); height: auto; margin: 1.2rem 0; border-radius: 12px; border: 1px solid var(--border); }
 .docs-section, .docs-content :is(h1, h2, h3) { scroll-margin-top: 80px; } /* clear the 64px sticky header on anchor jumps */
 
 /* right rail — on this page */

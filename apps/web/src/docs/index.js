@@ -12,6 +12,8 @@ import lp from './lp.md?raw';
 import risk from './risk.md?raw';
 import referral from './referral.md?raw';
 import social from './social.md?raw';
+import games from './games.md?raw';
+import goldRewards from './gold-rewards.md?raw';
 import custody from './custody.md?raw';
 import api from './api.md?raw';
 import faq from './faq.md?raw';
@@ -28,6 +30,8 @@ export const DOC_SECTIONS = [
   { id: 'risk', title: 'Risk', content: risk },
   { id: 'referral', title: 'Referrals & Affiliates', content: referral },
   { id: 'social', title: 'Social: Chat, DROP & Leaderboard', content: social },
+  { id: 'games', title: 'Games', content: games },
+  { id: 'gold-rewards', title: 'Gold Rewards', content: goldRewards },
   { id: 'custody', title: 'Custody & Security', content: custody },
   { id: 'api', title: 'API & CLI', content: api },
   { id: 'faq', title: 'FAQ', content: faq },
