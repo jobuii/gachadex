@@ -188,7 +188,11 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
     // failure (the common case) leaves a no-memo, no-payment row — nothing reached CC. Only after the memo is
     // stored do we move money (fund → sign → submit), and we stamp payment_attempted_at right before submit so
     // a failure up to that point is provably "no money reached CC".
-    const gen = await cc.generatePack({ playerAddress: custodyPubkey, packType: opts.machineCode, turbo });
+    // In turbo, route a Common win's auto-sell USDC to the HOT wallet (altFundsRecipient) — matching
+    // settleTurboSold's TREASURY debit and the manual sell-back's altRecipient. altFundsRecipient is turbo-only
+    // and is IGNORED by CC for non-turbo packs, so this never touches normal mode (and a turbo non-Common card
+    // still lands in the user's custody, where deliverOpen records it).
+    const gen = await cc.generatePack({ playerAddress: custodyPubkey, packType: opts.machineCode, turbo, ...(turbo ? { altFundsRecipient: chain.hotPubkey() } : {}) });
     await db.query(`UPDATE gacha_pack_opens SET cc_memo = $2 WHERE id = $1`, [openId, gen.memo]);
     await chain.fundCustody(custodyPubkey, price);
     const signed = chain.signTx(gen.transaction, custody);
@@ -216,17 +220,20 @@ async function deliverOpen(db: Db, openId: string, deps: GachaDeps): Promise<Ope
   if (!row.cc_memo) return rowToResult(row); // no memo → reconciler handles
   for (let attempt = 0; attempt < MAX_REVEAL_ATTEMPTS; attempt++) {
     const reveal = await cc.openPackReveal(row.cc_memo);
-    if (reveal.nft_address) return await recordReveal(db, openId, reveal);
+    // TURBO Common auto-sell — checked BEFORE nft_address ON PURPOSE: CC's TURBO_MODE_BUYBACK response also
+    // carries nft_address (+ transactionSignature, per the gacha API docs), so an nft_address-first check would
+    // mis-record an auto-sold Common as a delivered slab and never credit the buyback. Credit the buyback minus
+    // the turbo cut → turbo_sold. (Normal mode + a turbo NON-Common never carry buybackAmount, so they fall
+    // through to the delivery branch — this reorder cannot change their behaviour.)
+    if ((reveal.code === 'TURBO_MODE_BUYBACK' || reveal.buybackAmount != null) && Number(reveal.buybackAmount) > 0) {
+      return await settleTurboSold(db, openId, reveal.buybackAmount as number);
+    }
+    if (reveal.nft_address) return await recordReveal(db, openId, reveal); // delivered slab (normal mode + turbo non-Common)
     if (reveal.code === 'WAITING_FOR_WEBHOOK') {
       if (attempt < MAX_REVEAL_ATTEMPTS - 1) { await sleepFn(REVEAL_RETRY_MS); continue; }
       break; // still waiting after retries → leave 'paid' for the reconciler
     }
-    // No NFT, not waiting → CC auto-sold a Common (YOLO/turbo): code=TURBO_MODE_BUYBACK with a buybackAmount.
-    // Credit the buyback minus the turbo cut → turbo_sold. A buyback signal with no usable amount can't be
-    // settled, so refund rather than strand.
-    if ((reveal.code === 'TURBO_MODE_BUYBACK' || reveal.buybackAmount != null) && Number(reveal.buybackAmount) > 0) {
-      return await settleTurboSold(db, openId, reveal.buybackAmount as number);
-    }
+    // No NFT, not waiting, no usable buyback signal → can't settle; refund rather than strand.
     console.error('[gacha] non-deliverable reveal — refunding open', openId, { code: reveal.code ?? null, buybackAmount: reveal.buybackAmount ?? null });
     return await settleRefund(db, openId, 'failed');
   }
@@ -235,7 +242,8 @@ async function deliverOpen(db: Db, openId: string, deps: GachaDeps): Promise<Ope
 
 /** YOLO/turbo: CC auto-sold the Common for `buybackAmount` (base units == micro-USDC). Credit the user the
  *  payout (minus the turbo cut), book the cut to FEE_REVENUE, debit TREASURY; status → turbo_sold. No NFT,
- *  idempotent from 'paid'. (The on-chain buyback USDC lands in the custody wallet — operator sweep, like sell-back.) */
+ *  idempotent from 'paid'. (The auto-sell USDC lands in the HOT wallet via the altFundsRecipient passed at
+ *  generatePack — same as the manual sell-back's altRecipient — so the TREASURY debit is backed.) */
 async function settleTurboSold(db: Db, openId: string, buybackAmount: number): Promise<OpenResult> {
   const gross = BigInt(Math.trunc(buybackAmount));
   return await db.tx(async (q) => {

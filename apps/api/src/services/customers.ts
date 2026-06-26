@@ -1,5 +1,6 @@
 import type { Db } from '../db/client.ts';
 import { getPool, lpShareValue } from './lp.ts';
+import { deriveNftCustodyKeypair } from './custody/wallet.ts';
 
 /**
  * Operator view of individual customers (admin dashboard "Customers" tab). One row per user, joining
@@ -13,6 +14,7 @@ export interface CustomerRow {
   status: string;
   joinedAt: string;
   depositAddress: string | null;
+  nftCustodyAddress: string | null; // per-user Classic-Gacha NFT custody wallet (derived; holds CC NFTs + buyback USDC)
   freeE6: string; // available collateral (USER_COLLATERAL)
   lpE6: string; // current value of their LP-pool stake (shares marked to pool NAV)
   lockedE6: string; // margin locked in open positions (USER_POSITION_MARGIN)
@@ -40,6 +42,14 @@ const SORT_EXPR: Record<string, string> = {
   joined: 'u.created_at',
 };
 
+// The per-user NFT-custody wallet is DERIVED from the deposit derivation index (custody/wallet.ts), so it
+// shows for every user without a schema change. Guard the derivation: without a master seed (dev) it throws,
+// and we'd rather show "—" than fail the whole customers screen.
+function nftCustodyAddr(index: number | null): string | null {
+  if (index == null) return null;
+  try { return deriveNftCustodyKeypair(index).publicKey.toBase58(); } catch { return null; }
+}
+
 export async function listCustomers(
   db: Db,
   opts: { limit: number; offset: number; sort: string },
@@ -53,6 +63,7 @@ export async function listCustomers(
     status: string;
     joined_at: string;
     deposit_address: string | null;
+    derivation_index: number | null;
     free_e6: string;
     lp_shares: string;
     locked_e6: string;
@@ -116,6 +127,7 @@ export async function listCustomers(
      SELECT u.id, u.solana_pubkey, u.display_name, u.status,
             u.created_at::text AS joined_at,
             da.address AS deposit_address,
+            da.derivation_index,
             COALESCE(coll.amount_uusdc, 0)::text AS free_e6,
             COALESCE(lp.shares, 0)::text AS lp_shares,
             COALESCE(marg.amount_uusdc, 0)::text AS locked_e6,
@@ -159,6 +171,7 @@ export async function listCustomers(
       status: x.status,
       joinedAt: x.joined_at,
       depositAddress: x.deposit_address,
+      nftCustodyAddress: nftCustodyAddr(x.derivation_index),
       freeE6: x.free_e6,
       lpE6: lpShareValue(BigInt(x.lp_shares), lpNav, lpTotalShares).toString(),
       lockedE6: x.locked_e6,
