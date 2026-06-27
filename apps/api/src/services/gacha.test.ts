@@ -605,6 +605,22 @@ test('monitoring: a sell-back grows the cut revenue + the sell-back rate', async
   assert.ok(m.sellBackRatePct > 0);
 });
 
+test('monitoring: a CAPITALIZED DB rarity is lowercased so the web tiers match (no real pull reads 0%)', async () => {
+  const user = await newUser();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'rmix' }, { chain: fakeChain(), cc: fakeCc(), ...noWait });
+  // production CC stores capitalized tiers ('Epic'); force one here so this guards the casing fix on its OWN
+  // fixture, independent of test ordering (the fake reveal happens to write lowercase).
+  await db.query(`UPDATE gacha_pack_opens SET rarity = 'Epic' WHERE user_id = $1 AND idempotency_key = 'rmix'`, [user]);
+  const m = await gachaMonitoring(db);
+  // every key must be lowercase to match the web's RARITY_TIERS (pre-fix the 'Epic' row keys as 'Epic' → fails)
+  const keys = Object.keys(m.rarity);
+  assert.ok(keys.length > 0 && keys.every((k) => k === k.toLowerCase()), `rarity keys must be lowercase, got: ${keys.join(', ')}`);
+  // and that capitalized Epic pull is counted on the lowercase 'epic' tier (would read 0% pre-fix)
+  assert.ok((m.rarity.epic ?? 0) >= 1, 'the capitalized Epic open is counted under the lowercase epic tier');
+  // per-machine keys are lowercase too
+  for (const mc of m.machines) for (const k of Object.keys(mc.rarity)) assert.equal(k, k.toLowerCase(), `machine ${mc.code} rarity key "${k}" must be lowercase`);
+});
+
 test('monitoring: reports packs opened, the rarity mix, volume + per-machine stats', async () => {
   const user = await newUser();
   const cc = fakeCc();
