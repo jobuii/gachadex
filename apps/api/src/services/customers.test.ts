@@ -124,16 +124,20 @@ test("listCustomers surfaces each customer's LP-pool stake (lpE6), matching the 
   assert.equal(BigInt(row.freeE6), 10_000_000_000n - 300_000_000n, 'free collateral dropped by the LP deposit');
 });
 
-test('listCustomers surfaces lifetime Gold earned (sum of positive ledger deltas only)', async () => {
+test('listCustomers surfaces NET Gold earned (PACK_OPEN_EARN minus reversals; spends excluded)', async () => {
   const userId = await newUser('wallet-pk-gold', 'deposit-addr-gold', 9);
   await earnGold(db, userId, 25_000n, 'PACK_OPEN_EARN');
   await earnGold(db, userId, 5_000n, 'PACK_OPEN_EARN');
-  // a later spend (negative delta) must NOT reduce "earned"
-  await db.query(`INSERT INTO gold_ledger(id, user_id, delta, reason) VALUES($1,$2,$3,'SPEND')`, [randomUUID(), userId, '-1000']);
+  // a refunded open reverses its earn → REDUCES "earned"
+  await db.query(`INSERT INTO gold_ledger(id, user_id, delta, reason) VALUES($1,$2,$3,'PACK_OPEN_EARN_REVERSAL')`, [randomUUID(), userId, '-5000']);
+  // a pay-with-Gold spend (negative) must NOT reduce "earned"
+  await db.query(`INSERT INTO gold_ledger(id, user_id, delta, reason) VALUES($1,$2,$3,'PACK_BUY_GOLD')`, [randomUUID(), userId, '-1000']);
+  // a spend-refund is POSITIVE but is NOT an open-earn → must also be excluded (this is what the old delta>0 filter got wrong)
+  await db.query(`INSERT INTO gold_ledger(id, user_id, delta, reason) VALUES($1,$2,$3,'PACK_REFUND_GOLD')`, [randomUUID(), userId, '1000']);
 
   const { customers } = await listCustomers(db, { limit: 200, offset: 0, sort: 'joined' });
   const row = customers.find((c) => c.userId === userId)!;
-  assert.equal(row.goldEarned, '30000', 'sum of the two positive earns (25000 + 5000); the spend is excluded');
+  assert.equal(row.goldEarned, '25000', '30000 earned − 5000 reversal = 25000; the −1000 spend AND the +1000 spend-refund are both excluded');
 
   // a customer who never touched gacha shows 0, not null
   const noGold = customers.find((c) => c.pubkey === 'wallet-pk-1')!;
