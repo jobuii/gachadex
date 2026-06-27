@@ -162,6 +162,31 @@ function startGachaStockLoop(db: Db, log: FastifyBaseLogger) {
   setInterval(() => void run(), config.gachaStockPollMs);
 }
 
+/** Unattended backstop for stranded pack-opens: a hard crash between fund-custody and the CC submit leaves a buy
+ *  charged-but-undelivered (and its JIT funding parked in the custody wallet). On-demand reconcilePending only
+ *  fires when THAT user reloads the lobby; this refunds/recovers EVERYONE's aged stuck opens. Lease-guarded so one
+ *  instance runs per tick; reconcileOne is status-guarded + idempotent so it's safe regardless. */
+function startGachaOpenReconcileLoop(db: Db, log: FastifyBaseLogger) {
+  const run = async () => {
+    if (!(await tryAcquireLease(db, 'gacha-open-reconcile', INSTANCE_ID, 110_000))) return;
+    try {
+      const [g, ch, cc] = await Promise.all([
+        import('./services/gacha.ts'),
+        import('./services/custody/gacha-chain.ts'),
+        import('./services/providers/collectorcrypt.ts'),
+      ]);
+      const r = await g.reconcileAllPending(db, { chain: ch.solanaGachaChain(), cc: cc.defaultCcClient });
+      if (r.recovered) log.info(r, 'gacha stuck-open reconcile: refunded/recovered');
+    } catch (e) {
+      log.warn(e, 'gacha stuck-open reconcile failed');
+    } finally {
+      await releaseLease(db, 'gacha-open-reconcile', INSTANCE_ID).catch(() => {});
+    }
+  };
+  setTimeout(() => void run(), 8_000); // once shortly after boot
+  setInterval(() => void run(), 120_000); // then every 2 min
+}
+
 /** Self-chained worker loop: the next pass is scheduled only after the current one finishes, so
  *  slow RPC passes can never overlap/stack the way a setInterval-driven loop would. */
 function chainLoop(run: () => Promise<void>, firstDelayMs: number, intervalMs: number) {
@@ -290,6 +315,7 @@ async function main() {
     startLiquidationLoop(db, app.log);
     startGamesSettleLoop(db, app.log);
     if (config.classicGachaEnabled) startGachaStockLoop(db, app.log);
+    if (config.classicGachaEnabled) startGachaOpenReconcileLoop(db, app.log);
     startRestingOrderLoop(db, app.log); // dark unless RESTING_ORDERS_ENABLED=true
     // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
     // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.

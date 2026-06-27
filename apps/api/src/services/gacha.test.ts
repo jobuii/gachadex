@@ -17,7 +17,7 @@ const { getDb } = await import('../db/client.ts');
 const { migrate } = await import('../db/migrate.ts');
 const { usdc } = await import('../money.ts');
 const { fund, sign } = await import('../test-helpers.ts');
-const { openPack, sellBack, convert, reconcilePending, nftWithdrawNonce, requestNftWithdraw, extractCard, listInventory, remediateMisrecordedTurboCommon } = await import('./gacha.ts');
+const { openPack, sellBack, convert, reconcilePending, reconcileAllPending, nftWithdrawNonce, requestNftWithdraw, extractCard, listInventory, remediateMisrecordedTurboCommon } = await import('./gacha.ts');
 const { reconcileStuckPrizes } = await import('./gacha-reconcile.ts');
 const { pollMachineStock, recentRestocks } = await import('./gacha-stock.ts');
 const { goldEarnedForOpen, goldPriceForPack, earnGold, getGoldSummary, resetGoldBalances } = await import('./gold.ts');
@@ -834,4 +834,32 @@ test('reconcile-stuck: selling + NFT gone + CC confirmed buyback → AUTO-SETTLE
   const feeDelta = (await feeRev()) - feeBefore;
   assert.ok(collDelta > 0n, 'seller credited the payout');
   assert.equal(collDelta + feeDelta, GROSS); // the full gross splits: payout → user, cut → FEE_REVENUE
+});
+
+// ── reconcileAllPending: unattended boot/timer backstop for stranded 'paid' opens (the prevention) ──
+test('reconcileAllPending: an aged stuck "paid" open (crashed before CC) is auto-refunded for ANY user', async () => {
+  const user = await newUser();
+  const before = await collOf(user);
+  const id = randomUUID();
+  await db.query(
+    `INSERT INTO gacha_pack_opens(id, user_id, idempotency_key, machine_code, price_e6, custody_pubkey, paid_with, turbo, status, created_at)
+     VALUES($1,$2,$3,'pokemon_50',$4,'CUST-X','usdc',false,'paid', now() - interval '10 minutes')`,
+    [id, user, 'stuck-' + id, PRICE.toString()],
+  );
+  const r = await reconcileAllPending(db, { chain: fakeChain(), cc: fakeCc() });
+  assert.ok(r.recovered >= 1);
+  assert.equal((await db.query<{ s: string }>(`SELECT status s FROM gacha_pack_opens WHERE id=$1`, [id])).rows[0].s, 'failed');
+  assert.equal(await collOf(user), before + PRICE); // the customer's money is returned
+});
+
+test('reconcileAllPending: a FRESH paid open (inside the grace) is never touched', async () => {
+  const user = await newUser();
+  const id = randomUUID();
+  await db.query(
+    `INSERT INTO gacha_pack_opens(id, user_id, idempotency_key, machine_code, price_e6, custody_pubkey, paid_with, turbo, status)
+     VALUES($1,$2,$3,'pokemon_50',$4,'CUST-X','usdc',false,'paid')`,
+    [id, user, 'fresh-' + id, PRICE.toString()],
+  );
+  await reconcileAllPending(db, { chain: fakeChain(), cc: fakeCc() });
+  assert.equal((await db.query<{ s: string }>(`SELECT status s FROM gacha_pack_opens WHERE id=$1`, [id])).rows[0].s, 'paid'); // within grace → untouched
 });

@@ -427,6 +427,28 @@ export async function reconcilePending(db: Db, userId: string, deps: GachaDeps):
   return { recovered };
 }
 
+/**
+ * Unattended backstop sweep: reconcile EVERY user's stranded 'paid' opens, not just the caller's. A hard crash
+ * between fund-custody and the CC submit leaves a buy charged-but-undelivered AND the JIT funding parked in the
+ * custody wallet; reconcileOne refunds an aged open that never reached CC (or delivers/refunds one that did).
+ * Without this, such an open only healed when THAT specific user happened to reload the lobby (reconcilePending).
+ * Only opens older than the grace are touched (a live in-flight open is never raced); status-guarded + idempotent
+ * → safe on boot, on a timer, and on any number of instances. Returns counts for the boot/loop log.
+ */
+export async function reconcileAllPending(db: Db, deps: GachaDeps, opts: { limit?: number } = {}): Promise<{ scanned: number; recovered: number }> {
+  const cutoff = new Date((deps.now ?? Date.now)() - RECONCILE_GRACE_MS).toISOString();
+  const rows = (await db.query<{ id: string }>(
+    `SELECT id FROM gacha_pack_opens WHERE status = 'paid' AND created_at < $1 ORDER BY created_at ASC LIMIT $2`,
+    [cutoff, opts.limit ?? 200],
+  )).rows;
+  let recovered = 0;
+  for (const r of rows) {
+    const res = await reconcileOne(db, r.id, deps).catch(() => null);
+    if (res && res.status !== 'paid') recovered++;
+  }
+  return { scanned: rows.length, recovered };
+}
+
 /** Poll a single open (the web polls this until the reveal lands). */
 export async function getOpen(db: Db, userId: string, openId: string): Promise<OpenResult> {
   const row = await getOpenRow(db, openId);
