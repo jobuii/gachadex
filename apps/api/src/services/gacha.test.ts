@@ -17,7 +17,8 @@ const { getDb } = await import('../db/client.ts');
 const { migrate } = await import('../db/migrate.ts');
 const { usdc } = await import('../money.ts');
 const { fund, sign } = await import('../test-helpers.ts');
-const { openPack, sellBack, convert, reconcilePending, reconcileAllPending, nftWithdrawNonce, requestNftWithdraw, extractCard, listInventory, remediateMisrecordedTurboCommon } = await import('./gacha.ts');
+const { openPack, sellBack, convert, reconcilePending, reconcileAllPending, scanCustodyLeftovers, autoSweepCustodyLeftovers, nftWithdrawNonce, requestNftWithdraw, extractCard, listInventory, remediateMisrecordedTurboCommon } = await import('./gacha.ts');
+const { config } = await import('../config.ts');
 const { reconcileStuckPrizes } = await import('./gacha-reconcile.ts');
 const { pollMachineStock, recentRestocks } = await import('./gacha-stock.ts');
 const { goldEarnedForOpen, goldPriceForPack, earnGold, getGoldSummary, resetGoldBalances } = await import('./gold.ts');
@@ -43,6 +44,10 @@ function fakeChain() {
     hotPubkey() { return 'Hot1111111111111111111111111111111111111111'; },
     transfers: [] as { mint: string; dest: string }[],
     async transferNft(mint: string, dest: string, _signer: unknown) { c.transfers.push({ mint, dest }); return { sig: `nft-xfer-${c.transfers.length}` }; },
+    custodyBalances: {} as Record<string, bigint>, // tests set this to simulate on-chain custody USDC
+    async custodyUsdcBalances(pubkeys: string[]) { const o: Record<string, bigint> = {}; for (const pk of pubkeys) o[pk] = c.custodyBalances[pk] ?? 0n; return o; },
+    sweeps: [] as { custody: string; amountE6: bigint }[],
+    async sweepCustodyUsdc(custody: Keypair, amountE6: bigint) { c.sweeps.push({ custody: custody.publicKey.toBase58(), amountE6 }); return { sig: `sweep-${c.sweeps.length}` }; },
   };
   return c;
 }
@@ -862,4 +867,44 @@ test('reconcileAllPending: a FRESH paid open (inside the grace) is never touched
   );
   await reconcileAllPending(db, { chain: fakeChain(), cc: fakeCc() });
   assert.equal((await db.query<{ s: string }>(`SELECT status s FROM gacha_pack_opens WHERE id=$1`, [id])).rows[0].s, 'paid'); // within grace → untouched
+});
+
+// ── custody-leftover scan + auto-sweep (the failure path self-heals on-chain; flag-gated) ──
+test('scanCustodyLeftovers: includes a RESOLVED user with custody USDC, excludes one with an unresolved open', async () => {
+  const a = await newUser(); const b = await newUser();
+  const cc = fakeCc(); const chain = fakeChain();
+  await openPack(db, a, { machineCode: 'pokemon_50', idempotencyKey: 'scan-a' }, { chain, cc, ...noWait }); // delivers → 'opened' (resolved)
+  const custA = (await db.query<{ p: string }>(`SELECT custody_pubkey p FROM gacha_pack_opens WHERE user_id=$1 LIMIT 1`, [a])).rows[0].p;
+  chain.custodyBalances[custA] = 50_000_000n; // $50 stranded
+  const bid = randomUUID(); // B has an UNRESOLVED 'paid' open → must be excluded (could be live)
+  await db.query(`INSERT INTO gacha_pack_opens(id,user_id,idempotency_key,machine_code,price_e6,custody_pubkey,paid_with,turbo,status) VALUES($1,$2,$3,'pokemon_50',$4,'CUST-B','usdc',false,'paid')`, [bid, b, 'scan-b-' + bid, PRICE.toString()]);
+  chain.custodyBalances['CUST-B'] = 50_000_000n;
+  const { custodies } = await scanCustodyLeftovers(db, { chain, cc, ...noWait });
+  const pks = custodies.map((c) => c.custodyPubkey);
+  assert.ok(pks.includes(custA), 'resolved user with leftover is included');
+  assert.ok(!pks.includes('CUST-B'), 'user with an unresolved open is excluded');
+});
+
+test('autoSweepCustodyLeftovers: OFF by default (no-op); ON sweeps the leftover to hot', async () => {
+  const user = await newUser();
+  const cc = fakeCc(); const chain = fakeChain();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'sweep-1' }, { chain, cc, ...noWait });
+  const cust = (await db.query<{ p: string }>(`SELECT custody_pubkey p FROM gacha_pack_opens WHERE user_id=$1 LIMIT 1`, [user])).rows[0].p;
+  chain.custodyBalances[cust] = 50_000_000n;
+  // flag OFF (default) → no-op, nothing swept
+  assert.equal(config.gachaAutoSweepEnabled, false);
+  assert.equal((await autoSweepCustodyLeftovers(db, { chain, cc, ...noWait })).swept, 0);
+  assert.equal(chain.sweeps.length, 0);
+  // flag ON → sweeps the $50 custody → hot
+  config.gachaAutoSweepEnabled = true;
+  try {
+    const r = await autoSweepCustodyLeftovers(db, { chain, cc, ...noWait });
+    assert.equal(r.swept, 1);
+    assert.equal(r.sweptE6, '50000000');
+    assert.equal(chain.sweeps.length, 1);
+    assert.equal(chain.sweeps[0].custody, cust);
+    assert.equal(chain.sweeps[0].amountE6, 50_000_000n);
+  } finally {
+    config.gachaAutoSweepEnabled = false;
+  }
 });

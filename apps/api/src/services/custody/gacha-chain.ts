@@ -36,6 +36,12 @@ export interface GachaChain {
    *  instruction → submit with the hot wallet as fee-payer (gas relay) + the custody keypair (signer) as the
    *  current owner/authority. Awaits confirmation. */
   transferNft(mint: string, dest: string, signer: Keypair): Promise<{ sig: string }>;
+  /** Batched USDC balance read for many custody wallets (one getMultipleAccounts per 100) — base units, 0 when
+   *  the ATA doesn't exist. Detects stranded JIT-funding a crashed open left parked in a custody. */
+  custodyUsdcBalances(custodyPubkeys: string[]): Promise<Record<string, bigint>>;
+  /** Sweep `amountE6` USDC out of a custody wallet back to the hot wallet (recover a stranded funding). The
+   *  custody signs as ATA authority; hot is fee-payer (custody needs no SOL). Awaits confirmation; returns sig. */
+  sweepCustodyUsdc(custody: Keypair, amountE6: bigint): Promise<{ sig: string }>;
 }
 
 // Optional SOL top-up to the custody wallet alongside the pack-price USDC. DEFAULT 0: verified on mainnet that
@@ -122,6 +128,37 @@ export function solanaGachaChain(): GachaChain {
       const bh = await conn.getLatestBlockhash('confirmed');
       tx.recentBlockhash = bh.blockhash;
       tx.sign(hot, signer); // hot = fee payer; signer = the asset's owner/authority
+      const sig = await conn.sendRawTransaction(tx.serialize());
+      await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+      return { sig };
+    },
+
+    async custodyUsdcBalances(custodyPubkeys) {
+      const out: Record<string, bigint> = {};
+      for (let i = 0; i < custodyPubkeys.length; i += 100) {
+        const chunk = custodyPubkeys.slice(i, i + 100);
+        const atas = chunk.map((pk) => getAssociatedTokenAddressSync(usdcMint, new PublicKey(pk)));
+        const infos = await conn.getMultipleAccountsInfo(atas);
+        infos.forEach((info, j) => {
+          // SPL token-account layout: mint(32) + owner(32) + amount(u64 LE @ byte 64). A missing ATA → 0.
+          out[chunk[j]] = info && info.data.length >= 72 ? info.data.readBigUInt64LE(64) : 0n;
+        });
+      }
+      return out;
+    },
+
+    async sweepCustodyUsdc(custody, amountE6) {
+      const hot = hotWallet();
+      const custodyAta = getAssociatedTokenAddressSync(usdcMint, custody.publicKey);
+      const hotAta = getAssociatedTokenAddressSync(usdcMint, hot.publicKey);
+      const tx = new Transaction().add(
+        createAssociatedTokenAccountIdempotentInstruction(hot.publicKey, hotAta, hot.publicKey, usdcMint), // no-op if hot ATA exists
+        createTransferInstruction(custodyAta, hotAta, custody.publicKey, amountE6),
+      );
+      tx.feePayer = hot.publicKey;
+      const bh = await conn.getLatestBlockhash('confirmed');
+      tx.recentBlockhash = bh.blockhash;
+      tx.sign(hot, custody); // hot = fee-payer; custody = ATA authority
       const sig = await conn.sendRawTransaction(tx.serialize());
       await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
       return { sig };

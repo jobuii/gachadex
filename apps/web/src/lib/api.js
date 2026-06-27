@@ -294,6 +294,7 @@ export const adminGetGachaConfig = (adminKey, force = false) => adminGet(`/admin
 export const adminSetGachaConfig = (body, adminKey) => adminReq('/admin/gacha/config', adminKey, body);
 export const adminGetGachaMonitoring = (adminKey) => adminGet('/admin/gacha/monitoring', adminKey);
 export const adminReconcileStuckGacha = (adminKey) => adminReq('/admin/gacha/reconcile-stuck', adminKey, {}); // recover crash-stranded selling/withdrawing rows
+export const adminScanGachaCustodyLeftovers = (adminKey) => adminGet('/admin/gacha/custody-leftovers', adminKey); // on-chain scan for stranded USDC in custody wallets
 export const adminFundGachaRewardsBudget = (amountUsd, adminKey) => adminReq('/admin/gacha/fund-rewards-budget', adminKey, { amountUsd }); // sweep FEE_REVENUE → rewards budget
 export const adminResetGold = (adminKey) => adminReq('/admin/gacha/reset-gold', adminKey, {}); // zero every customer's Gold balance (destructive)
 // Treasury + insurance. /admin/treasury (full PoR view incl. insurance + allocatable surplus) is

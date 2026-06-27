@@ -30,6 +30,7 @@ export interface GachaMonitoring {
   biggestPullE6: string; players: number; withdraws: number;
   rarity: RarityCounts; rarity24h: RarityCounts;
   stuckSelling: number; stuckWithdrawing: number; // in-flight rows a crash could strand → the reconciler clears these
+  stuckPaidOpens: number; stuckPaidE6: string; oldestStuckPaidMins: number; // aged 'paid' opens (charged, undelivered) the auto-reconciler should refund — non-zero = investigate
   // per machine
   machines: GachaMachineStats[];
 }
@@ -72,7 +73,7 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
     // Inventory by status → sell-back rate (sold) + the withdraw count.
     db.query<{ status: string; n: string }>(`SELECT status, COUNT(*)::text AS n FROM gacha_nft_inventory GROUP BY status`),
     // Overall activity (one pass over the opens).
-    db.query<{ opened: string; opened_24h: string; turbo_sold: string; volume_usdc: string; gold_packs: string; prize_value: string; biggest: string; players: string }>(
+    db.query<{ opened: string; opened_24h: string; turbo_sold: string; volume_usdc: string; gold_packs: string; prize_value: string; biggest: string; players: string; stuck_paid: string; stuck_paid_e6: string; oldest_stuck_paid_mins: string }>(
       `SELECT
          COUNT(*) FILTER (WHERE ${OPENED})::text AS opened,
          COUNT(*) FILTER (WHERE ${OPENED} AND created_at >= now() - interval '24 hours')::text AS opened_24h,
@@ -81,7 +82,10 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
          COUNT(*) FILTER (WHERE ${OPENED} AND paid_with = 'gold')::text AS gold_packs,
          COALESCE(SUM(insured_value_e6) FILTER (WHERE ${OPENED}), 0)::text AS prize_value,
          COALESCE(MAX(insured_value_e6) FILTER (WHERE ${OPENED}), 0)::text AS biggest,
-         COUNT(DISTINCT user_id) FILTER (WHERE ${OPENED})::text AS players
+         COUNT(DISTINCT user_id) FILTER (WHERE ${OPENED})::text AS players,
+         COUNT(*) FILTER (WHERE status = 'paid' AND created_at < now() - interval '90 seconds')::text AS stuck_paid,
+         COALESCE(SUM(price_e6) FILTER (WHERE status = 'paid' AND created_at < now() - interval '90 seconds'), 0)::text AS stuck_paid_e6,
+         COALESCE(ROUND(EXTRACT(EPOCH FROM (now() - MIN(created_at) FILTER (WHERE status = 'paid' AND created_at < now() - interval '90 seconds'))) / 60), 0)::text AS oldest_stuck_paid_mins
        FROM gacha_pack_opens`,
     ),
     // Per machine × rarity, all-time + last-24h counts + prize value (turbo auto-sells count as common).
@@ -184,6 +188,9 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
     rarity24h: rarity24hAll,
     stuckSelling,
     stuckWithdrawing,
+    stuckPaidOpens: num(a0?.stuck_paid),
+    stuckPaidE6: intStr(a0?.stuck_paid_e6).toString(),
+    oldestStuckPaidMins: num(a0?.oldest_stuck_paid_mins),
     machines,
   };
 }

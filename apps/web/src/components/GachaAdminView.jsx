@@ -42,6 +42,7 @@ export function GachaAdminView({ adminKey }) {
   const [refreshSecs, setRefreshSecs] = useState(''); // the global refresh-interval input (seconds)
   const refreshFocusedRef = useRef(false); // while the admin is editing the interval, don't let a poll overwrite it
   const [fundAmt, setFundAmt] = useState(''); // USD to sweep FEE_REVENUE → rewards budget
+  const [leftovers, setLeftovers] = useState(null); // on-demand custody-leftover scan result
 
   const load = useCallback((force = false) => {
     return Promise.all([api.adminGetGachaConfig(adminKey, force), api.adminGetGachaMonitoring(adminKey)])
@@ -129,7 +130,13 @@ export function GachaAdminView({ adminKey }) {
 
   const reconcileStuck = () => act(async () => {
     const r = await api.adminReconcileStuckGacha(adminKey);
-    setMsg(`Reconciled — ${r.revertedToHeld} released to held · ${r.markedWithdrawn} marked withdrawn · ${r.flaggedSelling} flagged for manual credit · ${r.skipped} skipped (DAS).`);
+    setMsg(`Reconciled — ${r.revertedToHeld} released to held · ${r.markedWithdrawn} marked withdrawn · ${r.settledSelling ?? 0} auto-settled · ${r.flaggedSelling} flagged for manual credit · ${r.skipped} skipped (DAS).`);
+  });
+
+  const scanCustodies = () => act(async () => {
+    const r = await api.adminScanGachaCustodyLeftovers(adminKey);
+    setLeftovers(r);
+    setMsg(`Custody scan — ${formatUsd(BigInt(r.totalE6))} stranded across ${r.custodies.length} wallet(s).`);
   });
 
   if (!cfg) return <p className="ref-blurb">{err || 'Loading gacha config…'}</p>;
@@ -172,12 +179,19 @@ export function GachaAdminView({ adminKey }) {
             <div className="stat-card"><span className="sc-label">Realized odds — all-time (24h)</span><span className="sc-val" style={{ fontSize: '0.78rem' }}>{oddsStr(mon.rarity, mon.packsOpened)} <span className="muted">({oddsStr(mon.rarity24h, mon.packsOpened24h)})</span></span></div>
           </div>
 
-          <h4 style={{ margin: '1.2rem 0 0.4rem' }}>Stuck rows</h4>
+          <h4 style={{ margin: '1.2rem 0 0.4rem' }}>Stuck rows &amp; stranded funds</h4>
           <div className="admin-stats">
             <div className="stat-card"><span className="sc-label">Selling / withdrawing</span><span className={`sc-val ${(mon.stuckSelling + mon.stuckWithdrawing) > 0 ? 'down' : ''}`}>{mon.stuckSelling} / {mon.stuckWithdrawing}</span></div>
+            <div className="stat-card"><span className="sc-label">Paid but undelivered</span><span className={`sc-val ${mon.stuckPaidOpens > 0 ? 'down' : ''}`}>{mon.stuckPaidOpens}{mon.stuckPaidOpens > 0 ? ` · ${formatUsd(BigInt(mon.stuckPaidE6))} · ${mon.oldestStuckPaidMins}m old` : ''}</span></div>
             <div className="stat-card" style={{ alignItems: 'flex-start', justifyContent: 'center' }}><button className="btn-ghost" disabled={busy} onClick={reconcileStuck}>Reconcile stuck rows</button></div>
           </div>
-          <p className="muted" style={{ fontSize: '0.76rem' }}>A crash mid sell-back/withdraw can strand a row. This checks each NFT’s on-chain owner: still in custody → released to “held”; gone for a withdraw → marked withdrawn; sold-but-unsettled → flagged in the logs for a manual credit. Also runs on boot.</p>
+          <p className="muted" style={{ fontSize: '0.76rem' }}>A crash mid sell-back/withdraw can strand a row; “paid but undelivered” = a buy charged before the NFT arrived. The reconciler (on boot + every 2 min, or this button) releases held NFTs, marks withdrawals, auto-settles sold-but-unsettled, and refunds undelivered buys.</p>
+
+          <div className="admin-stats">
+            <div className="stat-card" style={{ alignItems: 'flex-start', justifyContent: 'center' }}><button className="btn-ghost" disabled={busy} onClick={scanCustodies}>Scan custody wallets</button></div>
+            {leftovers && <div className="stat-card"><span className="sc-label">Custody leftovers (uncounted)</span><span className={`sc-val ${BigInt(leftovers.totalE6) > 0n ? 'down' : ''}`}>{formatUsd(BigInt(leftovers.totalE6))} · {leftovers.custodies.length} wallet{leftovers.custodies.length === 1 ? '' : 's'}</span></div>}
+          </div>
+          <p className="muted" style={{ fontSize: '0.76rem' }}>Stranded USDC parked in custody wallets (a crash between charge and CC payment) — NOT counted in reserves. The scan reads each on-chain (so it’s a button). The auto-reconciler refunds the customer; the sweep returns the funds to hot (scripts/sweep-custody-leftovers.ts, or set GACHA_AUTO_SWEEP_ENABLED to sweep automatically). Skips any wallet whose user has a live open.</p>
 
           {mon.machines?.length > 0 && (
             <>

@@ -159,6 +159,9 @@ export const config = {
   // default; the web hides the entry until this flips (exposed on /health). CC's gacha reads need no key
   // (x-api-key optional). CC_ENV=dev points at CC's dev endpoints; CC_GACHA_URL overrides the base entirely.
   classicGachaEnabled: process.env.CLASSIC_GACHA_ENABLED === 'true',
+  // Auto-sweep stranded USDC out of gacha custody wallets back to hot in the reconcile worker (OFF by default —
+  // it's automated on-chain signing). Internal-only (custody→hot, our own wallets); the manual script is the backstop.
+  gachaAutoSweepEnabled: process.env.GACHA_AUTO_SWEEP_ENABLED === 'true',
   ccEnv: process.env.CC_ENV ?? 'main', // 'main' | 'dev'
   ccGachaUrl: process.env.CC_GACHA_URL ?? '', // base override; default derived from ccEnv in the CC client
   ccApiKey: process.env.COLLECTORCRYPT_API_KEY ?? '', // optional — CC gacha endpoints don't enforce it

@@ -449,6 +449,65 @@ export async function reconcileAllPending(db: Db, deps: GachaDeps, opts: { limit
   return { scanned: rows.length, recovered };
 }
 
+export interface CustodyLeftover { userId: string; custodyPubkey: string; e6: string }
+
+/**
+ * Read-only: which RESOLVED-user custodies hold leftover USDC (stranded JIT-funding a crashed open left behind).
+ * Only users with NO unresolved 'paid'/'pending' open are scanned, so a live open's funding is never reported or
+ * swept — the receipt marks the open 'paid' BEFORE fund-custody runs, so the guard always sees it. Batched
+ * balance read (one getMultipleAccounts per 100). Used by the admin panel + as the basis for the auto-sweep.
+ */
+export async function scanCustodyLeftovers(db: Db, deps: GachaDeps): Promise<{ custodies: CustodyLeftover[]; totalE6: string }> {
+  const rows = (await db.query<{ user_id: string; custody_pubkey: string }>(
+    `SELECT DISTINCT o.user_id, o.custody_pubkey FROM gacha_pack_opens o
+      WHERE o.custody_pubkey IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM gacha_pack_opens p WHERE p.user_id = o.user_id AND p.status IN ('paid','pending'))`,
+  )).rows;
+  if (!rows.length) return { custodies: [], totalE6: '0' };
+  const balances = await deps.chain.custodyUsdcBalances(rows.map((r) => r.custody_pubkey));
+  let totalE6 = 0n;
+  const custodies: CustodyLeftover[] = [];
+  for (const r of rows) {
+    const e6 = balances[r.custody_pubkey] ?? 0n;
+    if (e6 <= 0n) continue;
+    totalE6 += e6;
+    custodies.push({ userId: r.user_id, custodyPubkey: r.custody_pubkey, e6: e6.toString() });
+  }
+  return { custodies, totalE6: totalE6.toString() };
+}
+
+/**
+ * Auto-sweep stranded custody USDC back to hot — flag-gated (GACHA_AUTO_SWEEP_ENABLED, OFF by default; it's
+ * automated on-chain signing). Recovers the JIT funding a crashed/failed open parked in a custody, so a failure
+ * self-heals on-chain (the customer's REFUND is reconcileAllPending's job — independent). Internal-only
+ * (custody→hot, our own wallets). Capped per run; logs each sweep; a re-derived-keypair tripwire prevents ever
+ * signing for the wrong custody. The manual scripts/sweep-custody-leftovers.ts stays the operator backstop.
+ */
+export async function autoSweepCustodyLeftovers(db: Db, deps: GachaDeps, opts: { maxSweeps?: number } = {}): Promise<{ scanned: number; swept: number; sweptE6: string }> {
+  if (!config.gachaAutoSweepEnabled) return { scanned: 0, swept: 0, sweptE6: '0' };
+  const { custodies } = await scanCustodyLeftovers(db, deps);
+  const cap = opts.maxSweeps ?? 25;
+  let swept = 0;
+  let sweptE6 = 0n;
+  for (const c of custodies) {
+    if (swept >= cap) break;
+    const kp = await getNftCustodyKeypair(db, c.userId);
+    if (kp.publicKey.toBase58() !== c.custodyPubkey) {
+      console.error('[gacha] auto-sweep custody mismatch — skip', { userId: c.userId, expected: c.custodyPubkey, derived: kp.publicKey.toBase58() });
+      continue;
+    }
+    try {
+      const { sig } = await deps.chain.sweepCustodyUsdc(kp, BigInt(c.e6));
+      console.log('[gacha] auto-swept custody leftover → hot', { userId: c.userId, custody: c.custodyPubkey, usd: Number(c.e6) / 1e6, sig });
+      swept++;
+      sweptE6 += BigInt(c.e6);
+    } catch (e) {
+      console.error('[gacha] auto-sweep failed', c.custodyPubkey, e instanceof Error ? e.message : e);
+    }
+  }
+  return { scanned: custodies.length, swept, sweptE6: sweptE6.toString() };
+}
+
 /** Poll a single open (the web polls this until the reveal lands). */
 export async function getOpen(db: Db, userId: string, openId: string): Promise<OpenResult> {
   const row = await getOpenRow(db, openId);

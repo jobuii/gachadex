@@ -365,6 +365,15 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     return reconcileStuckPrizes(await getDb(), Number.isFinite(graceSec) && graceSec >= 0 ? { graceSec } : {});
   });
 
+  // On-demand scan of gacha custody wallets for stranded USDC (uncounted reserves a crashed open left behind —
+  // candidates for the sweep). On-chain reads → a button, not auto-loaded; lazy-imports web3 to keep boot light.
+  app.get('/admin/gacha/custody-leftovers', rl(config.routeRateLimits.admin), async () => {
+    const { scanCustodyLeftovers } = await import('../services/gacha.ts');
+    const { solanaGachaChain } = await import('../services/custody/gacha-chain.ts');
+    const { defaultCcClient } = await import('../services/providers/collectorcrypt.ts');
+    return scanCustodyLeftovers(await getDb(), { chain: solanaGachaChain(), cc: defaultCcClient });
+  });
+
   // Zero EVERY customer's loyalty Gold balance (destructive; writes an ADMIN_RESET ledger entry per user).
   app.post('/admin/gacha/reset-gold', rl(config.routeRateLimits.admin), async () => resetGoldBalances(await getDb()));
 }

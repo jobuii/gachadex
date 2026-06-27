@@ -175,8 +175,13 @@ function startGachaOpenReconcileLoop(db: Db, log: FastifyBaseLogger) {
         import('./services/custody/gacha-chain.ts'),
         import('./services/providers/collectorcrypt.ts'),
       ]);
-      const r = await g.reconcileAllPending(db, { chain: ch.solanaGachaChain(), cc: cc.defaultCcClient });
+      const deps = { chain: ch.solanaGachaChain(), cc: cc.defaultCcClient };
+      const r = await g.reconcileAllPending(db, deps);
       if (r.recovered) log.info(r, 'gacha stuck-open reconcile: refunded/recovered');
+      // Then recover any stranded custody funding back to hot (no-op unless GACHA_AUTO_SWEEP_ENABLED). Runs AFTER
+      // the reconcile so a just-failed open's user has no unresolved row → its leftover becomes sweepable.
+      const s = await g.autoSweepCustodyLeftovers(db, deps);
+      if (s.swept) log.info(s, 'gacha custody auto-sweep → hot');
     } catch (e) {
       log.warn(e, 'gacha stuck-open reconcile failed');
     } finally {
