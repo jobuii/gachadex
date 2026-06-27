@@ -413,16 +413,16 @@ is dormant — no behavior change until set), stored as live knobs (`platform_ca
 
 ---
 
-## Classic Gacha — Collector Crypt real-NFT packs (flag-gated, pre-launch)
+## Classic Gacha — Collector Crypt real-NFT packs (real-funds, LIVE)
 
 A Games-page surface that resells **Collector Crypt (CC)** graded-card gacha packs. Buy a pack with your
 GachaDex balance → GDEX pays CC on-chain → **CC's draw (its own VRF — we don't run the RNG)** reveals and
 delivers a **real graded-card NFT** into your GDEX custody wallet. Then **sell it back** (GDEX keeps **5%**,
 or **10%** on an instant sell-on-reveal), **withdraw** the real NFT to an external wallet (step-up signed),
 **convert** it (sell-back → open a perp on that card's market with the proceeds), or **trade** the matched
-market. Built on `development`, **OFF by default** behind `CLASSIC_GACHA_ENABLED` and **real-funds-gated**
-(the open/sell/withdraw routes 403 in play-money). Held NFTs live in **Portfolio → Inventory** and in the
-lobby's "Your pulls". Spec: `docs/classic-gacha-cc-packs-spec.md`.
+market. **Live in prod** behind `CLASSIC_GACHA_ENABLED` (on) and **real-funds-gated** (the open/sell/withdraw
+routes 403 in play-money). Held NFTs live in **Portfolio → Inventory** and in the lobby's "Your pulls". Spec:
+`docs/classic-gacha-cc-packs-spec.md`.
 
 ### Economics & EV calibration
 
@@ -453,11 +453,10 @@ not a prize-table business. "EV calibration" here means two things:
 
 ### Operations — the `/api/machines` feed, monitoring, and recovery
 
-- **Call cadence.** `GET /gacha/machines` proxies CC's `/api/machines` **live on every request, with no
-  server-side cache** (rate-limited only). The customer lobby fetches it **once per page load** (no client
-  polling); the admin Gacha tab re-fetches every **30s** while open. So CC is hit roughly on customer
-  page-loads plus once per 30s per open admin tab. (A short server-side cache is an available optimization if
-  CC load becomes a concern — not yet added.)
+- **Call cadence.** `GET /gacha/machines` is **server-side cached** — CC's `/api/machines` is hit at most
+  **once per a global interval** (the admin `stockRefreshSecs` knob, default **30s** / floor **15s**) for all
+  customers, with an admin global **pause** and **refresh-now**. The customer lobby fetches once per page load
+  (no client polling); the admin Gacha tab re-fetches every 30s while open.
 - **What the feed carries vs what's shown today.** The payload already includes per-tier **stock**, **odds %**,
   **$ ranges**, **EV**, and **buyback %**. The **player lobby** shows EV, buyback %, and the per-tier odds bars
   for the selected machine. The **admin tab** currently shows only the machine name/price + enable toggle —
@@ -467,11 +466,28 @@ not a prize-table business. "EV calibration" here means two things:
   cost, the operator net, and the live sell-back rate vs the ~57% break-even); activity (packs opened all-time
   + 24h, USDC volume, prize value, biggest pull, players, withdraws, realized rarity odds); **per-machine**
   opens, net, and realized odds; and **stuck-row counts**.
-- **Stuck-row reconciler.** A pack mid sell-back/withdraw is briefly `selling`/`withdrawing`; a process crash
-  can strand it. `reconcileStuckPrizes` (admin **Reconcile** button + boot recovery) reads each NFT's
-  on-chain owner via DAS and resolves it: still in custody → released to `held`; gone for a withdraw → marked
-  `withdrawn`; sold-but-unsettled → flagged in the logs for a manual credit. Status-guarded + idempotent; a
-  grace window (default 300s) keeps it clear of any live in-flight op.
+- **Crash recovery & money-safety (unattended).** Every charged-but-undelivered outcome self-heals; the live
+  fixes are status-guarded + idempotent, so they're safe on boot, on a timer, and on any number of instances:
+  - **Stuck pack-buys → auto-refund.** A buy whose pack crashed before delivering sits `paid`. `reconcileAllPending`
+    (boot + every 2 min, **all users** — not just the on-demand per-user `reconcilePending`, which only ran when
+    that customer reopened the lobby) refunds it and claws back any loyalty Gold earned on it.
+  - **Stuck NFT ops → reconcile on-chain.** `reconcileStuckPrizes` (boot + admin **Reconcile**) reads each NFT's
+    DAS owner: in custody → `held`; gone for a withdraw → `withdrawn`; **sold-but-unsettled → auto-credits the
+    seller** from CC's confirmed buyback (was: flag for a manual credit). Grace window (default 300s).
+  - **DAS-gated reverts.** A sell-back/withdraw whose submit times out *after* the on-chain move no longer reverts
+    to `held` (which stranded the seller's money) — it reverts only when DAS confirms the NFT is still in custody,
+    else it's left for the reconciler.
+  - **Re-circulated NFTs.** CC recycles a sold-back card and re-rolls it to a new buyer; the inventory write keys
+    on a **partial unique** (one *active* holder per mint) + the open id, so a re-roll records correctly instead of
+    being silently dropped against the prior holder's stale `sold` row.
+  - **Stranded custody USDC → swept to hot.** A crash between fund-custody and the CC payment parks the pack price
+    in a custody wallet (uncounted in PoR). With `GACHA_AUTO_SWEEP_ENABLED=true` the reconcile loop returns it to
+    hot automatically (custody→hot, our own wallets, skips any wallet with a live open); **OFF by default**.
+  - **Admin surfacing.** The Gacha tab shows stuck `selling`/`withdrawing`, **paid-but-undelivered** opens, and a
+    **Scan custody wallets** button (on-demand on-chain scan of stranded USDC).
+  - **Operator scripts** (`railway run`, dry-run first): `scripts/sweep-custody-leftovers.ts` (custody→hot sweep,
+    the manual backstop to the auto-sweep) and `scripts/backfill-recirculated-nfts.ts` (re-checks each NFT's
+    on-chain owner and writes the missing `held` row for a delivered-but-unrecorded NFT).
 
 ---
 
