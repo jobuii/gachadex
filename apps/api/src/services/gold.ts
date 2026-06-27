@@ -52,6 +52,37 @@ export async function spendGold(q: Queryer, userId: string, amount: bigint, ref:
   ]);
 }
 
+/** Reverse the loyalty Gold credited (PACK_OPEN_EARN) for a now-refunded gacha open. Gold is earned at payment,
+ *  so a buy that later fails/refunds earned nothing and must give the Gold back. It locks the player's balance row
+ *  (FOR UPDATE, like spendGold) then nets the original earn against any prior reversal for the same open — so
+ *  re-running, or two reversals racing (the live refund vs the backfill), collapses to a single claw-back. Signed
+ *  write with NO insufficient-balance guard: if the player already spent the Gold the balance may dip negative,
+ *  which is correct (they owe it) and self-corrects as they earn again. Returns the amount reversed. */
+export async function reverseEarnedGold(q: Queryer, userId: string, openId: string): Promise<bigint> {
+  // Serialize concurrent reversals for this player; the row exists once PACK_OPEN_EARN credited the open.
+  await q.query(`SELECT balance FROM gold_balances WHERE user_id = $1 FOR UPDATE`, [userId]);
+  const r = await q.query<{ net: string }>(
+    `SELECT COALESCE(SUM(delta), 0)::text AS net
+       FROM gold_ledger
+      WHERE user_id = $1 AND ref_type = 'gacha_open' AND ref_id = $2
+        AND reason IN ('PACK_OPEN_EARN', 'PACK_OPEN_EARN_REVERSAL')`,
+    [userId, openId],
+  );
+  const net = BigInt(r.rows[0].net); // earn (+) minus any prior reversal (−) = what's still owed back
+  if (net <= 0n) return 0n; // nothing earned for this open, or already fully reversed
+  const back = (-net).toString();
+  await q.query(
+    `INSERT INTO gold_ledger(id, user_id, delta, reason, ref_type, ref_id) VALUES($1,$2,$3,'PACK_OPEN_EARN_REVERSAL','gacha_open',$4)`,
+    [randomUUID(), userId, back, openId],
+  );
+  await q.query(
+    `INSERT INTO gold_balances(user_id, balance) VALUES($1,$2)
+     ON CONFLICT (user_id) DO UPDATE SET balance = gold_balances.balance + EXCLUDED.balance`,
+    [userId, back],
+  );
+  return net;
+}
+
 export async function getGoldSummary(db: Db, userId: string): Promise<{ balance: string; perUsd: number; untilFreePackGold: string }> {
   const r = await db.query<{ balance: string }>(`SELECT balance FROM gold_balances WHERE user_id = $1`, [userId]);
   const bal = r.rows[0] ? BigInt(r.rows[0].balance) : 0n;

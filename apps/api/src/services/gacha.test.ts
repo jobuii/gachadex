@@ -223,6 +223,21 @@ test('open: a non-deliverable reveal with no buyback amount refunds, never stran
   assert.equal(await collOf(user), before); // fully refunded
 });
 
+test('open: a refunded USDC open also reverses the loyalty Gold earned at payment', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  cc.reveals = [{ success: true, code: 'WEIRD_UNHANDLED' }]; // non-deliverable → refund path
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'goldrev' }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(r.status, 'failed');
+  // the $50 open earned Gold at payment, then the refund reversed it → net 0
+  assert.equal((await getGoldSummary(db, user)).balance, '0', 'earned Gold clawed back on refund');
+  // both legs are on the ledger for audit and net to zero
+  const rows = (await db.query<{ reason: string; delta: string }>(
+    `SELECT reason, delta::text AS delta FROM gold_ledger WHERE user_id = $1 ORDER BY created_at, delta DESC`, [user])).rows;
+  assert.deepEqual(rows.map((x) => x.reason), ['PACK_OPEN_EARN', 'PACK_OPEN_EARN_REVERSAL']);
+  assert.equal(BigInt(rows[0].delta) + BigInt(rows[1].delta), 0n, 'earn + reversal net to zero');
+});
+
 test('open: YOLO/turbo — CC auto-sells the common, credits buyback minus the 10% cut (turbo_sold)', async () => {
   const user = await newUser();
   const before = await collOf(user);
