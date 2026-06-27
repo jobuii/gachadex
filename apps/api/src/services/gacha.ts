@@ -6,14 +6,14 @@ import { usdc } from '../money.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './ledger.ts';
 import { getNftCustodyKeypair } from './custody/wallet.ts';
 import { createNftWithdrawNonce, verifyNftWithdrawStepUp } from './auth.ts';
-import { spendGold, earnGold, goldEarnedForOpen, goldPriceForPack, FREE_PACK_GOLD } from './gold.ts';
+import { spendGold, earnGold, reverseEarnedGold, goldEarnedForOpen, goldPriceForPack, FREE_PACK_GOLD } from './gold.ts';
 import { openPosition } from './engine.ts';
 import { lastMarkE6 } from './marks.ts';
 import { gachaConfig, gachaMarkupE6 } from './gacha-config.ts';
 import type { GachaChain } from './custody/gacha-chain.ts';
 import { defaultCcClient, ccVerifyUrl, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
 import { getAssetTransferInfo } from './das.ts';
-import { settleSoldPrize, type SellBackResult } from './gacha-settle.ts';
+import { settleSoldPrize, accrueGachaAffiliateShare, type SellBackResult } from './gacha-settle.ts';
 export type { SellBackResult } from './gacha-settle.ts';
 
 /**
@@ -118,6 +118,7 @@ async function getOpenRow(db: Db, openId: string): Promise<OpenRow | null> {
   return r.rows[0] ?? null;
 }
 
+
 // ─────────────────────────────── open ───────────────────────────────
 export async function openPack(db: Db, userId: string, opts: { machineCode: string; idempotencyKey: string; expectedPriceE6?: string; payWith?: 'usdc' | 'gold'; turbo?: boolean; claim?: boolean }, deps: GachaDeps): Promise<OpenResult> {
   if (!config.classicGachaEnabled) throw GACHA_OFF();
@@ -177,8 +178,10 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
       if (avail < allIn) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
       // user pays allIn; CC's base goes to treasury; any markup is GDEX revenue (entry omitted when markup=0).
       const entries = [{ accountId: coll, amount: -allIn }, { accountId: treasury, amount: price }];
-      if (markup > 0n) entries.push({ accountId: await getOrCreateSystemAccount(q, 'FEE_REVENUE'), amount: markup });
+      const feeAcc = markup > 0n ? await getOrCreateSystemAccount(q, 'FEE_REVENUE') : null;
+      if (feeAcc) entries.push({ accountId: feeAcc, amount: markup });
       await postTxn(q, { reason: 'GACHA_PACK_BUY', refType: 'gacha_open', refId: id, entries });
+      if (feeAcc) await accrueGachaAffiliateShare(q, userId, feeAcc, markup, id); // affiliate share of the pack markup
       // Loyalty earn — only on paid (USDC) opens (spec §6b); floored, derived from the admin threshold knob.
       await earnGold(q, userId, goldEarnedForOpen(price, gachaConfig.freePackThresholdUsd.get()), 'PACK_OPEN_EARN', { refType: 'gacha_open', refId: id });
     }
@@ -277,6 +280,7 @@ async function settleTurboSold(db: Db, openId: string, buybackAmount: number): P
       reason: 'GACHA_TURBO_SELL', refType: 'gacha_open', refId: openId,
       entries: [{ accountId: coll, amount: payout }, { accountId: fee, amount: cut }, { accountId: treasury, amount: -gross }],
     });
+    await accrueGachaAffiliateShare(q, row.user_id, fee, cut, openId); // affiliate share of the turbo sell-back cut
     await q.query(`UPDATE gacha_pack_opens SET status = 'turbo_sold', turbo_refund_e6 = $2, settled_at = now() WHERE id = $1`, [openId, payout.toString()]);
     return { openId, status: 'turbo_sold', verifyUrl: verifyUrlFor(row.cc_memo), card: null, turboRefundE6: payout.toString() };
   });
@@ -407,6 +411,8 @@ async function settleRefund(db: Db, openId: string, finalStatus: 'refunded' | 'f
         reason: 'GACHA_REFUND', refType: 'gacha_open', refId: openId,
         entries: [{ accountId: coll, amount: price }, { accountId: treasury, amount: -price }],
       });
+      // Gold is earned at payment (PACK_OPEN_EARN); a refunded open earned nothing, so claw the Gold back too.
+      await reverseEarnedGold(q, row.user_id, openId);
     }
     await q.query(`UPDATE gacha_pack_opens SET status = $2, settled_at = now() WHERE id = $1`, [openId, finalStatus]);
     return { openId, status: finalStatus, card: null, verifyUrl: null };
@@ -577,7 +583,8 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
     throw e;
   }
 
-  // Settle the ledger from the committed refund amount (shared with the reconciler's auto-settle).
+  // Settle the ledger from the committed refund amount — shared with the reconciler's auto-settle, and accrues
+  // the affiliate share of the cut inside settleSoldPrize (so live + reconciled sell-backs are consistent).
   return await db.tx((q) => settleSoldPrize(q, prizeId, userId, gross, cutBps));
 }
 

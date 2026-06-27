@@ -483,6 +483,40 @@ export function AdminPanel({ onGoToMarket } = {}) {
     }
   };
 
+  // Withdrawal freeze toggle. A PoR breach auto-freezes; unfreezing is ALWAYS a manual operator action (it never
+  // self-clears), so surface it here. Re-fetch the treasury after either so the banner reflects the new state.
+  const unfreeze = async () => {
+    setErr(null);
+    setMsg(null);
+    if (!window.confirm('Unfreeze withdrawals?\n\nConfirm proof-of-reserves is healthy FIRST — this re-opens ALL withdrawals.')) return;
+    setBusy('freeze');
+    try {
+      await api.adminUnfreeze(adminKey.trim());
+      setTreasury(await api.adminGetTreasury(adminKey.trim()));
+      setMsg('Withdrawals unfrozen — payouts will process again.');
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const freeze = async () => {
+    setErr(null);
+    setMsg(null);
+    const reason = window.prompt('Freeze ALL withdrawals — enter a reason (logged):');
+    if (reason == null || !reason.trim()) return;
+    setBusy('freeze');
+    try {
+      await api.adminFreeze(reason.trim(), adminKey.trim());
+      setTreasury(await api.adminGetTreasury(adminKey.trim()));
+      setMsg('Withdrawals frozen.');
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   // Approve = sign + broadcast the payout; reverse = re-credit a row that provably never paid.
   const approveWithdrawal = async (w) => {
     setErr(null);
@@ -572,15 +606,11 @@ export function AdminPanel({ onGoToMarket } = {}) {
       pct: `${Math.round((long / (long + short)) * 100)}%/${Math.round((short / (long + short)) * 100)}%`,
     };
   };
-  // Overview figures. Economics (ledger-derived) render in BOTH fund modes; the custody P/L needs the
-  // on-chain treasury, so it's only computed when the real-funds treasury view is present.
+  // Overview figures. Economics (ledger-derived) render in BOTH fund modes.
   const customerE6 = economics ? BigInt(economics.freeE6) + BigInt(economics.lockedE6) : 0n;
   const bd = economics?.pnlBreakdown ?? null; // house P/L breakdown (string-e6 fields)
   // Net trader P/L from the CUSTOMER's perspective (+ = customers up vs the house) = −(house's realized trader P/L).
   const traderCustomerPnlE6 = bd ? (-BigInt(bd.traderPnlE6)).toString() : null;
-  // Custody P/L = on-chain treasury − customer funds − pending payouts (real-funds only; null otherwise).
-  // Pending withdrawals were already debited from collateral but the cash hasn't left, so subtract them.
-  const pnlE6 = treasury ? BigInt(treasury.onchainE6) - customerE6 - BigInt(treasury.pendingE6) : null;
 
   // Verifying a saved key on mount — render nothing operational until we know it's valid.
   if (checking) {
@@ -636,6 +666,27 @@ export function AdminPanel({ onGoToMarket } = {}) {
       {msg && <div className="ref-msg up">{msg}</div>}
       {err && <div className="order-error">{err}</div>}
 
+      {/* Withdrawal-freeze status + toggle (real-funds only; treasury is null in play-money). A PoR breach
+          auto-freezes and stays frozen until an operator unfreezes — surface it loudly on every tab. */}
+      {treasury &&
+        (treasury.frozen ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', background: 'rgba(220,38,38,0.14)', border: '1px solid #dc2626', borderRadius: 8, padding: '0.7rem 1rem', margin: '0.6rem 0' }}>
+            <span style={{ color: '#fca5a5', fontSize: '0.84rem' }}>
+              <strong style={{ color: '#fecaca' }}>⚠️ Withdrawals are FROZEN.</strong> {treasury.frozen}
+            </span>
+            <button className="btn-primary sm" disabled={busy === 'freeze'} onClick={unfreeze} style={{ whiteSpace: 'nowrap' }}>
+              {busy === 'freeze' ? '…' : 'Unfreeze withdrawals'}
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', background: 'rgba(16,185,129,0.07)', border: '1px solid #1f6f54', borderRadius: 8, padding: '0.45rem 0.9rem', margin: '0.6rem 0' }}>
+            <span style={{ color: '#6ee7b7', fontSize: '0.8rem' }}>✓ Withdrawals are open.</span>
+            <button className="btn-ghost sm" disabled={busy === 'freeze'} onClick={freeze}>
+              {busy === 'freeze' ? '…' : 'Freeze'}
+            </button>
+          </div>
+        ))}
+
       <div className="admin-tabs">
         <button className={`admin-tab ${tab === 'main' ? 'active' : ''}`} onClick={() => setTab('main')}>Main</button>
         <button className={`admin-tab ${tab === 'customers' ? 'active' : ''}`} onClick={() => setTab('customers')}>Customers</button>
@@ -674,10 +725,10 @@ export function AdminPanel({ onGoToMarket } = {}) {
           <Stat label="…free" value={economics.freeE6} />
           <Stat label="…locked in trades" value={economics.lockedE6} />
           <Stat label="Insurance fund" value={economics.insuranceE6} />
-          <Stat label="Fees earned (house cut)" value={economics.feeRevenueE6} />
-          <Stat label="LP's share of fees" value={bd?.feesLpE6} />
-          <Stat label="Funding collected (customers paid in)" value={economics.fundingCollectedE6} />
-          <Stat label="Funding earned (house net kept)" value={economics.fundingRevenueE6} />
+          <Stat label="Trading fees — LP share" value={bd?.feesLpE6} />
+          <Stat label="Funding collected (into LP pool)" value={economics.fundingCollectedE6} />
+          <Stat label="Funding — LP's share" value={economics.fundingLpE6} />
+          <Stat label="Funding — house cut" value={economics.fundingHouseE6} />
           <Stat label="Customer LP in pool" value={economics.customerLpE6} />
           {/* custody cash-flow group: deposits, withdrawals, then pending (flashing red when >0) immediately left of P/L */}
           {treasury && <Stat label="Total deposits" value={economics.totalDepositsE6} />}
@@ -689,7 +740,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
               className={BigInt(treasury.pendingE6) > 0n ? 'pending-alert' : ''}
             />
           )}
-          {treasury && <PnlStat label="P/L (treasury − customer funds − pending payouts)" value={pnlE6.toString()} />}
+          <PnlStat label="Net surplus — fees earned (excl. LP pool)" value={economics.surplusE6} />
         </div>
       ) : (
         <p className="ref-blurb">Operator metrics load once your admin key is verified.</p>
@@ -700,32 +751,41 @@ export function AdminPanel({ onGoToMarket } = {}) {
 
       {bd && (
         <div className="pnl-breakdown">
-          <div className="pnl-breakdown-title">House P/L breakdown — where the P/L comes from</div>
+          <div className="pnl-breakdown-title">House earnings — what we keep in fees (the surplus)</div>
           <table className="pnl-breakdown-table">
             <tbody>
-              <tr><td>Trading fees — house cut</td><td className="num">{formatSignedUsd(bd.feesHouseE6)}</td></tr>
-              <tr><td>Trading fees — LP share</td><td className="num">{formatSignedUsd(bd.feesLpE6)}</td></tr>
-              <tr><td>Funding — net kept</td><td className="num">{formatSignedUsd(bd.fundingNetE6)}</td></tr>
-              <tr>
-                <td>Net trader P/L <span className="muted">(house side; +ve = house gained)</span></td>
-                <td className="num">{formatSignedUsd(bd.traderPnlE6)}</td>
-              </tr>
-              <tr>
-                <td>Insurance fund <span className="muted">(incl. liq penalties {formatSignedUsd(bd.liqPenaltiesE6)})</span></td>
-                <td className="num">{formatSignedUsd(bd.insuranceE6)}</td>
-              </tr>
-              {BigInt(bd.lpOtherE6) !== 0n && (
-                <tr><td>LP pool — other <span className="muted">(LP capital / insurance draws)</span></td><td className="num">{formatSignedUsd(bd.lpOtherE6)}</td></tr>
+              <tr><td>Trading fees — house cut</td><td className="num">{formatSignedUsd(bd.feesTradingE6)}</td></tr>
+              <tr><td>Gacha cuts — house</td><td className="num">{formatSignedUsd(bd.feesGachaE6)}</td></tr>
+              <tr><td>Funding — house cut</td><td className="num">{formatSignedUsd(bd.fundingHouseE6)}</td></tr>
+              {BigInt(bd.liqHouseE6) !== 0n && (
+                <tr><td>Liquidation penalties — house cut</td><td className="num">{formatSignedUsd(bd.liqHouseE6)}</td></tr>
               )}
-              <tr className="pnl-breakdown-total"><td>Total (house equity)</td><td className="num">{formatSignedUsd(bd.totalE6)}</td></tr>
+              {BigInt(bd.feesOtherE6) !== 0n && (
+                <tr><td>Other <span className="muted">(fees moved to / from insurance)</span></td><td className="num">{formatSignedUsd(bd.feesOtherE6)}</td></tr>
+              )}
+              <tr className="pnl-breakdown-total"><td>Net surplus (fees earned)</td><td className="num">{formatSignedUsd(bd.surplusE6)}</td></tr>
             </tbody>
           </table>
-          {treasury && pnlE6 != null && bd.totalE6 !== pnlE6.toString() && (
-            <p className="ref-blurb" style={{ marginTop: '0.4rem' }}>
-              Custody P/L (treasury − customer − pending) is {formatSignedUsd(pnlE6.toString())} — an unreconciled
-              difference of {formatSignedUsd((pnlE6 - BigInt(bd.totalE6)).toString())} (settles as deposits sweep).
-            </p>
-          )}
+          <div className="pnl-breakdown-title" style={{ marginTop: '0.85rem' }}>LP side — owed to liquidity providers (not house P/L)</div>
+          <table className="pnl-breakdown-table">
+            <tbody>
+              <tr><td>Trading fees — LP share</td><td className="num">{formatSignedUsd(bd.feesLpE6)}</td></tr>
+              <tr><td>Funding — LP share</td><td className="num">{formatSignedUsd(bd.fundingLpE6)}</td></tr>
+              <tr>
+                <td>Net trader P/L <span className="muted">(LP side; +ve = LP gained vs traders)</span></td>
+                <td className="num">{formatSignedUsd(bd.traderPnlE6)}</td>
+              </tr>
+              {BigInt(bd.lpOtherE6) !== 0n && (
+                <tr><td>LP capital <span className="muted">(provider deposits / withdrawals)</span></td><td className="num">{formatSignedUsd(bd.lpOtherE6)}</td></tr>
+              )}
+              <tr className="pnl-breakdown-total"><td>LP pool balance</td><td className="num">{formatSignedUsd(bd.lpPoolE6)}</td></tr>
+            </tbody>
+          </table>
+          <p className="ref-blurb" style={{ marginTop: '0.4rem' }}>
+            Insurance fund: {formatSignedUsd(bd.insuranceE6)}
+            {BigInt(bd.liqPenaltiesE6) !== 0n ? ` · liquidation penalties collected ${formatSignedUsd(bd.liqPenaltiesE6)}` : ''}.
+            The LP pool is owed to liquidity providers, so it's excluded from the house surplus.
+          </p>
         </div>
       )}
 

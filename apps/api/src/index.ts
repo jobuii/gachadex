@@ -15,7 +15,7 @@ import {
   loadLpFundingPct,
   loadLpLiquidationPct,
 } from './services/fees.ts';
-import { loadPlatformCashbackBps, loadPlatformFeeDiscountBps } from './services/affiliate.ts';
+import { loadPlatformCashbackBps, loadPlatformFeeDiscountBps, loadPlatformGameRevenueBps } from './services/affiliate.ts';
 import { loadMarkClampBps } from './services/marks.ts';
 import { loadChatConfig } from './services/chat-config.ts';
 import { loadDropConfig } from './services/drop-config.ts';
@@ -324,7 +324,7 @@ async function main() {
     startRestingOrderLoop(db, app.log); // dark unless RESTING_ORDERS_ENABLED=true
     // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
     // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.
-    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadLpTradingPct(d), loadLpFundingPct(d), loadLpLiquidationPct(d), loadPlatformCashbackBps(d), loadPlatformFeeDiscountBps(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadGachaConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
+    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadLpTradingPct(d), loadLpFundingPct(d), loadLpLiquidationPct(d), loadPlatformCashbackBps(d), loadPlatformFeeDiscountBps(d), loadPlatformGameRevenueBps(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadGachaConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
     await loadLiveKnobs(db);
     setInterval(() => void loadLiveKnobs(db).catch((e) => app.log.warn(e, 'live-knob refresh failed')), 30_000);
     if (config.realFunds) {

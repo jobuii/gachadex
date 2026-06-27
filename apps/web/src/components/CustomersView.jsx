@@ -15,7 +15,7 @@ const SORTS = [
   ['tips', 'Tips'],
   ['joined', 'Joined'],
 ];
-const COLS = 18; // table width (for the expand-row + empty-state colSpan)
+const COLS = 19; // table width (for the expand-row + empty-state colSpan)
 const KILL_PHRASE = 'CLOSE ALL';
 
 const short = (a) => shortenPubkey(a) || '—';
@@ -240,6 +240,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
               <th>Tips</th>
               <th>Withdrawals</th>
               <th>Pending</th>
+              <th>Gold earned</th>
               <th>Open</th>
               <th>Joined</th>
             </tr>
@@ -281,6 +282,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
                     <td className="num">{usd(c.tippedE6)}</td>
                     <td className="num">{usd(c.withdrawalsE6)}</td>
                     <td className="num">{usd(c.pendingWithdrawalsE6)}</td>
+                    <td className="num">{Number(c.goldEarned ?? 0).toLocaleString()}</td>
                     <td className="num">{c.openPositions}</td>
                     <td>{(c.joinedAt || '').slice(0, 10)}</td>
                   </tr>

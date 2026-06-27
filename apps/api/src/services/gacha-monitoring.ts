@@ -89,13 +89,15 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
        FROM gacha_pack_opens`,
     ),
     // Per machine × rarity, all-time + last-24h counts + prize value (turbo auto-sells count as common).
+    // LOWER(rarity): the DB stores capitalized tiers ('Common'/'Uncommon'/'Rare'/'Epic') but the web's
+    // RARITY_TIERS keys are lowercase — without this the odds box reads 0% for every real (non-null) pull.
     db.query<{ machine_code: string; rarity: string; n: string; n_24h: string; prize_value: string }>(
-      `SELECT machine_code, COALESCE(rarity, 'common') AS rarity,
+      `SELECT machine_code, COALESCE(LOWER(rarity), 'common') AS rarity,
               COUNT(*)::text AS n,
               COUNT(*) FILTER (WHERE created_at >= now() - interval '24 hours')::text AS n_24h,
               COALESCE(SUM(insured_value_e6), 0)::text AS prize_value
          FROM gacha_pack_opens WHERE ${OPENED}
-        GROUP BY machine_code, COALESCE(rarity, 'common')`,
+        GROUP BY machine_code, COALESCE(LOWER(rarity), 'common')`,
     ),
     // Per-machine operator net: FEE_REVENUE (cut + markup) − rewards-budget draw, attributed to the machine via
     // the ledger ref (gacha_open → the open; gacha_prize → the prize's open).

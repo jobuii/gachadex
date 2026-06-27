@@ -301,6 +301,10 @@ export const adminResetGold = (adminKey) => adminReq('/admin/gacha/reset-gold', 
 // real-funds-only; /admin/insurance (balance) + the fee-allocation moves work in play-money too.
 export const adminGetTreasury = (adminKey) => adminGet('/admin/treasury', adminKey);
 export const adminGetInsurance = (adminKey) => adminGet('/admin/insurance', adminKey);
+// Withdrawal freeze toggle (real-funds incident response). Freeze needs a reason; unfreeze is the ONLY way a
+// freeze clears — the PoR auto-freeze never self-clears. The treasury GET carries the live `frozen` reason.
+export const adminFreeze = (reason, adminKey) => adminReq('/admin/freeze', adminKey, { reason });
+export const adminUnfreeze = (adminKey) => adminReq('/admin/unfreeze', adminKey, {});
 // House economics for the Overview (ledger-derived) — works in BOTH fund modes, unlike /admin/treasury.
 export const adminGetEconomics = (adminKey) => adminGet('/admin/economics', adminKey);
 export const adminInsuranceFromFees = (amountUusdc, adminKey) => adminReq('/admin/insurance/from-fees', adminKey, { amountUusdc });

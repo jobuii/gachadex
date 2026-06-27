@@ -141,8 +141,11 @@ export function GachaAdminView({ adminKey }) {
 
   if (!cfg) return <p className="ref-blurb">{err || 'Loading gacha config…'}</p>;
 
-  const nameOf = (code) => machines.find((m) => m.code === code)?.name ?? code; // resolve a stat's machine code to its name
-  const priceOf = (code) => { const m = machines.find((x) => x.code === code); return m ? formatUsd(BigInt(m.priceE6)) : ''; }; // pack $ for the restock labels
+  // resolve a stat's machine code to "Name ($price)" so the operator can tell machines apart at a glance
+  const nameOf = (code) => {
+    const m = machines.find((mm) => mm.code === code);
+    return m ? `${m.name} (${formatUsd(BigInt(m.priceE6)).replace(/\.00$/, '')})` : code;
+  };
 
   return (
     <div className="games-admin gacha-admin">
@@ -300,7 +303,7 @@ export function GachaAdminView({ adminKey }) {
             {mon.recentRestocks.slice(0, 24).map((e, i) => (
               <span key={i} className="stat-card" style={{ flexDirection: 'row', alignItems: 'center', gap: '0.35rem', padding: '0.25rem 0.55rem', fontSize: '0.76rem' }}>
                 <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: tierColor(e.tier) }} />
-                <strong>{nameOf(e.machineCode)}</strong> {titleCase(e.tier)} <span className="muted">({priceOf(e.machineCode)})</span>
+                <strong>{nameOf(e.machineCode)}</strong> {titleCase(e.tier)}
                 <span style={{ color: 'var(--up, #22c55e)', fontWeight: 600 }}>▲ +{e.delta}</span>
                 <span className="muted">· {ago(e.detectedAt)}</span>
               </span>

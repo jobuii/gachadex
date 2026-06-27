@@ -242,6 +242,21 @@ test('open: a non-deliverable reveal with no buyback amount refunds, never stran
   assert.equal(await collOf(user), before); // fully refunded
 });
 
+test('open: a refunded USDC open also reverses the loyalty Gold earned at payment', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  cc.reveals = [{ success: true, code: 'WEIRD_UNHANDLED' }]; // non-deliverable → refund path
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'goldrev' }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(r.status, 'failed');
+  // the $50 open earned Gold at payment, then the refund reversed it → net 0
+  assert.equal((await getGoldSummary(db, user)).balance, '0', 'earned Gold clawed back on refund');
+  // both legs are on the ledger for audit and net to zero
+  const rows = (await db.query<{ reason: string; delta: string }>(
+    `SELECT reason, delta::text AS delta FROM gold_ledger WHERE user_id = $1 ORDER BY created_at, delta DESC`, [user])).rows;
+  assert.deepEqual(rows.map((x) => x.reason), ['PACK_OPEN_EARN', 'PACK_OPEN_EARN_REVERSAL']);
+  assert.equal(BigInt(rows[0].delta) + BigInt(rows[1].delta), 0n, 'earn + reversal net to zero');
+});
+
 test('open: YOLO/turbo — CC auto-sells the common, credits buyback minus the 10% cut (turbo_sold)', async () => {
   const user = await newUser();
   const before = await collOf(user);
@@ -350,6 +365,34 @@ test('sell-back: 95% to the user, 5% to FEE_REVENUE, prize sold once', async () 
   assert.equal(await feeRev(), feeBefore + 2_000_000n);
   // double-sell rejected
   await assert.rejects(sellBack(db, user, prize, { chain, cc, ...noWait }), /already settled/i);
+});
+
+test('gacha affiliate: a referred player\'s sell-back pays the referrer their game-revenue share of the cut', async () => {
+  const affiliate = await newUser();
+  await db.query(`INSERT INTO affiliate_terms(user_id, game_revenue_bps, active) VALUES($1, 2000, true)`, [affiliate]); // 20% of gacha house revenue
+  const player = await newUser();
+  await db.query(`UPDATE users SET referred_by = $2 WHERE id = $1`, [player, affiliate]);
+  const cc = fakeCc();
+  cc.buybackAmount = 100_000_000; // CC buys back $100 → the sell-back cut hits FEE_REVENUE
+  const affBefore = await collOf(affiliate);
+  const r = await openPack(db, player, { machineCode: 'pokemon_50', idempotencyKey: 'refsell' }, { chain: fakeChain(), cc, ...noWait });
+  const prizeId = (await db.query<{ id: string }>(`SELECT id FROM gacha_nft_inventory WHERE open_id=$1`, [r.openId])).rows[0].id;
+  await sellBack(db, player, prizeId, { chain: fakeChain(), cc, ...noWait });
+  const cut = BigInt((await db.query<{ c: string }>(`SELECT sell_cut_e6 AS c FROM gacha_nft_inventory WHERE id=$1`, [prizeId])).rows[0].c);
+  assert.ok(cut > 0n); // GDEX kept a cut
+  assert.equal(await collOf(affiliate) - affBefore, (cut * 2000n) / 10000n); // referrer got 20% of that cut
+});
+
+test('gacha affiliate: a NON-referred player\'s sell-back keeps the full cut in FEE_REVENUE', async () => {
+  const player = await newUser(); // no referrer
+  const cc = fakeCc();
+  cc.buybackAmount = 100_000_000;
+  const feeBefore = await feeRev();
+  const r = await openPack(db, player, { machineCode: 'pokemon_50', idempotencyKey: 'norefsell' }, { chain: fakeChain(), cc, ...noWait });
+  const prizeId = (await db.query<{ id: string }>(`SELECT id FROM gacha_nft_inventory WHERE open_id=$1`, [r.openId])).rows[0].id;
+  await sellBack(db, player, prizeId, { chain: fakeChain(), cc, ...noWait });
+  const cut = BigInt((await db.query<{ c: string }>(`SELECT sell_cut_e6 AS c FROM gacha_nft_inventory WHERE id=$1`, [prizeId])).rows[0].c);
+  assert.equal((await feeRev()) - feeBefore, cut); // full cut stays — no affiliate slice
 });
 
 // A user with a REAL keypair, so the withdraw step-up signature verifies.
@@ -579,6 +622,22 @@ test('monitoring: a sell-back grows the cut revenue + the sell-back rate', async
   assert.ok(BigInt(m.sellBackCutE6) > BigInt(m0.sellBackCutE6)); // cut revenue grew
   assert.ok(m.deliveredCards >= 1 && m.soldBack >= 1);
   assert.ok(m.sellBackRatePct > 0);
+});
+
+test('monitoring: a CAPITALIZED DB rarity is lowercased so the web tiers match (no real pull reads 0%)', async () => {
+  const user = await newUser();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'rmix' }, { chain: fakeChain(), cc: fakeCc(), ...noWait });
+  // production CC stores capitalized tiers ('Epic'); force one here so this guards the casing fix on its OWN
+  // fixture, independent of test ordering (the fake reveal happens to write lowercase).
+  await db.query(`UPDATE gacha_pack_opens SET rarity = 'Epic' WHERE user_id = $1 AND idempotency_key = 'rmix'`, [user]);
+  const m = await gachaMonitoring(db);
+  // every key must be lowercase to match the web's RARITY_TIERS (pre-fix the 'Epic' row keys as 'Epic' → fails)
+  const keys = Object.keys(m.rarity);
+  assert.ok(keys.length > 0 && keys.every((k) => k === k.toLowerCase()), `rarity keys must be lowercase, got: ${keys.join(', ')}`);
+  // and that capitalized Epic pull is counted on the lowercase 'epic' tier (would read 0% pre-fix)
+  assert.ok((m.rarity.epic ?? 0) >= 1, 'the capitalized Epic open is counted under the lowercase epic tier');
+  // per-machine keys are lowercase too
+  for (const mc of m.machines) for (const k of Object.keys(mc.rarity)) assert.equal(k, k.toLowerCase(), `machine ${mc.code} rarity key "${k}" must be lowercase`);
 });
 
 test('monitoring: reports packs opened, the rarity mix, volume + per-machine stats', async () => {

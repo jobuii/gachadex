@@ -18,6 +18,12 @@ export function maxCashbackBps(): number {
   return Math.max(0, 10000 - config.feeLpSharePct * 100);
 }
 
+/** The game-revenue share can be up to 100% of the gacha house revenue it's drawn from — gacha cuts/markup post
+ *  fully to FEE_REVENUE (no LP split) — and the accrual clamps to the actual revenue at runtime. */
+export function maxGameRevenueBps(): number {
+  return 10000;
+}
+
 export interface FeeAffiliate {
   discountBps: number; // the trader's own fee discount (0 if they're not an active affiliate)
   cashback: { userId: string; bps: number } | null; // cashback owed to the trader's referrer (null if none)
@@ -50,6 +56,22 @@ export async function resolveFeeAffiliate(q: Queryer, traderUserId: string): Pro
   return { discountBps, cashback };
 }
 
+/** Resolve the game-revenue share owed to the affiliate who referred `playerUserId`, for a gacha house-revenue
+ *  event (sell-back cut / pack markup). The referrer's active per-wallet term wins; else the platform default.
+ *  Null when the player wasn't referred or the rate is 0. (Separate from cashback, which stays perps-only.) */
+export async function resolveGameRevenueAffiliate(q: Queryer, playerUserId: string): Promise<{ userId: string; bps: number } | null> {
+  const r = await q.query<{ referrer_id: string | null; ref_game: number | null }>(
+    `SELECT u.referred_by AS referrer_id, ref.game_revenue_bps AS ref_game
+       FROM users u LEFT JOIN affiliate_terms ref ON ref.user_id = u.referred_by AND ref.active
+      WHERE u.id = $1`,
+    [playerUserId],
+  );
+  const row = r.rows[0];
+  if (!row?.referrer_id) return null;
+  const bps = row.ref_game ?? getPlatformGameRevenueBps();
+  return bps > 0 ? { userId: row.referrer_id, bps } : null;
+}
+
 /** Apply a fee discount (bps off the gross fee). discountBps clamped to [0, 10000]. Integer-floor. */
 export function applyFeeDiscount(grossFee: bigint, discountBps: number): bigint {
   const d = BigInt(Math.max(0, Math.min(10000, Math.floor(discountBps || 0))));
@@ -62,26 +84,31 @@ export function applyFeeDiscount(grossFee: bigint, discountBps: number): bigint 
 // these for that wallet. Cashback is still only paid when a trader was referred (there must be a referrer).
 const platformCashback = liveKnob('platform_cashback_bps', 0, (v) => validateBps(v, 'platform cashbackBps', maxCashbackBps()));
 const platformFeeDiscount = liveKnob('platform_fee_discount_bps', 0, (v) => validateBps(v, 'platform feeDiscountBps', 10000));
+const platformGameRevenue = liveKnob('platform_game_revenue_bps', 0, (v) => validateBps(v, 'platform gameRevenueBps', maxGameRevenueBps()));
 
 export const getPlatformCashbackBps = platformCashback.get;
 export const getPlatformFeeDiscountBps = platformFeeDiscount.get;
+export const getPlatformGameRevenueBps = platformGameRevenue.get;
 export const loadPlatformCashbackBps = platformCashback.load;
 export const loadPlatformFeeDiscountBps = platformFeeDiscount.load;
+export const loadPlatformGameRevenueBps = platformGameRevenue.load;
 
-export function platformDefaultsView(): { cashbackBps: number; feeDiscountBps: number; maxCashbackBps: number } {
-  return { cashbackBps: platformCashback.get(), feeDiscountBps: platformFeeDiscount.get(), maxCashbackBps: maxCashbackBps() };
+export function platformDefaultsView(): { cashbackBps: number; feeDiscountBps: number; gameRevenueBps: number; maxCashbackBps: number; maxGameRevenueBps: number } {
+  return { cashbackBps: platformCashback.get(), feeDiscountBps: platformFeeDiscount.get(), gameRevenueBps: platformGameRevenue.get(), maxCashbackBps: maxCashbackBps(), maxGameRevenueBps: maxGameRevenueBps() };
 }
 
 /** Operator: set the platform-wide default cashback + fee-discount (bps). Validates BOTH before writing
  *  either, so a bad value can't leave the two knobs half-applied. */
 export async function setPlatformAffiliateDefaults(
   db: Db,
-  opts: { cashbackBps: unknown; feeDiscountBps: unknown },
-): Promise<{ cashbackBps: number; feeDiscountBps: number; maxCashbackBps: number }> {
+  opts: { cashbackBps: unknown; feeDiscountBps: unknown; gameRevenueBps: unknown },
+): Promise<ReturnType<typeof platformDefaultsView>> {
   validateBps(opts.cashbackBps, 'cashbackBps', maxCashbackBps());
   validateBps(opts.feeDiscountBps, 'feeDiscountBps', 10000);
+  validateBps(opts.gameRevenueBps, 'gameRevenueBps', maxGameRevenueBps());
   await platformCashback.set(db, opts.cashbackBps);
   await platformFeeDiscount.set(db, opts.feeDiscountBps);
+  await platformGameRevenue.set(db, opts.gameRevenueBps);
   return platformDefaultsView();
 }
 
@@ -99,10 +126,12 @@ export interface AffiliateRow {
   code: string | null;
   cashbackBps: number;
   feeDiscountBps: number;
+  gameRevenueBps: number;
   label: string | null;
   active: boolean;
   referrals: number; // how many accounts this affiliate has referred
   cashbackPaidUusdc: string; // lifetime cashback credited to this affiliate
+  gameRevenuePaidUusdc: string; // lifetime gacha game-revenue share credited to this affiliate
 }
 
 interface AffiliateDbRow {
@@ -111,20 +140,26 @@ interface AffiliateDbRow {
   code: string | null;
   cashback_bps: number;
   fee_discount_bps: number;
+  game_revenue_bps: number;
   label: string | null;
   active: boolean;
   referrals: string;
   cashback_paid: string;
+  game_revenue_paid: string;
 }
 
 const SELECT_AFFILIATES = `
   SELECT t.user_id, u.solana_pubkey AS pubkey, u.referral_code AS code,
-         t.cashback_bps, t.fee_discount_bps, t.label, t.active,
+         t.cashback_bps, t.fee_discount_bps, t.game_revenue_bps, t.label, t.active,
          (SELECT count(*) FROM users r WHERE r.referred_by = t.user_id) AS referrals,
          COALESCE((SELECT SUM(le.amount_uusdc) FROM ledger_entries le
                      JOIN accounts a ON a.id = le.account_id
                     WHERE a.user_id = t.user_id AND a.type = 'USER_COLLATERAL'
-                      AND le.reason = 'REFERRAL_CASHBACK'), 0) AS cashback_paid
+                      AND le.reason = 'REFERRAL_CASHBACK'), 0) AS cashback_paid,
+         COALESCE((SELECT SUM(le.amount_uusdc) FROM ledger_entries le
+                     JOIN accounts a ON a.id = le.account_id
+                    WHERE a.user_id = t.user_id AND a.type = 'USER_COLLATERAL'
+                      AND le.reason = 'GAME_REVENUE_SHARE'), 0) AS game_revenue_paid
     FROM affiliate_terms t JOIN users u ON u.id = t.user_id`;
 
 function toRow(x: AffiliateDbRow): AffiliateRow {
@@ -134,10 +169,12 @@ function toRow(x: AffiliateDbRow): AffiliateRow {
     code: x.code,
     cashbackBps: x.cashback_bps,
     feeDiscountBps: x.fee_discount_bps,
+    gameRevenueBps: x.game_revenue_bps,
     label: x.label,
     active: x.active,
     referrals: Number(x.referrals),
     cashbackPaidUusdc: x.cashback_paid,
+    gameRevenuePaidUusdc: x.game_revenue_paid,
   };
 }
 
@@ -161,10 +198,11 @@ export async function listAffiliates(db: Db): Promise<AffiliateRow[]> {
  *  Creates the account if the wallet never signed in. Idempotent per wallet (upsert). */
 export async function setAffiliateTerms(
   db: Db,
-  opts: { pubkey: string; code?: string; cashbackBps: unknown; feeDiscountBps: unknown; label?: string; active?: boolean },
+  opts: { pubkey: string; code?: string; cashbackBps: unknown; feeDiscountBps: unknown; gameRevenueBps?: unknown; label?: string; active?: boolean },
 ): Promise<AffiliateRow> {
   const cashbackBps = validateBps(opts.cashbackBps, 'cashbackBps', maxCashbackBps());
   const feeDiscountBps = validateBps(opts.feeDiscountBps, 'feeDiscountBps', 10000);
+  const gameRevenueBps = validateBps(opts.gameRevenueBps ?? 0, 'gameRevenueBps', maxGameRevenueBps());
   const pubkey = opts.pubkey?.trim();
   if (!pubkey) throw new HttpError(400, 'pubkey required');
   // null = "leave unchanged" on update — so editing an affiliate's rates doesn't silently re-enable
@@ -177,12 +215,13 @@ export async function setAffiliateTerms(
     const uid = await upsertUser(q, pubkey);
     if (opts.code) await setReferralCodeTx(q, uid, opts.code); // validates length/charset + uniqueness, reserves old code
     await q.query(
-      `INSERT INTO affiliate_terms(user_id, cashback_bps, fee_discount_bps, label, active, updated_at)
-         VALUES($1, $2, $3, $4, COALESCE($5, true), now())
+      `INSERT INTO affiliate_terms(user_id, cashback_bps, fee_discount_bps, game_revenue_bps, label, active, updated_at)
+         VALUES($1, $2, $3, $4, $5, COALESCE($6, true), now())
        ON CONFLICT(user_id) DO UPDATE SET
          cashback_bps = EXCLUDED.cashback_bps, fee_discount_bps = EXCLUDED.fee_discount_bps,
-         label = EXCLUDED.label, active = COALESCE($5, affiliate_terms.active), updated_at = now()`,
-      [uid, cashbackBps, feeDiscountBps, opts.label ?? null, active],
+         game_revenue_bps = EXCLUDED.game_revenue_bps,
+         label = EXCLUDED.label, active = COALESCE($6, affiliate_terms.active), updated_at = now()`,
+      [uid, cashbackBps, feeDiscountBps, gameRevenueBps, opts.label ?? null, active],
     );
     return uid;
   });
