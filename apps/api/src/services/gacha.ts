@@ -7,7 +7,7 @@ import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './led
 import { resolveGameRevenueAffiliate } from './affiliate.ts';
 import { getNftCustodyKeypair } from './custody/wallet.ts';
 import { createNftWithdrawNonce, verifyNftWithdrawStepUp } from './auth.ts';
-import { spendGold, earnGold, goldEarnedForOpen, goldPriceForPack, FREE_PACK_GOLD } from './gold.ts';
+import { spendGold, earnGold, reverseEarnedGold, goldEarnedForOpen, goldPriceForPack, FREE_PACK_GOLD } from './gold.ts';
 import { openPosition } from './engine.ts';
 import { lastMarkE6 } from './marks.ts';
 import { gachaConfig, gachaMarkupE6 } from './gacha-config.ts';
@@ -412,6 +412,8 @@ async function settleRefund(db: Db, openId: string, finalStatus: 'refunded' | 'f
         reason: 'GACHA_REFUND', refType: 'gacha_open', refId: openId,
         entries: [{ accountId: coll, amount: price }, { accountId: treasury, amount: -price }],
       });
+      // Gold is earned at payment (PACK_OPEN_EARN); a refunded open earned nothing, so claw the Gold back too.
+      await reverseEarnedGold(q, row.user_id, openId);
     }
     await q.query(`UPDATE gacha_pack_opens SET status = $2, settled_at = now() WHERE id = $1`, [openId, finalStatus]);
     return { openId, status: finalStatus, card: null, verifyUrl: null };
