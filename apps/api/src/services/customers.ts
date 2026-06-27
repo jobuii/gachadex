@@ -15,7 +15,7 @@ export interface CustomerRow {
   joinedAt: string;
   depositAddress: string | null;
   nftCustodyAddress: string | null; // per-user Classic-Gacha NFT custody wallet (derived; holds CC NFTs + buyback USDC)
-  goldEarned: string; // lifetime Gold earned (sum of positive gold_ledger deltas; whole Gold, not micro-USD)
+  goldEarned: string; // net Gold earned from opens (PACK_OPEN_EARN − reversals of refunded opens; excludes spends/spend-refunds/resets; whole Gold)
   freeE6: string; // available collateral (USER_COLLATERAL)
   lpE6: string; // current value of their LP-pool stake (shares marked to pool NAV)
   lockedE6: string; // margin locked in open positions (USER_POSITION_MARGIN)
@@ -126,9 +126,9 @@ export async function listCustomers(
      tip AS (
        SELECT user_id, SUM(amount_uusdc) AS tipped_e6 FROM drop_tips GROUP BY user_id
      ),
-     -- lifetime Gold earned: sum of positive ledger deltas (excludes spends + admin resets)
+     -- net Gold earned from opens: PACK_OPEN_EARN minus its reversals (refunded opens); spends, spend-refunds + admin resets excluded
      gold AS (
-       SELECT user_id, SUM(delta) FILTER (WHERE delta > 0) AS gold_earned FROM gold_ledger GROUP BY user_id
+       SELECT user_id, SUM(delta) FILTER (WHERE reason IN ('PACK_OPEN_EARN', 'PACK_OPEN_EARN_REVERSAL')) AS gold_earned FROM gold_ledger GROUP BY user_id
      )
      SELECT u.id, u.solana_pubkey, u.display_name, u.status,
             u.created_at::text AS joined_at,
