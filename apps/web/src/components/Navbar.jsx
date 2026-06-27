@@ -43,7 +43,7 @@ export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat, game
           onClick={onToggleChat}
           title={chatOpen ? 'Hide chat' : 'Open chat'}
         >
-          💬 Chat
+          💬<span className="chat-label"> Chat</span>
           {!chatOpen && unread > 0 && <span className="chat-badge">{unread > 99 ? '99+' : unread}</span>}
         </button>
       </div>

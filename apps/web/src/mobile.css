@@ -27,8 +27,10 @@
   .nav-links, .nav-social-link { display: none; }
   .nav-left { gap: 0.55rem; }
   .nav-brand { gap: 0.4rem; }
-  .nav-brand .gdx-wordmark { display: none; } /* mobile: show just the gem to save bar space */
+  /* the text wordmark IS the logo + the home link (no gem) — keep it visible on mobile, just compact */
+  .nav-brand .gdx-wordmark { font-size: 0.92rem; letter-spacing: 0.3px; }
   .chat-toggle { font-size: 0.45rem; padding: 0.45rem 0.5rem; }
+  .chat-toggle .chat-label { display: none; } /* icon-only on mobile → frees the space the wordmark needs */
   .nav-actions { gap: 0.4rem; }
   .theme-trigger { font-size: 0.42rem; padding: 0.4rem 0.45rem; }
   .navbar .wallet-adapter-button {
