@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { playSound, stopSound, isMuted, toggleMuted } from '../../lib/sound.js';
 import { RevealFX } from './RevealFX.jsx';
-import { RARITY_COLORS, usd, netAfterCutE6 } from './gacha-util.js';
+import { RevealAmbient } from './RevealAmbient.jsx';
+import { RARITY_COLORS, usd, netAfterCutE6, prefersReducedMotion } from './gacha-util.js';
 
 // The Classic Gacha reveal "moment" (docs/classic-gacha-cc-packs-spec.md). A full-screen overlay that opens in
 // a charging/suspense state (covering the open+poll latency), then runs a rarity-escalating beat sequence
@@ -12,7 +13,7 @@ import { RARITY_COLORS, usd, netAfterCutE6 } from './gacha-util.js';
 // (on by default, mute toggle). Beats/effects auto-skip under prefers-reduced-motion via the FX layer + CSS.
 
 const RARITY = {
-  common: { color: RARITY_COLORS.common, label: 'Common', fx: null, sound: 'winCommon' }, // red
+  common: { color: RARITY_COLORS.common, label: 'Common', fx: null, sound: 'winCommon' }, // cyan
   uncommon: { color: RARITY_COLORS.uncommon, label: 'Uncommon', fx: null, sound: 'winCommon' }, // green
   rare: { color: RARITY_COLORS.rare, label: 'Rare', fx: 'rare', sound: 'winRare' }, // violet — lighter celebration
   epic: { color: RARITY_COLORS.epic, label: 'Epic', fx: 'epic', sound: 'winEpic' }, // gold — the full jackpot
@@ -49,6 +50,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   const coinLoop = useRef(null);
   const timers = useRef([]);
   const started = useRef(false);
+  const cardElRef = useRef(null); // the 3D card → pointer-driven holo (--mx/--my) + tilt (--rx/--ry)
   const mountAt = useRef(0); // when the rip started → so the year beat can wait out the rip
   const raf = useRef(0); // the EPIC value count-up frame → cancelled on unmount
 
@@ -122,6 +124,29 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
 
   const close = () => { stopSound(coinLoop.current); onClose(); };
 
+  // Pointer-reactive holo + tilt on the revealed card (Simey-style foil): map the cursor to 0–1 across the
+  // card, drive the foil highlight (--mx/--my) and a parallax tilt (--rx/--ry). Tilt is skipped under
+  // reduced-motion; the holo highlight (no autonomous motion) still tracks the cursor.
+  const onCardPointerMove = (e) => {
+    const el = cardElRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const px = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    const py = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
+    el.style.setProperty('--mx', `${px * 100}%`);
+    el.style.setProperty('--my', `${py * 100}%`);
+    if (!prefersReducedMotion()) {
+      el.style.setProperty('--rx', `${(px - 0.5) * 26}deg`);
+      el.style.setProperty('--ry', `${(0.5 - py) * 18}deg`);
+    }
+  };
+  const onCardPointerLeave = () => {
+    const el = cardElRef.current;
+    if (!el) return;
+    el.style.setProperty('--rx', '0deg');
+    el.style.setProperty('--ry', '0deg');
+  };
+
   // Sell back from the reveal: sell, then update IN PLACE to a SOLD confirmation (rare.win-style). The player
   // can hit Close to dismiss it whenever, and it auto-closes after 5s if they don't — instead of vanishing instantly.
   const doSell = async () => {
@@ -145,6 +170,8 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   return createPortal(
     <div className={`gacha-reveal-overlay ${big && done ? `gr-pop-${big}` : ''} ${phase === 'tier' && big === 'epic' ? 'gr-epic-quake' : ''}`} onClick={inSeq || selling ? undefined : close}>
       <div className="gacha-reveal-bg" aria-hidden />
+      {/* festive backdrop only for the actual pull — not behind the refunded / still-opening error states */}
+      {phase !== 'failed' && phase !== 'pending' && <RevealAmbient tier={(card?.rarity || '').toLowerCase() || 'rare'} color={tier?.color ?? '#8b5cf6'} />}
       {done && big && <RevealFX kind={big} color={tier.color} />}
 
       <button
@@ -184,8 +211,8 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
           <>
             {done && big === 'epic' && <div className="gacha-reveal-banner">{tier.label.toUpperCase()} PULL!</div>}
 
-            <div className="gacha-card3d-wrap gacha-card-enter" style={{ '--rarity': tier?.color ?? '#8b5cf6' }}>
-              <div className={`gacha-card3d ${flipped ? 'flipped' : ''} ${done ? `done done-${big || 'base'}` : ''}`}>
+            <div className="gacha-card3d-wrap gacha-card-enter" style={{ '--rarity': tier?.color ?? '#8b5cf6' }} onPointerMove={onCardPointerMove} onPointerLeave={onCardPointerLeave}>
+              <div ref={cardElRef} className={`gacha-card3d ${flipped ? 'flipped' : ''} ${done ? `done done-${big || 'base'}` : ''}`}>
                 {/* back face — charging + suspense beats */}
                 <div className={`gacha-card3d-back ${['year', 'grade', 'tier'].includes(phase) ? 'beat-on' : ''}`}>
                   <div className="gacha-card3d-conic" aria-hidden />
@@ -204,11 +231,14 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
                     )}
                   </div>
                 </div>
-                {/* front face — the revealed card */}
+                {/* front face — the revealed card, with pointer-reactive holo foil (shine / holo / sparkle) */}
                 <div className="gacha-card3d-front">
                   {card?.imageUrl
                     ? <img src={card.imageUrl} alt={card.name ?? ''} referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
                     : <div className="gacha-card3d-noimg" aria-hidden>🃏</div>}
+                  <div className="gacha-card3d-shine" aria-hidden />
+                  <div className="gacha-card3d-holo" aria-hidden />
+                  <div className="gacha-card3d-sparkle" aria-hidden />
                   {sold && <span className="gacha-card3d-sold" aria-hidden>SOLD</span>}
                 </div>
               </div>
