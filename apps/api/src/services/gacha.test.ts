@@ -784,6 +784,28 @@ test('monitoring: a sell-back grows the cut revenue + the sell-back rate', async
   assert.ok(m.sellBackRatePct > 0);
 });
 
+test('monitoring: a refunded marked-up pack nets its markup back out of the dashboard revenue (#3 display)', async () => {
+  await setGachaConfig(db, { markupBps: 1000 }); // +10% over CC's $50 price
+  try {
+    const m0 = await gachaMonitoring(db);
+    const pm0 = m0.machines.find((x) => x.code === 'pokemon_50');
+    const user = await newUser();
+    const cc = fakeCc();
+    cc.generateFail = true; // pre-payment fail → refund AFTER the markup (and its FEE_REVENUE leg) was booked
+    const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'mon-mkrf' }, { chain: fakeChain(), cc, ...noWait });
+    assert.equal(r.status, 'failed');
+    // The buy banks +markup, the refund reverses −markup; the dashboard counts BOTH, so the displayed markup +
+    // total revenue are unchanged. Pre-fix they'd have risen by the refunded markup (the over-report).
+    const m = await gachaMonitoring(db);
+    assert.equal(m.markupE6, m0.markupE6, 'displayed markup revenue nets the refunded markup');
+    assert.equal(m.revenueE6, m0.revenueE6, 'total revenue nets it too');
+    const pm = m.machines.find((x) => x.code === 'pokemon_50');
+    assert.equal(pm?.revenueE6 ?? '0', pm0?.revenueE6 ?? '0', 'per-machine revenue nets it as well');
+  } finally {
+    await setGachaConfig(db, { markupBps: 0 }); // reset
+  }
+});
+
 test('monitoring: a CAPITALIZED DB rarity is lowercased so the web tiers match (no real pull reads 0%)', async () => {
   const user = await newUser();
   await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'rmix' }, { chain: fakeChain(), cc: fakeCc(), ...noWait });
