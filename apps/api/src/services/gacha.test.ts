@@ -68,6 +68,7 @@ function fakeCc() {
     generateFail: false,
     submitNoSig: false,
     submitThrow: false,
+    submitConf: 'finalized' as string, // submitTransaction confirmationStatus ('confirmed'|'finalized'|'submitted')
     packRefunded: false,
     alwaysWait: false,
     buybackAmount: 40_000_000, // base units ($40)
@@ -75,7 +76,7 @@ function fakeCc() {
     async getMachines() { return { machines: [{ code: 'pokemon_50', name: 'Elite', price: cc.price, instantBuyback: 85, odds: {}, stock: {} }] }; },
     async getNfts() { return { nfts: [] }; },
     async generatePack(_p: unknown) { if (cc.generateFail) throw new Error('generatePack failed'); return { memo: `memo-${randomUUID().slice(0, 8)}`, transaction: 'unsigned' }; },
-    async submitTransaction(_s: string) { cc.submits++; if (cc.submitThrow) throw new Error('simulated submit failure (broadcast-then-timeout)'); return { success: !cc.submitNoSig, signature: cc.submitNoSig ? '' : `paysig-${cc.submits}`, confirmationStatus: 'finalized' }; },
+    async submitTransaction(_s: string) { cc.submits++; if (cc.submitThrow) throw new Error('simulated submit failure (broadcast-then-timeout)'); return { success: !cc.submitNoSig, signature: cc.submitNoSig ? '' : `paysig-${cc.submits}`, confirmationStatus: cc.submitConf }; },
     async openPackReveal(_m: string) { if (cc.alwaysWait) return waiting() as never; return (cc.reveals.length ? cc.reveals.shift() : keptReveal()) as never; },
     async getPackStatus(m: string) { return { memo: m, pack: { refunded: cc.packRefunded }, send: null, buyback: [] }; },
     async buyback(_p: unknown) { return { success: true, serializedTransaction: 'bb', refundAmount: cc.buybackAmount, memo: 'bb' }; },
@@ -755,6 +756,30 @@ test('reconcile-stuck: DAS unavailable (null) → row left untouched, counted sk
   const r = await reconcileStuckPrizes(db, { getAssetInfo: async () => null });
   assert.ok(r.skipped >= 1);
   assert.equal(await statusOf(id), 'selling');
+});
+
+test('sell-back: an UNCONFIRMED ("submitted") buyback defers — no credit, row left selling, then the reconciler settles it', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'sb-unconf' }, { chain: fakeChain(), cc, ...noWait });
+  const row = (await db.query<{ id: string; mint: string }>(`SELECT id, mint FROM gacha_nft_inventory WHERE user_id = $1 ORDER BY acquired_at DESC LIMIT 1`, [user])).rows[0];
+  const before = await collOf(user);
+
+  // CC broadcasts the buyback but reports it only 'submitted' (sent, not yet landed) → must NOT credit now.
+  cc.submitConf = 'submitted';
+  await assert.rejects(
+    sellBack(db, user, row.id, { chain: fakeChain(), cc, ...noWait }),
+    (e: unknown) => (e as { code?: string })?.code === 'buyback_pending',
+  );
+  assert.equal(await collOf(user), before, 'no payout credited on an unconfirmed buyback');
+  assert.equal(await statusOf(row.id), 'selling', 'row left selling (not reverted, not settled) for the reconciler');
+
+  // The reconciler resolves it: DAS shows the NFT left custody (buyback landed) + CC confirms the amount → settle.
+  const reconcileCc = { getPackStatus: async () => ({ memo: 'm', pack: null, send: null, buyback: [{ refund_amount: String(cc.buybackAmount), status: 'complete' }] }) };
+  const r = await reconcileStuckPrizes(db, { graceSec: 0, getAssetInfo: dasFor(row.mint, 'COLLECTORCRYPT'), cc: reconcileCc });
+  assert.equal(r.settledSelling, 1, 'reconciler auto-settled the sold-but-unsettled prize');
+  assert.ok((await collOf(user)) > before, 'reconciler credited the seller');
+  assert.equal(await statusOf(row.id), 'sold');
 });
 
 // ── stock worker: persist CC stock + log restocks (so they survive a closed admin tab) ──

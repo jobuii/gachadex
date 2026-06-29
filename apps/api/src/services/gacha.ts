@@ -556,7 +556,7 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
     return { mint: row.mint, custodyPubkey: row.custody_pubkey };
   });
 
-  let gross: bigint;
+  let gross: bigint | null = null; // stays null when the buyback is broadcast but UNCONFIRMED → defer to the reconciler
   try {
     // On-chain buyback (NFT → CC, USDC → hot via altRecipient), signed by the NFT owner's custody keypair.
     const custody = await getNftCustodyKeypair(db, userId);
@@ -565,7 +565,16 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
     const signed = chain.signTx(quote.serializedTransaction, custody);
     const submit = await cc.submitTransaction(signed);
     if (!submit.success && !submit.signature) throw new HttpError(502, 'buyback submission failed');
-    gross = BigInt(Math.trunc(quote.refundAmount)); // base units CC commits to pay the hot wallet
+    // Settle synchronously ONLY when CC reports the broadcast CONFIRMED. A 'submitted' status (sent, not yet
+    // landed — it may still confirm OR expire) — or anything not confirmed/finalized — means we must NOT credit
+    // yet: paying now risks paying the seller before the USDC reaches the hot wallet, leaving the NFT in custody
+    // marked 'sold' with no recovery (settled rows aren't re-scanned). Leave the row 'selling' (NOT reverted — the
+    // tx may yet land) for reconcileStuckPrizes, which resolves it from the on-chain NFT owner (settle if it left
+    // custody, revert to 'held' if it didn't). Lower-cased to match CC's documented status strings defensively.
+    const confStatus = (submit.confirmationStatus ?? '').toLowerCase();
+    if (confStatus === 'confirmed' || confStatus === 'finalized') {
+      gross = BigInt(Math.trunc(quote.refundAmount)); // base units CC pays the hot wallet
+    }
   } catch (e) {
     // Release the claim (selling → held) so the user can retry — but ONLY if the NFT is CONFIRMED still in
     // custody (the common pre-broadcast failure). If it has LEFT (the rare broadcast-then-timeout: the buyback
@@ -583,6 +592,8 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
     throw e;
   }
 
+  // Unconfirmed buyback → the row stays 'selling' for reconcileStuckPrizes; don't credit the seller yet.
+  if (gross === null) throw new HttpError(409, 'sell-back is processing — your balance will update shortly', 'buyback_pending');
   // Settle the ledger from the committed refund amount — shared with the reconciler's auto-settle, and accrues
   // the affiliate share of the cut inside settleSoldPrize (so live + reconciled sell-backs are consistent).
   return await db.tx((q) => settleSoldPrize(q, prizeId, userId, gross, cutBps));
