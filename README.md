@@ -488,6 +488,25 @@ not a prize-table business. "EV calibration" here means two things:
   - **Operator scripts** (`railway run`, dry-run first): `scripts/sweep-custody-leftovers.ts` (custody→hot sweep,
     the manual backstop to the auto-sweep) and `scripts/backfill-recirculated-nfts.ts` (re-checks each NFT's
     on-chain owner and writes the missing `held` row for a delivered-but-unrecorded NFT).
+  - **Known open issues (CC-API audit, 2026-06-29)** — a doc-vs-code pass ([docs.collectorcrypt.com/gacha/api](https://docs.collectorcrypt.com/gacha/api))
+    surfaced items not yet addressed:
+    - **#7 — sell-back UI overstates the payout (display only; ledger is correct). DEFERRED.** The "Sell back $X"
+      button and the post-sale "+$X added to your balance" show `insured_value × (1 − our cut)`, but CC pays a
+      buyback **percentage** (`instantBuyback`, ~85%) capped at $40k, so the real credit is
+      `min(insured × buyback%, $40k) × (1 − cut)` — e.g. a card shown as $90 credits ~$76.50. The post-sale line
+      is the worst part (a wrong number for a *completed* sale). The API already returns the true `payoutE6`; the
+      web discards it. Web-only fix (use `payoutE6` for the confirmation; apply buyback% + cap to the estimate);
+      reveal + multi-pull summary only (the inventory list shows no quote).
+    - **#8 — operator-disabled machines are still buyable via `POST /gacha/open`. OPEN.** `openPack` doesn't
+      consult `gachaConfig.disabledMachines` (enforced only in the lobby list + admin display), so the
+      default-disabled `pokemon_2500` / `pokemon_5000` / `pokemon_151` packs can be opened by a direct call. Fix:
+      gate `openPack` on the disabled set before charging.
+    - **Secondary.** `insured_value` is read from an undocumented `openPack` attribute with no fallback (verify it's
+      populated in prod, else cards store `$0`); a `'submitted'` payment makes the immediate reveal `404` → a raw
+      error on a *paid* pack (the reconciler heals it); transient `generatePack` errors ("retry shortly", 503)
+      become a terminal refund; CC's `public` / `/api/status` (closed/stopped) flags aren't consulted; the 72h
+      buyback window + $40k cap aren't surfaced pre-sale. (#4 phantom/non-deliverable refund + #5 a crashed
+      instant-sell settling at 5% not 10% were reviewed as defensive / intentional, not defects.)
 
 ---
 
