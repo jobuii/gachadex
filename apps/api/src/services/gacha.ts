@@ -14,6 +14,7 @@ import type { GachaChain } from './custody/gacha-chain.ts';
 import { defaultCcClient, ccVerifyUrl, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
 import { getAssetTransferInfo } from './das.ts';
 import { settleSoldPrize, accrueGachaAffiliateShare, type SellBackResult } from './gacha-settle.ts';
+import { emitPackPullEvent, type PackPullInput } from './chat.ts';
 export type { SellBackResult } from './gacha-settle.ts';
 
 /**
@@ -366,12 +367,15 @@ export async function remediateMisrecordedTurboCommon(
   });
 }
 
+/** A Rare or Epic pull is worth a gold "BIG PACK PULL!" chat bar (case-insensitive vs CC's 'Rare'/'Epic'). */
+const isBigPullRarity = (r: string | null): boolean => r != null && ['rare', 'epic'].includes(r.toLowerCase());
+
 async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promise<OpenResult> {
   const card = extractCard(reveal);
-  return await db.tx(async (q) => {
+  const out = await db.tx<{ result: OpenResult; pull: PackPullInput | null }>(async (q) => {
     const cur = (await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE id = $1 FOR UPDATE`, [openId])).rows[0];
     if (!cur) throw new HttpError(404, 'open not found');
-    if (cur.status !== 'paid') return rowToResult(cur); // already delivered (idempotent)
+    if (cur.status !== 'paid') return { result: rowToResult(cur), pull: null }; // already delivered (idempotent) → don't re-announce
     const marketId = await matchMarket(q, card.name); // best-effort GDEX market for the trade tie-in (often null)
     await q.query(
       `INSERT INTO gacha_nft_inventory(id, user_id, open_id, mint, custody_pubkey, name, grade, set_name, year, image_url, insured_value_e6, market_id, status)
@@ -387,8 +391,22 @@ async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promi
     // markup_e6 = 0 (gold opens / markup knob off).
     const markupE6 = BigInt(cur.markup_e6);
     if (markupE6 > 0n) await accrueGachaAffiliateShare(q, cur.user_id, await getOrCreateSystemAccount(q, 'FEE_REVENUE'), markupE6, openId);
-    return { openId, status: 'opened', verifyUrl: verifyUrlFor(cur.cc_memo), card: { mint: card.mint, name: card.name, grade: card.grade, imageUrl: card.imageUrl, valueE6: card.insuredValueE6, rarity: card.rarity, marketId, year: card.year } };
+    const result: OpenResult = { openId, status: 'opened', verifyUrl: verifyUrlFor(cur.cc_memo), card: { mint: card.mint, name: card.name, grade: card.grade, imageUrl: card.imageUrl, valueE6: card.insuredValueE6, rarity: card.rarity, marketId, year: card.year } };
+    // A Rare/Epic delivery with a known value earns a gold "BIG PACK PULL!" chat bar (broadcast AFTER commit,
+    // below). `paid` is the CC base (pack list price) so the "Nx" reads value-vs-pack-cost; never on a
+    // re-delivery (the early return above). The value>0 guard skips the degenerate "$0.00 · 0.0x" bar if CC
+    // ever omits insured_value (the known data-edge) — better silent than visibly broken.
+    const valueE6 = BigInt(card.insuredValueE6);
+    const pull: PackPullInput | null = isBigPullRarity(card.rarity) && valueE6 > 0n
+      ? { userId: cur.user_id, cardName: card.name, rarity: card.rarity, valueE6, paidE6: BigInt(cur.price_e6) - markupE6, machineCode: cur.machine_code }
+      : null;
+    return { result, pull };
   });
+  // Best-effort AFTER commit — the NFT is already delivered, so a chat failure is swallowed and can never
+  // roll back or fail the delivery. Awaited (two fast local queries) so the bar lands in chat with the
+  // reveal rather than racing behind it.
+  if (out.pull) await emitPackPullEvent(db, out.pull).catch((e) => console.error('[gacha] pack-pull chat emit failed:', e instanceof Error ? e.message : e));
+  return out.result;
 }
 
 // ─────────────────────────────── reconcile / refund ───────────────────────────────
