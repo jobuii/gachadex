@@ -1,13 +1,11 @@
 import { useEffect, useRef } from 'react';
+import { prefersReducedMotion } from './gacha-util.js';
 
 // Hand-rolled particle burst for the Classic Gacha reveal payoff (no dependency). One full-screen <canvas>
-// + requestAnimationFrame, capped well under ~200 particles for 60fps (per canvas-confetti perf guidance).
-// kind='rare' → a confetti puff; kind='epic' → the jackpot: confetti + gold-coin rain + falling TCG cards.
+// + requestAnimationFrame. kind='rare' → confetti + a light coin shower; kind='epic' → the jackpot:
+// dense confetti + gold-coin rain + tumbling TCG cards + two side-cannons that fire inward from the lower
+// corners (peaks ~330 simple shapes for a ~2s one-shot — fine for 60fps; only commons/uncommons render nothing).
 // Renders nothing for reduced-motion or when inactive. The card/coin shapes are drawn (no image loads).
-
-const prefersReducedMotion = () => {
-  try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; }
-};
 
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
@@ -37,7 +35,7 @@ export function RevealFX({ kind, color = '#f59e0b' }) {
     const rnd = (a, b) => a + Math.random() * (b - a);
     const epic = kind === 'epic';
     const confettiColors = ['#f59e0b', '#a855f7', '#22c55e', '#3b82f6', '#ef4444', '#ffffff', color];
-    const counts = epic ? { confetti: 90, coin: 60, card: 22 } : { confetti: 55, coin: 0, card: 0 };
+    const counts = epic ? { confetti: 120, coin: 100, card: 30 } : { confetti: 70, coin: 20, card: 0 };
     const parts = [];
 
     for (let i = 0; i < counts.confetti; i++) parts.push({ // burst from upper-centre, spread + fall
@@ -56,6 +54,18 @@ export function RevealFX({ kind, color = '#f59e0b' }) {
       vx: rnd(-1.5, 1.5) * dpr, vy: rnd(2.5, 6) * dpr, g: 0.1 * dpr,
       w: rnd(26, 40) * dpr, h: rnd(36, 56) * dpr, rot: rnd(0, 6.28), vr: rnd(-0.12, 0.12), life: rnd(160, 260),
     });
+
+    // EPIC only: two confetti cannons fire inward from the lower corners a beat after the jackpot lands.
+    const pushCannon = (xf) => {
+      const dir = xf < 0.5 ? 1 : -1; // left corner shoots right, right corner shoots left
+      for (let i = 0; i < 40; i++) parts.push({
+        type: 'confetti', x: xf * W, y: rnd(0.55, 0.75) * H,
+        vx: dir * rnd(4, 11) * dpr, vy: rnd(-11, -3) * dpr, g: 0.2 * dpr,
+        w: rnd(5, 11) * dpr, h: rnd(8, 16) * dpr, rot: rnd(0, 6.28), vr: rnd(-0.3, 0.3),
+        color: confettiColors[(Math.random() * confettiColors.length) | 0], life: rnd(90, 160),
+      });
+    };
+    const cannonTimer = epic ? setTimeout(() => { pushCannon(0.04); pushCannon(0.96); }, 200) : 0;
 
     let raf = 0;
     let frame = 0;
@@ -91,7 +101,7 @@ export function RevealFX({ kind, color = '#f59e0b' }) {
       if (alive > 0 && frame < 460) { raf = requestAnimationFrame(draw); } else { ctx.clearRect(0, 0, W, H); }
     };
     raf = requestAnimationFrame(draw);
-    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
+    return () => { cancelAnimationFrame(raf); clearTimeout(cannonTimer); window.removeEventListener('resize', resize); };
   }, [kind, color]);
 
   if (!kind || prefersReducedMotion()) return null;

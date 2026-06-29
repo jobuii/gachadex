@@ -364,8 +364,51 @@
   radial-gradient(ellipse 55% 55% at 50% 42%, rgba(245,158,11,0.14), transparent 70%),
   radial-gradient(ellipse 45% 45% at 82% 12%, rgba(168,85,247,0.12), transparent 70%);
 }
-.gacha-reveal-bg::after { content: ''; position: absolute; inset: 0; opacity: 0.05; background-image: radial-gradient(rgba(255,255,255,0.7) 1px, transparent 1px); background-size: 18px 18px; }
 .gacha-fx-canvas { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }
+
+/* Ambient backdrop (RevealAmbient): nebula + light rays + bokeh + motes + a cursor-trail ember canvas. All
+   sit behind the card (the stage is z-6). Intensity ramps with the pulled tier via data-gtier; --rarity is
+   supplied by the component's inline style, --rarity2 is a lightened sibling for the ray fan. */
+.gacha-reveal-env { position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: hidden;
+  --gr-aura: 0.78; --gr-rays: 0.6; --rarity2: color-mix(in srgb, var(--rarity, #f59e0b) 72%, #fff);
+  --gr-cyan: #22D3EE; --gr-pink: #F472B6; --gr-violet: #8B5CF6; }
+.gacha-reveal-env[data-gtier="common"]   { --gr-aura: 0.40; --gr-rays: 0.00; }
+.gacha-reveal-env[data-gtier="uncommon"] { --gr-aura: 0.50; --gr-rays: 0.15; }
+.gacha-reveal-env[data-gtier="rare"]     { --gr-aura: 0.60; --gr-rays: 0.35; }
+.gacha-reveal-env[data-gtier="epic"]     { --gr-aura: 0.85; --gr-rays: 0.70; }
+.gacha-reveal-env > * { position: absolute; inset: 0; }
+.gr-nebula span { position: absolute; inset: 0; mix-blend-mode: screen; filter: blur(38px); opacity: calc(0.5 + 0.4 * var(--gr-aura));
+  background:
+    radial-gradient(38% 30% at 22% 30%, color-mix(in srgb, var(--gr-cyan) 60%, transparent), transparent 70%),
+    radial-gradient(40% 34% at 78% 36%, color-mix(in srgb, var(--gr-pink) 55%, transparent), transparent 70%),
+    radial-gradient(46% 40% at 50% 78%, color-mix(in srgb, var(--gr-violet) 60%, transparent), transparent 72%);
+  animation: gr-drift 16s ease-in-out infinite alternate; }
+.gr-rays { opacity: calc(0.32 + 0.5 * var(--gr-rays)); }
+.gr-ray-glow { position: absolute; inset: 0; mix-blend-mode: screen; filter: blur(20px); opacity: 0.8; animation: gr-breathe 5s ease-in-out infinite;
+  background: radial-gradient(42% 42% at 50% 42%, color-mix(in srgb, var(--rarity, #f59e0b) 55%, transparent), transparent 70%); }
+.gr-ray-fan { position: absolute; inset: 0; mix-blend-mode: screen; filter: blur(2px); animation: gr-spin-slow 60s linear infinite;
+  -webkit-mask-image: radial-gradient(60% 60% at 50% 42%, #000 0%, transparent 72%); mask-image: radial-gradient(60% 60% at 50% 42%, #000 0%, transparent 72%);
+  background: conic-gradient(from 0deg at 50% 42%, transparent 0deg, color-mix(in srgb, var(--rarity) 38%, transparent) 6deg, transparent 12deg, transparent 28deg, color-mix(in srgb, var(--rarity2) 30%, transparent) 33deg, transparent 39deg, transparent 60deg, color-mix(in srgb, var(--rarity) 34%, transparent) 66deg, transparent 72deg, transparent 96deg, color-mix(in srgb, var(--rarity2) 26%, transparent) 102deg, transparent 108deg, transparent 180deg, color-mix(in srgb, var(--rarity) 30%, transparent) 188deg, transparent 196deg, transparent 250deg, color-mix(in srgb, var(--rarity2) 28%, transparent) 258deg, transparent 266deg, transparent 300deg, color-mix(in srgb, var(--rarity) 30%, transparent) 308deg, transparent 316deg, transparent 360deg); }
+.gr-bokeh span { position: absolute; border-radius: 50%; filter: blur(9px); mix-blend-mode: screen; }
+.gr-bokeh .b1 { width: 160px; height: 160px; left: 18%; top: 30%; opacity: 0.7; background: radial-gradient(circle, color-mix(in srgb, var(--rarity) 55%, transparent), transparent 70%); animation: gr-bok1 13s ease-in-out infinite alternate; }
+.gr-bokeh .b2 { width: 110px; height: 110px; left: 70%; top: 24%; opacity: 0.6; background: radial-gradient(circle, color-mix(in srgb, var(--gr-cyan) 55%, transparent), transparent 70%); animation: gr-bok2 16s ease-in-out infinite alternate; }
+.gr-bokeh .b3 { width: 210px; height: 210px; left: 60%; top: 62%; opacity: 0.5; background: radial-gradient(circle, color-mix(in srgb, var(--gr-violet) 50%, transparent), transparent 70%); animation: gr-bok3 19s ease-in-out infinite alternate; }
+.gr-bokeh .b4 { width: 90px; height: 90px; left: 28%; top: 70%; opacity: 0.6; background: radial-gradient(circle, color-mix(in srgb, var(--gr-pink) 50%, transparent), transparent 70%); animation: gr-bok1 17s ease-in-out infinite alternate reverse; }
+.gr-bokeh .b5 { width: 70px; height: 70px; left: 46%; top: 16%; opacity: 0.5; background: radial-gradient(circle, color-mix(in srgb, var(--rarity2) 55%, transparent), transparent 70%); animation: gr-bok2 21s ease-in-out infinite alternate; }
+.gr-trail { width: 100%; height: 100%; }
+.gr-motes { overflow: hidden; opacity: calc(0.4 + 0.6 * var(--gr-rays)); }
+.gr-mote { position: absolute; bottom: -6%; border-radius: 50%; background: color-mix(in srgb, var(--rarity) 80%, #fff 20%); box-shadow: 0 0 8px 1px color-mix(in srgb, var(--rarity) 70%, transparent); animation: gr-rise linear infinite; }
+@keyframes gr-drift { from { transform: translate3d(-2%,-1%,0) scale(1.05); } to { transform: translate3d(3%,2%,0) scale(1.12); } }
+@keyframes gr-breathe { 0%,100% { opacity: 0.7; transform: scale(1); } 50% { opacity: 1; transform: scale(1.06); } }
+@keyframes gr-spin-slow { to { transform: rotate(360deg); } }
+@keyframes gr-bok1 { from { transform: translate(0,0) scale(1); } to { transform: translate(8%,-12%) scale(1.25); } }
+@keyframes gr-bok2 { from { transform: translate(0,0) scale(1); } to { transform: translate(-10%,8%) scale(1.2); } }
+@keyframes gr-bok3 { from { transform: translate(0,0) scale(1); } to { transform: translate(6%,-8%) scale(1.15); } }
+@keyframes gr-rise { from { transform: translateY(0) translateX(0); opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } to { transform: translateY(-118vh) translateX(var(--drift,10px)); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .gr-nebula span, .gr-ray-fan, .gr-ray-glow, .gr-bokeh span { animation: none !important; }
+  .gr-motes, .gr-trail { display: none !important; }
+}
 .gacha-reveal-mute { position: fixed; top: 1rem; right: 1rem; z-index: 10; width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border); background: rgba(20,20,28,0.7); color: var(--text); font-size: 1.05rem; cursor: pointer; }
 /* Sequence-mode (normal multi-open): the Skip-all escape (top-left, opposite the mute) + the per-card progress. */
 .gacha-reveal-skipall { position: fixed; top: 1rem; left: 1rem; z-index: 10; padding: 0.5rem 0.85rem; border-radius: 10px; border: 1px solid var(--border); background: rgba(20,20,28,0.7); color: var(--text); font-size: 0.78rem; font-weight: 700; cursor: pointer; }
@@ -394,18 +437,33 @@
   55%  { opacity: 1; }
   to   { opacity: 1; transform: none; }
 }
-.gacha-card3d { position: relative; width: clamp(180px, 60vw, 248px); aspect-ratio: 5 / 7; transform-style: preserve-3d; transition: transform 0.95s cubic-bezier(0.34,1.4,0.4,1); will-change: transform; }
-.gacha-card3d.flipped { transform: rotateY(180deg); }
-.gacha-card3d.done { animation: gr-float 3.4s ease-in-out infinite; }
+.gacha-card3d { position: relative; width: clamp(240px, 82vw, 300px); aspect-ratio: 5 / 7; transform-style: preserve-3d; transition: transform 0.95s cubic-bezier(0.34,1.4,0.4,1); will-change: transform;
+  --mx: 50%; --my: 50%; --rx: 0deg; --ry: 0deg; }
+/* flipped → front faces the viewer; --rx/--ry add the pointer parallax tilt (rotateX negated past the 180° flip) */
+.gacha-card3d.flipped { transform: rotateY(180deg) rotateX(calc(-1 * var(--ry))) rotateY(var(--rx)); }
+/* once revealed, drop to a snappy transition so the tilt tracks the cursor (the slow 0.95s curve is only for the flip) */
+.gacha-card3d.done { transition: transform 0.18s ease-out; }
 .gacha-card3d-back, .gacha-card3d-front { position: absolute; inset: 0; border-radius: 14px; overflow: hidden; backface-visibility: hidden; border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 14px 32px rgba(0,0,0,0.55); }
 .gacha-card3d-back { background: linear-gradient(160deg, #140a26 0%, #1d0f3a 45%, #0a061f 100%); display: flex; align-items: center; justify-content: center; animation: gr-pulse 2.2s ease-in-out infinite; }
 .gacha-card3d-front { transform: rotateY(180deg); background: #0a0a14; display: flex; align-items: center; justify-content: center; padding: 11px; }
 .gacha-card3d-front img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 5px; }
 .gacha-card3d-noimg { font-size: 3rem; }
+/* pointer-reactive holo foil over the revealed front (Simey-style: shine highlight + holo weave + sparkle field).
+   --mx/--my (the cursor, 0–100%) are inherited from .gacha-card3d; the front's overflow:hidden clips them. */
+.gacha-card3d-shine, .gacha-card3d-holo, .gacha-card3d-sparkle { position: absolute; inset: 0; pointer-events: none; }
+.gacha-card3d-shine { mix-blend-mode: soft-light; opacity: 0.55; background: radial-gradient(circle at var(--mx) var(--my), rgba(255,255,255,0.9), rgba(255,255,255,0.15) 24%, transparent 52%); }
+.gacha-card3d-holo { mix-blend-mode: color-dodge; opacity: 0.6; filter: brightness(1.05) contrast(1.1);
+  background: repeating-linear-gradient(115deg, #ff6b9d33 0%, #ffd16633 8%, #6bff9d33 16%, #6bd1ff33 24%, #b56bff33 32%, #ff6b9d33 40%), radial-gradient(circle at var(--mx) var(--my), rgba(255,255,255,0.5), transparent 45%);
+  background-size: 220% 220%, 100% 100%; background-position: var(--mx) var(--my), center; }
+.gacha-card3d-sparkle { mix-blend-mode: color-dodge; opacity: 0.5; background-image: radial-gradient(rgba(255,255,255,0.9) 14%, transparent 15%); background-size: 7% 7%;
+  -webkit-mask-image: radial-gradient(circle at var(--mx) var(--my), #000 0%, transparent 42%); mask-image: radial-gradient(circle at var(--mx) var(--my), #000 0%, transparent 42%); }
 .gacha-card3d.done .gacha-card3d-front { box-shadow: inset 0 0 0 2px var(--rarity, #8b5cf6), 0 0 30px -2px var(--rarity, #8b5cf6); }
 .gacha-card3d.done-epic .gacha-card3d-front, .gacha-card3d.done-rare .gacha-card3d-front { box-shadow: inset 0 0 0 2px var(--rarity, #f59e0b), 0 0 60px -4px var(--rarity, #f59e0b); }
-/* spinning conic edge on the charging back */
-.gacha-card3d-conic { position: absolute; inset: -50%; pointer-events: none; background: conic-gradient(from 0deg, transparent 0deg 255deg, rgba(245,158,11,0.5) 290deg, rgba(255,255,255,0.9) 318deg, rgba(168,85,247,0.5) 345deg, transparent 360deg); animation: gr-spin 4.5s linear infinite; opacity: 0.6; }
+/* Holo-weave sheen on the charging back: a cyan→pink diagonal band that sweeps across (replaces the old conic spin) */
+.gacha-card3d-conic { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: color-dodge; opacity: 0.5;
+  background: linear-gradient(115deg, transparent 35%, color-mix(in srgb, #22D3EE 60%, transparent) 47%, color-mix(in srgb, #F472B6 60%, transparent) 53%, transparent 66%);
+  background-size: 300% 300%; animation: gr-sheen 4.5s linear infinite; }
+@keyframes gr-sheen { from { background-position: 0% 50%; } to { background-position: 300% 50%; } }
 .gacha-card3d-logo { position: relative; font-size: 3.4rem; font-weight: 900; color: rgba(255,255,255,0.18); }
 .gacha-beat { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 2; }
 .gacha-beat-in { text-align: center; padding: 0 10px; animation: gr-beat-in 0.35s cubic-bezier(0.34,1.5,0.4,1) both; }
@@ -428,11 +486,12 @@
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent;
   filter: drop-shadow(0 0 16px rgba(255,201,60,0.8)) drop-shadow(0 3px 5px rgba(0,0,0,0.55));
   /* slams in hard like a rubber stamp (overrides the gentle pop) + keeps the gold shine sweep */
-  animation: gr-stamp 0.5s cubic-bezier(0.2,0.75,0.3,1) both, gr-gold-shine 2.4s linear infinite;
+  animation: gr-epic-stamp 0.5s cubic-bezier(0.2,0.75,0.3,1) both, gr-gold-shine 2.4s linear infinite;
 }
 @keyframes gr-gold-shine { from { background-position: 250% 0; } to { background-position: -50% 0; } }
-/* the EPIC stamp: huge + tilted + soft → slams down past 1 → settles. Reads as a hard impact. */
-@keyframes gr-stamp {
+/* the EPIC stamp: huge + tilted + soft → slams down past 1 → settles. Reads as a hard impact.
+   (named distinctly so it can't collide with the SOLD-card .gacha-card3d-sold gr-stamp below) */
+@keyframes gr-epic-stamp {
   0% { opacity: 0; transform: scale(2.7) rotate(-7deg); }
   45% { opacity: 1; }
   62% { transform: scale(0.86) rotate(2deg); }
@@ -494,18 +553,16 @@
 .gr-pop-epic::before { content: ''; position: absolute; inset: 0; background: #fff; pointer-events: none; z-index: 8; animation: gr-flash 0.5s ease-out forwards; }
 .gr-pop-epic { animation: gr-shake 0.5s ease-out; }
 
-@keyframes gr-spin { to { transform: rotate(360deg); } }
 @keyframes gr-pulse { 0%, 100% { box-shadow: 0 14px 32px rgba(0,0,0,0.55), 0 0 16px -4px rgba(168,85,247,0.4); } 50% { box-shadow: 0 14px 32px rgba(0,0,0,0.55), 0 0 34px 0 rgba(168,85,247,0.7); } }
 @keyframes gr-beat-in { from { opacity: 0; transform: scale(0.7); } to { opacity: 1; transform: scale(1); } }
 @keyframes gr-tier-pop { 0% { opacity: 0; transform: scale(0.55); } 60% { opacity: 1; transform: scale(1.14); } 100% { opacity: 1; transform: scale(1); } }
-@keyframes gr-float { 0%, 100% { transform: translateY(0) rotateY(180deg) rotate(-1deg); } 50% { transform: translateY(-8px) rotateY(180deg) rotate(1deg); } }
 @keyframes gr-banner-in { from { opacity: 0; transform: translateY(18px) scale(0.8); } to { opacity: 1; transform: none; } }
 @keyframes gr-flash { from { opacity: 0.85; } to { opacity: 0; } }
 @keyframes gr-shake { 0%, 100% { transform: translate(0, 0); } 20% { transform: translate(-6px, 3px); } 40% { transform: translate(5px, -4px); } 60% { transform: translate(-4px, 2px); } 80% { transform: translate(3px, -2px); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .gacha-card3d { transition: opacity 0.3s; }
-  .gacha-card3d.flipped { transform: rotateY(180deg); }
+  .gacha-card3d, .gacha-card3d.done { transition: opacity 0.3s; }
+  .gacha-card3d.flipped { transform: rotateY(180deg); } /* no pointer tilt under reduced motion */
   .gacha-card3d.done, .gacha-card3d-back, .gacha-card3d-conic { animation: none; }
   .gacha-card-enter { animation: none; }
   .gacha-beat-in, .gacha-beat-tier { animation: none; }
