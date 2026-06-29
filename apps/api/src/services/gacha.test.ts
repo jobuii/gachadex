@@ -806,6 +806,29 @@ test('monitoring: a refunded marked-up pack nets its markup back out of the dash
   }
 });
 
+test('monitoring: a refunded gold pack nets its rebate cost back out of the dashboard (gold side of the refund netting)', async () => {
+  await setGachaConfig(db, { goldEnabled: true, payWithGoldEnabled: true });
+  try {
+    const m0 = await gachaMonitoring(db);
+    const pm0 = m0.machines.find((x) => x.code === 'pokemon_50');
+    const user = await newUser();
+    await db.tx(async (q) => earnGold(q, user, 100_000n, 'SEED', {})); // enough for a $50 gold pack
+    const cc = fakeCc();
+    cc.generateFail = true; // pre-payment fail → refund AFTER PACK_BUY_GOLD_FUND drew the rebate from the budget
+    const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'mon-goldrf', payWith: 'gold' }, { chain: fakeChain(), cc, ...noWait });
+    assert.equal(r.status, 'failed');
+    // The buy draws rebate from the budget; the refund returns it; the dashboard now counts BOTH, so the
+    // rebate cost + operator net are unchanged. Pre-fix the rebate cost would have risen by the refunded pack.
+    const m = await gachaMonitoring(db);
+    assert.equal(m.rebateCostE6, m0.rebateCostE6, 'displayed rebate cost nets the refunded gold pack');
+    assert.equal(m.netE6, m0.netE6, 'operator net nets it too');
+    const pm = m.machines.find((x) => x.code === 'pokemon_50');
+    assert.equal(pm?.rebateE6 ?? '0', pm0?.rebateE6 ?? '0', 'per-machine rebate cost nets it as well');
+  } finally {
+    await setGachaConfig(db, { payWithGoldEnabled: false }); // reset
+  }
+});
+
 test('monitoring: a CAPITALIZED DB rarity is lowercased so the web tiers match (no real pull reads 0%)', async () => {
   const user = await newUser();
   await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'rmix' }, { chain: fakeChain(), cc: fakeCc(), ...noWait });
