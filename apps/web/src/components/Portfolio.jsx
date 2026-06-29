@@ -8,6 +8,7 @@ import { PositionHistory } from './PositionHistory';
 import { ReferralPanel } from './ReferralPanel';
 import { GachaInventory } from './games/GachaInventory.jsx';
 import { ProfileBanner } from './ProfileBanner';
+import { GoldVault } from './games/GoldVault.jsx';
 import * as api from '../lib/api.js';
 
 export function Portfolio({ markets, onSelect }) {
@@ -60,7 +61,11 @@ export function Portfolio({ markets, onSelect }) {
 
   return (
     <div className="page portfolio">
-      <ProfileBanner balance={balance} />
+      {/* profile bar (grows to fill) + the loyalty Gold box slotted to its right; the box self-hides when Gold's off → banner reclaims the full width */}
+      <div className="pf-banner-row">
+        <ProfileBanner balance={balance} />
+        <GoldVault />
+      </div>
       <div className="stat-cards">
         <div className="stat-card"><span className="sc-label">Equity</span><span className="sc-val">{stat(v.equityUusdc)}</span></div>
         <div className="stat-card"><span className="sc-label">Available</span><span className="sc-val">{stat(v.availableUusdc)}</span></div>
