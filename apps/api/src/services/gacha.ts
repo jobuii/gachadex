@@ -35,6 +35,7 @@ export type { SellBackResult } from './gacha-settle.ts';
 const GACHA_OFF = () => new HttpError(404, 'classic gacha is not available');
 const MAX_REVEAL_ATTEMPTS = 3;
 const REVEAL_RETRY_MS = 1000; // gap between inline reveal-poll attempts (was 1500) — snappier reveal once CC's webhook lands
+const TURBO_CONFIRM_ATTEMPTS = 3; // #6: in-request polls of CC pack-status to confirm a turbo auto-sell LANDED before crediting (else defer to the reconciler)
 const RECONCILE_GRACE_MS = 90_000;
 const RECONCILE_UNLANDED_MS = 600_000; // 10 min — a payment broadcast still unconfirmed by now provably expired (≫ the ~90s blockhash window); only then refund a stuck buy
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -222,6 +223,16 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
 }
 
 // Reveal + record (retry for CC's payment webhook lag); hand off to the reconciler if still pending.
+/** #6: has CC's turbo auto-sell buyback for this memo actually LANDED on-chain? CC settles buybacks async via
+ *  webhook and the openPack response carries no confirmation, so we verify through pack-status — a buyback row
+ *  reported webhook_confirmed / status 'complete'. Gates the turbo credit (mirror of the manual sell-back fix) so
+ *  we never credit USDC that never reached the hot wallet. A turbo Common has exactly one (auto-sell) buyback. */
+async function turboBuybackLanded(cc: Pick<CcClient, 'getPackStatus'>, memo: string | null): Promise<boolean> {
+  if (!memo) return false;
+  const st = await cc.getPackStatus(memo).catch(() => null);
+  return !!st?.buyback?.some((b) => (b.webhook_confirmed === true || b.status === 'complete') && b.refund_amount != null && Number(b.refund_amount) > 0);
+}
+
 async function deliverOpen(db: Db, openId: string, deps: GachaDeps): Promise<OpenResult> {
   const cc = deps.cc ?? defaultCcClient;
   const sleepFn = deps.sleepMs ?? sleep;
@@ -237,7 +248,17 @@ async function deliverOpen(db: Db, openId: string, deps: GachaDeps): Promise<Ope
     // the turbo cut → turbo_sold. (Normal mode + a turbo NON-Common never carry buybackAmount, so they fall
     // through to the delivery branch — this reorder cannot change their behaviour.)
     if ((reveal.code === 'TURBO_MODE_BUYBACK' || reveal.buybackAmount != null) && Number(reveal.buybackAmount) > 0) {
-      return await settleTurboSold(db, openId, reveal.buybackAmount as number);
+      const buyback = reveal.buybackAmount as number;
+      // #6: NEVER credit a turbo auto-sell until CC confirms the buyback USDC actually landed. The openPack
+      // response carries no confirmation and CC settles buybacks async via webhook, so verify via pack-status.
+      // Poll briefly (the reveal animation covers it); if still unconfirmed, leave the open 'paid' — reconcileOne
+      // re-reveals (CC's idempotent "Already Opened" returns the same buyback) and settles once it confirms,
+      // exactly like a WAITING reveal. Mirrors the manual sell-back fix: never credit an unconfirmed transfer.
+      for (let c = 0; c < TURBO_CONFIRM_ATTEMPTS; c++) {
+        if (await turboBuybackLanded(cc, row.cc_memo)) return await settleTurboSold(db, openId, buyback);
+        if (c < TURBO_CONFIRM_ATTEMPTS - 1) await sleepFn(REVEAL_RETRY_MS);
+      }
+      return rowToResult(row); // unconfirmed → stays 'paid' for the reconciler to settle once CC confirms
     }
     if (reveal.nft_address) {
       // A re-circulated mint (a prior holder sold it back → its row is 'sold') is a legit re-roll — deliver it.

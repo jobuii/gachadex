@@ -71,6 +71,7 @@ function fakeCc() {
     submitConf: 'finalized' as string, // submitTransaction confirmationStatus ('confirmed'|'finalized'|'submitted')
     packRefunded: false,
     packStatus: undefined as string | undefined, // getPackStatus pack.status ('confirmed' = the payment landed)
+    turboBuybackConfirmed: true, // getPackStatus reports the turbo auto-sell buyback as webhook-confirmed (set false to test the #6 defer)
     alwaysWait: false,
     buybackAmount: 40_000_000, // base units ($40)
     submits: 0,
@@ -79,7 +80,7 @@ function fakeCc() {
     async generatePack(_p: unknown) { if (cc.generateFail) throw new Error('generatePack failed'); return { memo: `memo-${randomUUID().slice(0, 8)}`, transaction: 'unsigned' }; },
     async submitTransaction(_s: string) { cc.submits++; if (cc.submitThrow) throw new Error('simulated submit failure (broadcast-then-timeout)'); return { success: !cc.submitNoSig, signature: cc.submitNoSig ? '' : `paysig-${cc.submits}`, confirmationStatus: cc.submitConf }; },
     async openPackReveal(_m: string) { if (cc.alwaysWait) return waiting() as never; return (cc.reveals.length ? cc.reveals.shift() : keptReveal()) as never; },
-    async getPackStatus(m: string) { return { memo: m, pack: { refunded: cc.packRefunded, status: cc.packStatus }, send: null, buyback: [] }; },
+    async getPackStatus(m: string) { return { memo: m, pack: { refunded: cc.packRefunded, status: cc.packStatus }, send: null, buyback: cc.turboBuybackConfirmed ? [{ refund_amount: String(cc.buybackAmount), status: 'complete', webhook_confirmed: true }] : [] }; },
     async buyback(_p: unknown) { return { success: true, serializedTransaction: 'bb', refundAmount: cc.buybackAmount, memo: 'bb' }; },
     async buybackAvailable() { return { available: cc.buybackAmount > 0, amount: cc.buybackAmount }; },
   };
@@ -332,6 +333,26 @@ test('open: YOLO/turbo — a Common buyback that ALSO carries nft_address still 
   assert.ok(genParams.altFundsRecipient, 'turbo routes the auto-sell USDC via altFundsRecipient');
   const inv = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM gacha_nft_inventory WHERE mint = 'MintTurbo1'`);
   assert.equal(inv.rows[0].n, 0); // the common was NOT mis-recorded as a held NFT
+});
+
+test('open: YOLO/turbo — an UNCONFIRMED auto-sell is NOT credited; left paid until the reconciler confirms it (#6)', async () => {
+  const user = await newUser();
+  const before = await collOf(user);
+  const cc = fakeCc();
+  const turboReveal = { success: true, code: 'TURBO_MODE_BUYBACK', buybackAmount: 30_000_000 }; // auto-sold $30
+  cc.reveals = [{ ...turboReveal }];
+  cc.turboBuybackConfirmed = false; // CC hasn't confirmed the auto-sell USDC landed yet
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'yolo-unconf', turbo: true }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(r.status, 'paid'); // NOT credited on an unconfirmed buyback — deferred
+  assert.equal(await collOf(user), before - PRICE); // debited the pack, NOT credited the $27
+
+  // the reconciler settles it once CC confirms the buyback landed (re-reveal returns CC's same turbo response)
+  cc.turboBuybackConfirmed = true;
+  cc.reveals = [{ ...turboReveal }];
+  const rec = await reconcilePending(db, user, { chain: fakeChain(), cc, now: () => Date.now() + 120_000, ...noWait });
+  assert.equal(rec.recovered, 1);
+  assert.equal((await db.query<{ s: string }>(`SELECT status s FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0].s, 'turbo_sold');
+  assert.equal(await collOf(user), before - PRICE + 27_000_000n); // now credited 90% of $30
 });
 
 test('open: normal (non-turbo) delivery is unchanged — no altFundsRecipient, card still recorded as held', async () => {
