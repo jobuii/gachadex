@@ -11,15 +11,16 @@ const tierColor = (r) => RARITY_COLORS[(r || '').toLowerCase()] ?? '#9aa0aa';
 
 export function GachaSummary({ results, spentE6, onSell, onClose, instantCutBps = 1000 }) {
   const [sold, setSold] = useState({}); // mint → true
+  const [pending, setPending] = useState({}); // mint → true (sell-back broadcast but unconfirmed — reconciler settles it)
   const [selected, setSelected] = useState({}); // mint → true
   const [busy, setBusy] = useState(false);
 
   const netE6 = (v) => netAfterCutE6(v, instantCutBps); // USDC the player nets selling this slab back now
 
-  const isSellable = (r) => r.card?.mint && Number(r.card.valueE6) > 0 && !sold[r.card.mint];
+  const isSellable = (r) => r.card?.mint && Number(r.card.valueE6) > 0 && !sold[r.card.mint] && !pending[r.card.mint];
   const sellable = results.filter(isSellable);
   const oneSellable = sellable.length === 1; // single-card summary (a YOLO Uncommon) → "Sell"/"Keep", not "…All (1)"
-  const anySold = Object.keys(sold).length > 0; // once anything's been sold, "Keep All" no longer applies → "Done"
+  const anySold = Object.keys(sold).length > 0 || Object.keys(pending).length > 0; // once anything's been sold/selling, "Keep All" no longer applies → "Done"
   const selectedRows = sellable.filter((r) => selected[r.card.mint]);
   const selectedPayout = selectedRows.reduce((s, r) => s + netE6(r.card.valueE6), 0n);
 
@@ -27,14 +28,16 @@ export function GachaSummary({ results, spentE6, onSell, onClose, instantCutBps 
   const spent = Number(spentE6 || 0) * results.length;
   const net = value - spent;
 
-  const toggle = (mint) => { if (busy || sold[mint]) return; setSelected((s) => ({ ...s, [mint]: !s[mint] })); };
+  const toggle = (mint) => { if (busy || sold[mint] || pending[mint]) return; setSelected((s) => ({ ...s, [mint]: !s[mint] })); };
 
   const sellRows = async (rows) => {
     if (busy || rows.length === 0) return;
     setBusy(true);
     for (const r of rows) {
       const ok = await onSell(r.card.mint); // sequential: each sell-back is its own settlement
-      if (ok) setSold((s) => ({ ...s, [r.card.mint]: true }));
+      // 'pending' = broadcast but unconfirmed → show "Selling…", not "Sold ✓" (the reconciler settles it shortly).
+      if (ok === 'pending') setPending((p) => ({ ...p, [r.card.mint]: true }));
+      else if (ok) setSold((s) => ({ ...s, [r.card.mint]: true }));
     }
     setSelected({});
     setBusy(false);
@@ -69,6 +72,7 @@ export function GachaSummary({ results, spentE6, onSell, onClose, instantCutBps 
                     <span className="gacha-summary-name" title={r.card.name ?? ''}>{r.card.name ?? 'card'}</span>
                     <span className="gacha-summary-val" style={{ color: tierColor(r.card.rarity) }}>{usd(r.card.valueE6)}</span>
                     {sold[r.card.mint] && <span className="gacha-summary-sold">Sold ✓</span>}
+                    {pending[r.card.mint] && !sold[r.card.mint] && <span className="gacha-summary-sold" style={{ color: 'var(--gold)' }}>⏳ Selling…</span>}
                   </>
                 ) : r.status === 'turbo_sold' ? (
                   <div className="gacha-summary-msg"><span>⚡ Auto-sold</span><strong className="up">+{usd(r.turboRefundE6)}</strong></div>

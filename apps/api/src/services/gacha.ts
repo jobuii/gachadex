@@ -35,7 +35,9 @@ export type { SellBackResult } from './gacha-settle.ts';
 const GACHA_OFF = () => new HttpError(404, 'classic gacha is not available');
 const MAX_REVEAL_ATTEMPTS = 3;
 const REVEAL_RETRY_MS = 1000; // gap between inline reveal-poll attempts (was 1500) — snappier reveal once CC's webhook lands
+const TURBO_CONFIRM_ATTEMPTS = 3; // #6: in-request polls of CC pack-status to confirm a turbo auto-sell LANDED before crediting (else defer to the reconciler)
 const RECONCILE_GRACE_MS = 90_000;
+const RECONCILE_UNLANDED_MS = 600_000; // 10 min — a payment broadcast still unconfirmed by now provably expired (≫ the ~90s blockhash window); only then refund a stuck buy
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export interface GachaDeps {
@@ -50,14 +52,14 @@ export interface GachaCard { mint: string; name: string | null; grade: string | 
 export interface OpenResult { openId: string; status: string; card: GachaCard | null; verifyUrl: string | null; turboRefundE6?: string | null; duplicate?: boolean }
 
 interface OpenRow {
-  id: string; user_id: string; machine_code: string; price_e6: string; paid_with: string; cc_memo: string | null;
+  id: string; user_id: string; machine_code: string; price_e6: string; markup_e6: string; paid_with: string; cc_memo: string | null;
   payment_sig: string | null; payment_attempted_at: string | null; custody_pubkey: string | null; status: string;
   nft_mint: string | null; nft_name: string | null; nft_image: string | null; grade: string | null;
   insured_value_e6: string | null; rarity: string | null; nft_market_id: string | null; nft_year: string | null; turbo_refund_e6: string | null; created_at: string;
 }
 
 const OPEN_COLS =
-  `id, user_id, machine_code, price_e6::text AS price_e6, paid_with, cc_memo, payment_sig, payment_attempted_at::text AS payment_attempted_at, custody_pubkey, status,
+  `id, user_id, machine_code, price_e6::text AS price_e6, markup_e6::text AS markup_e6, paid_with, cc_memo, payment_sig, payment_attempted_at::text AS payment_attempted_at, custody_pubkey, status,
    nft_mint, nft_name, nft_image, grade, insured_value_e6::text AS insured_value_e6, rarity, nft_market_id, nft_year, turbo_refund_e6::text AS turbo_refund_e6, created_at::text AS created_at`;
 
 /** CC's provably-fair verify link for an open, or null before a memo exists. */
@@ -129,6 +131,9 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
 
   const machine = (await cc.getMachines()).machines?.find((m) => m.code === opts.machineCode);
   if (!machine) throw new HttpError(404, 'unknown machine');
+  // #8: an operator-disabled machine must NOT be buyable. The lobby only HIDES disabled codes (routes/gacha.ts),
+  // so without this guard a direct /gacha/open with a disabled code (the default-off $2.5k/$5k packs) still buys.
+  if (gachaConfig.disabledMachines.get().includes(opts.machineCode)) throw new HttpError(403, 'machine unavailable', 'machine_disabled');
   const price = usdc(machine.price); // $ → micro-USDC (CC's base price — what we pay CC on-chain)
   if (price <= 0n) throw new HttpError(503, 'machine price unavailable');
   // Gold spend gates: the master switch + the pay-with-Gold toggle, with a free-pack-claim exception — the $25
@@ -152,9 +157,9 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
   const anchor = await db.tx(async (q) => {
     const id = randomUUID();
     const ins = await q.query<{ id: string }>(
-      `INSERT INTO gacha_pack_opens(id, user_id, idempotency_key, machine_code, price_e6, custody_pubkey, paid_with, turbo, status)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,'pending') ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id`,
-      [id, userId, opts.idempotencyKey, opts.machineCode, (payWith === 'usdc' ? allIn : price).toString(), custodyPubkey, payWith, turbo],
+      `INSERT INTO gacha_pack_opens(id, user_id, idempotency_key, machine_code, price_e6, markup_e6, custody_pubkey, paid_with, turbo, status)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending') ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id`,
+      [id, userId, opts.idempotencyKey, opts.machineCode, (payWith === 'usdc' ? allIn : price).toString(), (payWith === 'usdc' ? markup : 0n).toString(), custodyPubkey, payWith, turbo],
     );
     if (!ins.rows[0]) {
       const ex = await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE user_id = $1 AND idempotency_key = $2`, [userId, opts.idempotencyKey]);
@@ -181,7 +186,8 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
       const feeAcc = markup > 0n ? await getOrCreateSystemAccount(q, 'FEE_REVENUE') : null;
       if (feeAcc) entries.push({ accountId: feeAcc, amount: markup });
       await postTxn(q, { reason: 'GACHA_PACK_BUY', refType: 'gacha_open', refId: id, entries });
-      if (feeAcc) await accrueGachaAffiliateShare(q, userId, feeAcc, markup, id); // affiliate share of the pack markup
+      // NB: the affiliate's share of the markup is NOT paid here — it accrues at COMPLETION (delivery or turbo
+      // auto-sell), so a refunded/undelivered buy pays no commission on a non-sale. See recordReveal/settleTurboSold.
       // Loyalty earn — only on paid (USDC) opens (spec §6b); floored, derived from the admin threshold knob.
       await earnGold(q, userId, goldEarnedForOpen(price, gachaConfig.freePackThresholdUsd.get()), 'PACK_OPEN_EARN', { refType: 'gacha_open', refId: id });
     }
@@ -221,6 +227,16 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
 }
 
 // Reveal + record (retry for CC's payment webhook lag); hand off to the reconciler if still pending.
+/** #6: has CC's turbo auto-sell buyback for this memo actually LANDED on-chain? CC settles buybacks async via
+ *  webhook and the openPack response carries no confirmation, so we verify through pack-status — a buyback row
+ *  reported webhook_confirmed / status 'complete'. Gates the turbo credit (mirror of the manual sell-back fix) so
+ *  we never credit USDC that never reached the hot wallet. A turbo Common has exactly one (auto-sell) buyback. */
+async function turboBuybackLanded(cc: Pick<CcClient, 'getPackStatus'>, memo: string | null): Promise<boolean> {
+  if (!memo) return false;
+  const st = await cc.getPackStatus(memo).catch(() => null);
+  return !!st?.buyback?.some((b) => (b.webhook_confirmed === true || b.status === 'complete') && b.refund_amount != null && Number(b.refund_amount) > 0);
+}
+
 async function deliverOpen(db: Db, openId: string, deps: GachaDeps): Promise<OpenResult> {
   const cc = deps.cc ?? defaultCcClient;
   const sleepFn = deps.sleepMs ?? sleep;
@@ -236,7 +252,17 @@ async function deliverOpen(db: Db, openId: string, deps: GachaDeps): Promise<Ope
     // the turbo cut → turbo_sold. (Normal mode + a turbo NON-Common never carry buybackAmount, so they fall
     // through to the delivery branch — this reorder cannot change their behaviour.)
     if ((reveal.code === 'TURBO_MODE_BUYBACK' || reveal.buybackAmount != null) && Number(reveal.buybackAmount) > 0) {
-      return await settleTurboSold(db, openId, reveal.buybackAmount as number);
+      const buyback = reveal.buybackAmount as number;
+      // #6: NEVER credit a turbo auto-sell until CC confirms the buyback USDC actually landed. The openPack
+      // response carries no confirmation and CC settles buybacks async via webhook, so verify via pack-status.
+      // Poll briefly (the reveal animation covers it); if still unconfirmed, leave the open 'paid' — reconcileOne
+      // re-reveals (CC's idempotent "Already Opened" returns the same buyback) and settles once it confirms,
+      // exactly like a WAITING reveal. Mirrors the manual sell-back fix: never credit an unconfirmed transfer.
+      for (let c = 0; c < TURBO_CONFIRM_ATTEMPTS; c++) {
+        if (await turboBuybackLanded(cc, row.cc_memo)) return await settleTurboSold(db, openId, buyback);
+        if (c < TURBO_CONFIRM_ATTEMPTS - 1) await sleepFn(REVEAL_RETRY_MS);
+      }
+      return rowToResult(row); // unconfirmed → stays 'paid' for the reconciler to settle once CC confirms
     }
     if (reveal.nft_address) {
       // A re-circulated mint (a prior holder sold it back → its row is 'sold') is a legit re-roll — deliver it.
@@ -281,6 +307,10 @@ async function settleTurboSold(db: Db, openId: string, buybackAmount: number): P
       entries: [{ accountId: coll, amount: payout }, { accountId: fee, amount: cut }, { accountId: treasury, amount: -gross }],
     });
     await accrueGachaAffiliateShare(q, row.user_id, fee, cut, openId); // affiliate share of the turbo sell-back cut
+    // + the buy-markup share — a turbo auto-sell is a completed sale, so the affiliate earns on the markup here too
+    // (not at buy, so a refunded/undelivered buy pays nothing). No-op when markup_e6 = 0.
+    const markupE6 = BigInt(row.markup_e6);
+    if (markupE6 > 0n) await accrueGachaAffiliateShare(q, row.user_id, fee, markupE6, openId);
     await q.query(`UPDATE gacha_pack_opens SET status = 'turbo_sold', turbo_refund_e6 = $2, settled_at = now() WHERE id = $1`, [openId, payout.toString()]);
     return { openId, status: 'turbo_sold', verifyUrl: verifyUrlFor(row.cc_memo), card: null, turboRefundE6: payout.toString() };
   });
@@ -352,6 +382,11 @@ async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promi
       `UPDATE gacha_pack_opens SET status='opened', nft_mint=$2, nft_name=$3, nft_image=$4, grade=$5, insured_value_e6=$6, rarity=$7, nft_market_id=$8, nft_year=$9, opened_at=now() WHERE id=$1`,
       [openId, card.mint, card.name, card.imageUrl, card.grade, card.insuredValueE6, card.rarity, marketId, card.year],
     );
+    // Affiliate markup share — paid NOW that the pack is delivered (a completed sale), not at buy. A refunded/
+    // undelivered open never reaches here, so no commission on a non-sale + nothing to claw back. No-op when
+    // markup_e6 = 0 (gold opens / markup knob off).
+    const markupE6 = BigInt(cur.markup_e6);
+    if (markupE6 > 0n) await accrueGachaAffiliateShare(q, cur.user_id, await getOrCreateSystemAccount(q, 'FEE_REVENUE'), markupE6, openId);
     return { openId, status: 'opened', verifyUrl: verifyUrlFor(cur.cc_memo), card: { mint: card.mint, name: card.name, grade: card.grade, imageUrl: card.imageUrl, valueE6: card.insuredValueE6, rarity: card.rarity, marketId, year: card.year } };
   });
 }
@@ -363,7 +398,8 @@ async function reconcileOne(db: Db, openId: string, deps: GachaDeps): Promise<Op
   const row = await getOpenRow(db, openId);
   if (!row) throw new HttpError(404, 'open not found');
   if (row.status !== 'paid') return rowToResult(row);
-  const aged = nowMs - new Date(row.created_at).getTime() >= RECONCILE_GRACE_MS;
+  const ageMs = nowMs - new Date(row.created_at).getTime();
+  const aged = ageMs >= RECONCILE_GRACE_MS;
 
   // Never reached the CC payment (no attempt marker, no sig): a sold-out generatePack, or a pre-submit fund/sign
   // failure that stored a memo but never paid → no money reached CC → refund. Aged-guarded so the async sweep
@@ -381,8 +417,18 @@ async function reconcileOne(db: Db, openId: string, deps: GachaDeps): Promise<Op
       try {
         const st = await cc.getPackStatus(row.cc_memo);
         if (st.pack?.refunded) return await settleRefund(db, openId, 'refunded');
+        // Never-landed payment: well past the blockhash window CC STILL reports no confirmed purchase for this memo.
+        // The per-memo `status !== 'confirmed'` check is the real guard against refunding a payment that landed; the
+        // custody-balance check is a backstop (the custody is per-USER, so its funds may belong to another open). The
+        // broadcast expired without paying CC → refund the buyer. Once this open leaves 'paid', autoSweepCustodyLeftovers
+        // reclaims the funding (it skips users with a live 'paid' open).
+        const unlanded = ageMs >= RECONCILE_UNLANDED_MS;
+        if (unlanded && st.pack?.status !== 'confirmed' && row.custody_pubkey) {
+          const bal = (await deps.chain.custodyUsdcBalances([row.custody_pubkey]))[row.custody_pubkey] ?? 0n;
+          if (bal > 0n) return await settleRefund(db, openId, 'failed');
+        }
       } catch {
-        /* CC unreachable — leave 'paid', try again later */
+        /* CC or chain RPC unreachable, or the refund tx failed — leave 'paid', retry next pass */
       }
     }
   }
@@ -406,11 +452,17 @@ async function settleRefund(db: Db, openId: string, finalStatus: 'refunded' | 'f
         entries: [{ accountId: budget, amount: price }, { accountId: treasury, amount: -price }],
       });
     } else {
+      // Reverse the buy EXACTLY. The buyer paid `price` (= allIn); the GACHA_PACK_BUY split it: the CC base
+      // (price − markup) → TREASURY, and any GDEX markup → FEE_REVENUE. So refund the full allIn to the buyer but
+      // pull ONLY the CC base back from TREASURY and reverse the markup out of FEE_REVENUE — otherwise the markup
+      // would sit in FEE_REVENUE unbacked while TREASURY over-drained, a proof-of-reserves leak. There is no
+      // affiliate share to reverse: the markup commission accrues only at COMPLETION (delivery/turbo), which a
+      // refund precedes, so FEE_REVENUE nets exactly to zero here. markup is 0 unless the knob is on → no-op then.
+      const markup = BigInt(row.markup_e6);
       const coll = await getOrCreateUserAccount(q, row.user_id, 'USER_COLLATERAL');
-      await postTxn(q, {
-        reason: 'GACHA_REFUND', refType: 'gacha_open', refId: openId,
-        entries: [{ accountId: coll, amount: price }, { accountId: treasury, amount: -price }],
-      });
+      const entries = [{ accountId: coll, amount: price }, { accountId: treasury, amount: -(price - markup) }];
+      if (markup > 0n) entries.push({ accountId: await getOrCreateSystemAccount(q, 'FEE_REVENUE'), amount: -markup });
+      await postTxn(q, { reason: 'GACHA_REFUND', refType: 'gacha_open', refId: openId, entries });
       // Gold is earned at payment (PACK_OPEN_EARN); a refunded open earned nothing, so claw the Gold back too.
       await reverseEarnedGold(q, row.user_id, openId);
     }
@@ -556,7 +608,7 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
     return { mint: row.mint, custodyPubkey: row.custody_pubkey };
   });
 
-  let gross: bigint;
+  let gross: bigint | null = null; // stays null when the buyback is broadcast but UNCONFIRMED → defer to the reconciler
   try {
     // On-chain buyback (NFT → CC, USDC → hot via altRecipient), signed by the NFT owner's custody keypair.
     const custody = await getNftCustodyKeypair(db, userId);
@@ -565,7 +617,16 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
     const signed = chain.signTx(quote.serializedTransaction, custody);
     const submit = await cc.submitTransaction(signed);
     if (!submit.success && !submit.signature) throw new HttpError(502, 'buyback submission failed');
-    gross = BigInt(Math.trunc(quote.refundAmount)); // base units CC commits to pay the hot wallet
+    // Settle synchronously ONLY when CC reports the broadcast CONFIRMED. A 'submitted' status (sent, not yet
+    // landed — it may still confirm OR expire) — or anything not confirmed/finalized — means we must NOT credit
+    // yet: paying now risks paying the seller before the USDC reaches the hot wallet, leaving the NFT in custody
+    // marked 'sold' with no recovery (settled rows aren't re-scanned). Leave the row 'selling' (NOT reverted — the
+    // tx may yet land) for reconcileStuckPrizes, which resolves it from the on-chain NFT owner (settle if it left
+    // custody, revert to 'held' if it didn't). Lower-cased to match CC's documented status strings defensively.
+    const confStatus = (submit.confirmationStatus ?? '').toLowerCase();
+    if (confStatus === 'confirmed' || confStatus === 'finalized') {
+      gross = BigInt(Math.trunc(quote.refundAmount)); // base units CC pays the hot wallet
+    }
   } catch (e) {
     // Release the claim (selling → held) so the user can retry — but ONLY if the NFT is CONFIRMED still in
     // custody (the common pre-broadcast failure). If it has LEFT (the rare broadcast-then-timeout: the buyback
@@ -583,6 +644,8 @@ export async function sellBack(db: Db, userId: string, prizeId: string, deps: Ga
     throw e;
   }
 
+  // Unconfirmed buyback → the row stays 'selling' for reconcileStuckPrizes; don't credit the seller yet.
+  if (gross === null) throw new HttpError(409, 'sell-back is processing — your balance will update shortly', 'buyback_pending');
   // Settle the ledger from the committed refund amount — shared with the reconciler's auto-settle, and accrues
   // the affiliate share of the cut inside settleSoldPrize (so live + reconciled sell-backs are consistent).
   return await db.tx((q) => settleSoldPrize(q, prizeId, userId, gross, cutBps));

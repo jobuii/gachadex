@@ -803,6 +803,7 @@ CREATE TABLE IF NOT EXISTS gacha_pack_opens (
   settled_at       TIMESTAMPTZ
 );
 ALTER TABLE IF EXISTS gacha_pack_opens ADD COLUMN IF NOT EXISTS payment_attempted_at TIMESTAMPTZ; -- additive: pre-submit "no money reached CC" marker (existing DBs)
+ALTER TABLE IF EXISTS gacha_pack_opens ADD COLUMN IF NOT EXISTS markup_e6 BIGINT NOT NULL DEFAULT 0; -- additive: GDEX markup booked to FEE_REVENUE at buy, so a refund can reverse it (0 = no markup)
 CREATE UNIQUE INDEX IF NOT EXISTS uq_gacha_opens_user_idem ON gacha_pack_opens(user_id, idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_gacha_opens_user ON gacha_pack_opens(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_gacha_opens_paid ON gacha_pack_opens(status) WHERE status = 'paid'; -- reconciler scan

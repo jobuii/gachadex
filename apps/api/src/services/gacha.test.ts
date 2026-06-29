@@ -68,16 +68,19 @@ function fakeCc() {
     generateFail: false,
     submitNoSig: false,
     submitThrow: false,
+    submitConf: 'finalized' as string, // submitTransaction confirmationStatus ('confirmed'|'finalized'|'submitted')
     packRefunded: false,
+    packStatus: undefined as string | undefined, // getPackStatus pack.status ('confirmed' = the payment landed)
+    turboBuybackConfirmed: true, // getPackStatus reports the turbo auto-sell buyback as webhook-confirmed (set false to test the #6 defer)
     alwaysWait: false,
     buybackAmount: 40_000_000, // base units ($40)
     submits: 0,
     async getMachines() { return { machines: [{ code: 'pokemon_50', name: 'Elite', price: cc.price, instantBuyback: 85, odds: {}, stock: {} }] }; },
     async getNfts() { return { nfts: [] }; },
     async generatePack(_p: unknown) { if (cc.generateFail) throw new Error('generatePack failed'); return { memo: `memo-${randomUUID().slice(0, 8)}`, transaction: 'unsigned' }; },
-    async submitTransaction(_s: string) { cc.submits++; if (cc.submitThrow) throw new Error('simulated submit failure (broadcast-then-timeout)'); return { success: !cc.submitNoSig, signature: cc.submitNoSig ? '' : `paysig-${cc.submits}`, confirmationStatus: 'finalized' }; },
+    async submitTransaction(_s: string) { cc.submits++; if (cc.submitThrow) throw new Error('simulated submit failure (broadcast-then-timeout)'); return { success: !cc.submitNoSig, signature: cc.submitNoSig ? '' : `paysig-${cc.submits}`, confirmationStatus: cc.submitConf }; },
     async openPackReveal(_m: string) { if (cc.alwaysWait) return waiting() as never; return (cc.reveals.length ? cc.reveals.shift() : keptReveal()) as never; },
-    async getPackStatus(m: string) { return { memo: m, pack: { refunded: cc.packRefunded }, send: null, buyback: [] }; },
+    async getPackStatus(m: string) { return { memo: m, pack: { refunded: cc.packRefunded, status: cc.packStatus }, send: null, buyback: cc.turboBuybackConfirmed ? [{ refund_amount: String(cc.buybackAmount), status: 'complete', webhook_confirmed: true }] : [] }; },
     async buyback(_p: unknown) { return { success: true, serializedTransaction: 'bb', refundAmount: cc.buybackAmount, memo: 'bb' }; },
     async buybackAvailable() { return { available: cc.buybackAmount > 0, amount: cc.buybackAmount }; },
   };
@@ -182,6 +185,24 @@ test('open: a sold-out machine (generatePack fails) refunds IMMEDIATELY — no 9
   assert.equal(cc.submits, 0); // never submitted a payment to CC
 });
 
+test('open: an operator-disabled machine is rejected on the BUY path (not just hidden), no charge (#8)', async () => {
+  const user = await newUser();
+  const before = await collOf(user);
+  await setGachaConfig(db, { disabledMachines: ['pokemon_50'] }); // operator disables the machine
+  try {
+    const cc = fakeCc();
+    await assert.rejects(
+      openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'disabled' }, { chain: fakeChain(), cc, ...noWait }),
+      (e: unknown) => (e as { code?: string })?.code === 'machine_disabled',
+    );
+    assert.equal(await collOf(user), before, 'no charge for a disabled machine');
+    assert.equal(cc.submits, 0, 'never paid CC');
+    assert.equal((await db.query<{ n: number }>(`SELECT count(*)::int n FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0].n, 0, 'no open row created');
+  } finally {
+    await setGachaConfig(db, { disabledMachines: [] }); // reset
+  }
+});
+
 test('open: a pre-submit fund/sign failure (memo stored, no payment) refunds immediately', async () => {
   const user = await newUser();
   const before = await collOf(user);
@@ -216,6 +237,48 @@ test('open: a submit that may have broadcast (marker set) is NOT auto-refunded �
   const rec = await reconcilePending(db, user, { chain: fakeChain(), cc, now: future, ...noWait });
   assert.equal(rec.recovered, 1);
   assert.equal(await collOf(user), before); // now made whole, on CC's confirmation
+});
+
+test('open: a never-landed payment is refunded after the hard window + funding becomes recoverable (bug #2)', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  cc.alwaysWait = true; // CC never confirms a reveal → the open stays 'paid' (payment unconfirmed)
+  const before = await collOf(user);
+  const chain = fakeChain();
+  const r0 = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'unlanded' }, { chain, cc, ...noWait });
+  assert.equal(r0.status, 'paid'); // charged, no card — stuck 'paid'
+  assert.equal(await collOf(user), before - PRICE); // debited
+  const open = (await db.query<{ custody_pubkey: string }>(`SELECT custody_pubkey FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0];
+  const statusNow = async () => (await db.query<{ s: string }>(`SELECT status s FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0].s;
+  chain.custodyBalances[open.custody_pubkey] = PRICE; // the price never left the custody — the payment never executed
+
+  // INSIDE the hard window: stays conservative (NOT refunded) even though CC has no confirmed purchase.
+  await reconcileAllPending(db, { chain, cc, now: () => Date.now() + 120_000, ...noWait }); // >90s grace, <10min window
+  assert.equal(await statusNow(), 'paid', 'not refunded inside the hard window');
+  assert.equal(await collOf(user), before - PRICE);
+
+  // PAST the hard window: CC still reports no confirmed purchase + the funding is still in custody → refund.
+  await reconcileAllPending(db, { chain, cc, now: () => Date.now() + 11 * 60_000, ...noWait });
+  assert.equal(await statusNow(), 'failed', 'refunded once the payment provably expired');
+  assert.equal(await collOf(user), before, 'buyer made whole');
+
+  // and the open is no longer 'paid' → autoSweepCustodyLeftovers can now reclaim the stranded funding (was blocked).
+  const { custodies } = await scanCustodyLeftovers(db, { chain, cc, ...noWait });
+  assert.ok(custodies.some((x) => x.custodyPubkey === open.custody_pubkey), 'stranded custody funding now recoverable');
+});
+
+test('open: a LANDED payment (CC status=confirmed) is NEVER refunded, even past the hard window with funds in custody', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  cc.alwaysWait = true; // reveal not delivered yet, but...
+  cc.packStatus = 'confirmed'; // ...CC confirms the purchase LANDED → the money is at CC awaiting delivery, not lost
+  const chain = fakeChain();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'landed' }, { chain, cc, ...noWait });
+  const open = (await db.query<{ custody_pubkey: string }>(`SELECT custody_pubkey FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0];
+  chain.custodyBalances[open.custody_pubkey] = PRICE; // even with funds visible in the (shared per-user) custody…
+  await reconcileAllPending(db, { chain, cc, now: () => Date.now() + 11 * 60_000, ...noWait });
+  // …a confirmed purchase is the real guard — it is never refunded (the balance gate alone must NOT trigger it).
+  assert.equal((await db.query<{ s: string }>(`SELECT status s FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0].s, 'paid');
 });
 
 test('open: a CC-refunded pack credits the buy back', async () => {
@@ -288,6 +351,26 @@ test('open: YOLO/turbo — a Common buyback that ALSO carries nft_address still 
   assert.ok(genParams.altFundsRecipient, 'turbo routes the auto-sell USDC via altFundsRecipient');
   const inv = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM gacha_nft_inventory WHERE mint = 'MintTurbo1'`);
   assert.equal(inv.rows[0].n, 0); // the common was NOT mis-recorded as a held NFT
+});
+
+test('open: YOLO/turbo — an UNCONFIRMED auto-sell is NOT credited; left paid until the reconciler confirms it (#6)', async () => {
+  const user = await newUser();
+  const before = await collOf(user);
+  const cc = fakeCc();
+  const turboReveal = { success: true, code: 'TURBO_MODE_BUYBACK', buybackAmount: 30_000_000 }; // auto-sold $30
+  cc.reveals = [{ ...turboReveal }];
+  cc.turboBuybackConfirmed = false; // CC hasn't confirmed the auto-sell USDC landed yet
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'yolo-unconf', turbo: true }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(r.status, 'paid'); // NOT credited on an unconfirmed buyback — deferred
+  assert.equal(await collOf(user), before - PRICE); // debited the pack, NOT credited the $27
+
+  // the reconciler settles it once CC confirms the buyback landed (re-reveal returns CC's same turbo response)
+  cc.turboBuybackConfirmed = true;
+  cc.reveals = [{ ...turboReveal }];
+  const rec = await reconcilePending(db, user, { chain: fakeChain(), cc, now: () => Date.now() + 120_000, ...noWait });
+  assert.equal(rec.recovered, 1);
+  assert.equal((await db.query<{ s: string }>(`SELECT status s FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0].s, 'turbo_sold');
+  assert.equal(await collOf(user), before - PRICE + 27_000_000n); // now credited 90% of $30
 });
 
 test('open: normal (non-turbo) delivery is unchanged — no altFundsRecipient, card still recorded as held', async () => {
@@ -589,6 +672,83 @@ test('open: a purchase markup charges the user more, banks it to FEE_REVENUE; CC
   }
 });
 
+test('refund: a marked-up buy fully reverses the markup from FEE_REVENUE (no PoR leak) — bug #3', async () => {
+  await setGachaConfig(db, { markupBps: 1000 }); // +10% over CC's $50 price
+  try {
+    const user = await newUser();
+    const cc = fakeCc();
+    cc.generateFail = true; // pre-payment failure → immediate refund (settleRefund 'failed'), AFTER the buy posted the markup
+    const collBefore = await collOf(user);
+    const feeBefore = await feeRev();
+    const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'mk-rf' }, { chain: fakeChain(), cc, ...noWait });
+    assert.equal(r.status, 'failed'); // refunded
+    assert.equal(await collOf(user), collBefore, 'buyer fully refunded the all-in (price + markup)');
+    assert.equal(await feeRev(), feeBefore, 'markup reversed out of FEE_REVENUE — net zero, nothing left unbacked (the #3 leak)');
+  } finally {
+    await setGachaConfig(db, { markupBps: 0 }); // reset
+  }
+});
+
+const MK_SHARE = (usdc(50) * 1000n) / 10000n * 1000n / 10000n; // 10% game-rev share of the $5 (10%) markup = $0.50
+async function referredBuyer(): Promise<{ aff: string; buyer: string }> {
+  const aff = await newUser();
+  await db.query(`INSERT INTO affiliate_terms(user_id, game_revenue_bps, active) VALUES($1, 1000, true)`, [aff]); // 10% game-revenue share
+  const buyer = await newUser();
+  await db.query(`UPDATE users SET referred_by = $1 WHERE id = $2`, [aff, buyer]);
+  return { aff, buyer };
+}
+
+test('refund: a marked-up buy by a referred player pays NO affiliate commission — the share accrues at delivery, not buy', async () => {
+  await setGachaConfig(db, { markupBps: 1000 }); // +10% = $5 markup on the $50 base
+  try {
+    const { aff, buyer } = await referredBuyer();
+    const cc = fakeCc();
+    cc.generateFail = true; // refunded BEFORE delivery → never a completed sale
+    const buyerBefore = await collOf(buyer);
+    const affBefore = await collOf(aff);
+    const feeBefore = await feeRev();
+    const r = await openPack(db, buyer, { machineCode: 'pokemon_50', idempotencyKey: 'mk-aff-refund' }, { chain: fakeChain(), cc, ...noWait });
+    assert.equal(r.status, 'failed');
+    assert.equal(await collOf(buyer), buyerBefore, 'buyer fully refunded the all-in');
+    assert.equal(await collOf(aff), affBefore, 'affiliate paid NOTHING on a refunded buy (no commission on a non-sale)');
+    assert.equal(await feeRev(), feeBefore, 'FEE_REVENUE nets to zero — markup reversed, no share ever accrued');
+  } finally {
+    await setGachaConfig(db, { markupBps: 0 }); // reset
+  }
+});
+
+test('open: a marked-up DELIVERED pack by a referred player pays the affiliate the markup share AT DELIVERY', async () => {
+  await setGachaConfig(db, { markupBps: 1000 }); // +10% = $5 markup
+  try {
+    const { aff, buyer } = await referredBuyer();
+    const cc = fakeCc(); // default reveal → delivered (a completed sale)
+    const affBefore = await collOf(aff);
+    const feeBefore = await feeRev();
+    const r = await openPack(db, buyer, { machineCode: 'pokemon_50', idempotencyKey: 'mk-aff-open' }, { chain: fakeChain(), cc, ...noWait });
+    assert.equal(r.status, 'opened'); // delivered
+    assert.equal(await collOf(aff), affBefore + MK_SHARE, 'affiliate earns the markup share on a completed (delivered) sale');
+    assert.equal((await feeRev()) - feeBefore, usdc(5) - MK_SHARE, 'FEE_REVENUE keeps markup − share');
+  } finally {
+    await setGachaConfig(db, { markupBps: 0 }); // reset
+  }
+});
+
+test('open: a marked-up TURBO auto-sell by a referred player also pays the affiliate the markup share (completed sale)', async () => {
+  await setGachaConfig(db, { markupBps: 1000 }); // +10% = $5 markup
+  try {
+    const { aff, buyer } = await referredBuyer();
+    const cc = fakeCc();
+    cc.reveals = [{ success: true, code: 'TURBO_MODE_BUYBACK', buybackAmount: 30_000_000 }]; // auto-sold $30 (confirmed by default)
+    const affBefore = await collOf(aff);
+    const r = await openPack(db, buyer, { machineCode: 'pokemon_50', idempotencyKey: 'mk-aff-turbo', turbo: true }, { chain: fakeChain(), cc, ...noWait });
+    assert.equal(r.status, 'turbo_sold');
+    const cutShare = (usdc(30) * 1000n) / 10000n * 1000n / 10000n; // 10% of the 10% turbo cut on $30 = $0.30
+    assert.equal(await collOf(aff), affBefore + cutShare + MK_SHARE, 'affiliate earns BOTH the turbo-cut share and the markup share');
+  } finally {
+    await setGachaConfig(db, { markupBps: 0 }); // reset
+  }
+});
+
 test('open: markup=0 is byte-identical to no markup (no FEE_REVENUE leg)', async () => {
   const user = await newUser();
   const before = await collOf(user);
@@ -622,6 +782,51 @@ test('monitoring: a sell-back grows the cut revenue + the sell-back rate', async
   assert.ok(BigInt(m.sellBackCutE6) > BigInt(m0.sellBackCutE6)); // cut revenue grew
   assert.ok(m.deliveredCards >= 1 && m.soldBack >= 1);
   assert.ok(m.sellBackRatePct > 0);
+});
+
+test('monitoring: a refunded marked-up pack nets its markup back out of the dashboard revenue (#3 display)', async () => {
+  await setGachaConfig(db, { markupBps: 1000 }); // +10% over CC's $50 price
+  try {
+    const m0 = await gachaMonitoring(db);
+    const pm0 = m0.machines.find((x) => x.code === 'pokemon_50');
+    const user = await newUser();
+    const cc = fakeCc();
+    cc.generateFail = true; // pre-payment fail → refund AFTER the markup (and its FEE_REVENUE leg) was booked
+    const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'mon-mkrf' }, { chain: fakeChain(), cc, ...noWait });
+    assert.equal(r.status, 'failed');
+    // The buy banks +markup, the refund reverses −markup; the dashboard counts BOTH, so the displayed markup +
+    // total revenue are unchanged. Pre-fix they'd have risen by the refunded markup (the over-report).
+    const m = await gachaMonitoring(db);
+    assert.equal(m.markupE6, m0.markupE6, 'displayed markup revenue nets the refunded markup');
+    assert.equal(m.revenueE6, m0.revenueE6, 'total revenue nets it too');
+    const pm = m.machines.find((x) => x.code === 'pokemon_50');
+    assert.equal(pm?.revenueE6 ?? '0', pm0?.revenueE6 ?? '0', 'per-machine revenue nets it as well');
+  } finally {
+    await setGachaConfig(db, { markupBps: 0 }); // reset
+  }
+});
+
+test('monitoring: a refunded gold pack nets its rebate cost back out of the dashboard (gold side of the refund netting)', async () => {
+  await setGachaConfig(db, { goldEnabled: true, payWithGoldEnabled: true });
+  try {
+    const m0 = await gachaMonitoring(db);
+    const pm0 = m0.machines.find((x) => x.code === 'pokemon_50');
+    const user = await newUser();
+    await db.tx(async (q) => earnGold(q, user, 100_000n, 'SEED', {})); // enough for a $50 gold pack
+    const cc = fakeCc();
+    cc.generateFail = true; // pre-payment fail → refund AFTER PACK_BUY_GOLD_FUND drew the rebate from the budget
+    const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'mon-goldrf', payWith: 'gold' }, { chain: fakeChain(), cc, ...noWait });
+    assert.equal(r.status, 'failed');
+    // The buy draws rebate from the budget; the refund returns it; the dashboard now counts BOTH, so the
+    // rebate cost + operator net are unchanged. Pre-fix the rebate cost would have risen by the refunded pack.
+    const m = await gachaMonitoring(db);
+    assert.equal(m.rebateCostE6, m0.rebateCostE6, 'displayed rebate cost nets the refunded gold pack');
+    assert.equal(m.netE6, m0.netE6, 'operator net nets it too');
+    const pm = m.machines.find((x) => x.code === 'pokemon_50');
+    assert.equal(pm?.rebateE6 ?? '0', pm0?.rebateE6 ?? '0', 'per-machine rebate cost nets it as well');
+  } finally {
+    await setGachaConfig(db, { payWithGoldEnabled: false }); // reset
+  }
 });
 
 test('monitoring: a CAPITALIZED DB rarity is lowercased so the web tiers match (no real pull reads 0%)', async () => {
@@ -755,6 +960,30 @@ test('reconcile-stuck: DAS unavailable (null) → row left untouched, counted sk
   const r = await reconcileStuckPrizes(db, { getAssetInfo: async () => null });
   assert.ok(r.skipped >= 1);
   assert.equal(await statusOf(id), 'selling');
+});
+
+test('sell-back: an UNCONFIRMED ("submitted") buyback defers — no credit, row left selling, then the reconciler settles it', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'sb-unconf' }, { chain: fakeChain(), cc, ...noWait });
+  const row = (await db.query<{ id: string; mint: string }>(`SELECT id, mint FROM gacha_nft_inventory WHERE user_id = $1 ORDER BY acquired_at DESC LIMIT 1`, [user])).rows[0];
+  const before = await collOf(user);
+
+  // CC broadcasts the buyback but reports it only 'submitted' (sent, not yet landed) → must NOT credit now.
+  cc.submitConf = 'submitted';
+  await assert.rejects(
+    sellBack(db, user, row.id, { chain: fakeChain(), cc, ...noWait }),
+    (e: unknown) => (e as { code?: string })?.code === 'buyback_pending',
+  );
+  assert.equal(await collOf(user), before, 'no payout credited on an unconfirmed buyback');
+  assert.equal(await statusOf(row.id), 'selling', 'row left selling (not reverted, not settled) for the reconciler');
+
+  // The reconciler resolves it: DAS shows the NFT left custody (buyback landed) + CC confirms the amount → settle.
+  const reconcileCc = { getPackStatus: async () => ({ memo: 'm', pack: null, send: null, buyback: [{ refund_amount: String(cc.buybackAmount), status: 'complete' }] }) };
+  const r = await reconcileStuckPrizes(db, { graceSec: 0, getAssetInfo: dasFor(row.mint, 'COLLECTORCRYPT'), cc: reconcileCc });
+  assert.equal(r.settledSelling, 1, 'reconciler auto-settled the sold-but-unsettled prize');
+  assert.ok((await collOf(user)) > before, 'reconciler credited the seller');
+  assert.equal(await statusOf(row.id), 'sold');
 });
 
 // ── stock worker: persist CC stock + log restocks (so they survive a closed admin tab) ──

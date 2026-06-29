@@ -170,10 +170,11 @@ function startGachaOpenReconcileLoop(db: Db, log: FastifyBaseLogger) {
   const run = async () => {
     if (!(await tryAcquireLease(db, 'gacha-open-reconcile', INSTANCE_ID, 110_000))) return;
     try {
-      const [g, ch, cc] = await Promise.all([
+      const [g, ch, cc, rec] = await Promise.all([
         import('./services/gacha.ts'),
         import('./services/custody/gacha-chain.ts'),
         import('./services/providers/collectorcrypt.ts'),
+        import('./services/gacha-reconcile.ts'),
       ]);
       const deps = { chain: ch.solanaGachaChain(), cc: cc.defaultCcClient };
       const r = await g.reconcileAllPending(db, deps);
@@ -182,6 +183,11 @@ function startGachaOpenReconcileLoop(db: Db, log: FastifyBaseLogger) {
       // the reconcile so a just-failed open's user has no unresolved row → its leftover becomes sweepable.
       const s = await g.autoSweepCustodyLeftovers(db, deps);
       if (s.swept) log.info(s, 'gacha custody auto-sweep → hot');
+      // Resolve NFTs stranded 'selling'/'withdrawing' — by a crash OR a sell-back/withdraw whose CC submit came
+      // back unconfirmed ('submitted'). DAS-gated: settle if the NFT left custody, revert to 'held' if not. Was
+      // boot-only; on the loop a deferred sell-back settles within the grace instead of waiting for a restart.
+      const sp = await rec.reconcileStuckPrizes(db);
+      if (sp.scanned) log.info(sp, 'gacha stuck-row reconcile (loop)');
     } catch (e) {
       log.warn(e, 'gacha stuck-open reconcile failed');
     } finally {

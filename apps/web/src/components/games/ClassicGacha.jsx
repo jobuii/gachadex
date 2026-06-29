@@ -45,6 +45,7 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
   const [revealResult, setRevealResult] = useState(null); // the open result once it lands (null = still charging)
   const [revealSpentE6, setRevealSpentE6] = useState('0');
   const [ripErr, setRipErr] = useState(null);
+  const [ripPending, setRipPending] = useState(null); // buyback_pending: sell-back broadcast but unconfirmed — the reconciler settles it shortly (not an error)
   const [inventory, setInventory] = useState([]);
   const [payWith, setPayWith] = useState('usdc');
   const [yolo, setYolo] = useState(false); // YOLO/turbo: auto-sell commons
@@ -181,12 +182,15 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
   };
 
   const sellBack = async (item, instant = false) => {
-    setRipErr(null);
+    setRipErr(null); setRipPending(null);
     try {
       await api.sellGachaPrize(item.id, instant);
       loadInventory();
       return true;
     } catch (e) {
+      // The buyback was broadcast but CC hasn't confirmed it landed — NOT a failure. The card stays 'selling'
+      // and the reconciler settles it within a few minutes. Surface it as "processing", not a red error.
+      if (e.code === 'buyback_pending') { setRipPending(e.message); loadInventory(); return 'pending'; }
       setRipErr(e.message);
       return false;
     }
@@ -196,8 +200,12 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
   const sellByMint = async (mint) => {
     const it = inventory.find((i) => i.mint === mint && i.status === 'held');
     if (!it) return false;
+    setRipErr(null); setRipPending(null);
     try { await api.sellGachaPrize(it.id, true); await loadInventory(); return true; }
-    catch (e) { setRipErr(e.message); return false; }
+    catch (e) {
+      if (e.code === 'buyback_pending') { setRipPending(e.message); await loadInventory(); return 'pending'; }
+      setRipErr(e.message); return false;
+    }
   };
 
   // Trade tie-in: jump to the card's GDEX perp market (only shown when the won card matched one).
@@ -301,6 +309,7 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
           </button>
           <p className="gacha-yolo-note">Auto-sells commons for instant USDC — only reveals rares &amp; epics.</p>
           {ripErr && <div className="order-error" style={{ marginTop: '0.5rem' }}>{ripErr}</div>}
+          {ripPending && <div className="order-pending" style={{ marginTop: '0.5rem' }}>{ripPending}</div>}
           <div className="gacha-machine-grid">
             <div><span className="gacha-eyebrow">Contains</span><strong>1 Card</strong></div>
             <div><span className="gacha-eyebrow">Buyback</span><strong className="up">{machine.buybackPct}%</strong></div>

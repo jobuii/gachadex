@@ -44,6 +44,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   const [shownE6, setShownE6] = useState(null); // EPIC value count-up
   const [selling, setSelling] = useState(false); // sell-back in flight
   const [sold, setSold] = useState(false); // sold → show the SOLD confirmation, then auto-close
+  const [sellPending, setSellPending] = useState(false); // buyback broadcast but unconfirmed → "processing" confirmation (reconciler settles it)
   const [sellErr, setSellErr] = useState(null); // sell-back failed → show it here (the sidebar error is behind this overlay)
   const coinLoop = useRef(null);
   const timers = useRef([]);
@@ -124,12 +125,15 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   // Sell back from the reveal: sell, then update IN PLACE to a SOLD confirmation (rare.win-style). The player
   // can hit Close to dismiss it whenever, and it auto-closes after 5s if they don't — instead of vanishing instantly.
   const doSell = async () => {
-    if (selling || sold) return;
+    if (selling || sold || sellPending) return;
     setSellErr(null);
     setSelling(true);
     try {
       const ok = await onSellNow();
-      if (ok) { setSold(true); playSound('coins', { volume: 0.4 }); timers.current.push(setTimeout(close, 5000)); }
+      // 'pending' = the buyback was broadcast but not yet confirmed; the reconciler settles it shortly. Show a
+      // calm "processing" confirmation — NOT a SOLD badge (the balance hasn't moved yet) and NOT an error.
+      if (ok === 'pending') { setSellPending(true); timers.current.push(setTimeout(close, 5000)); }
+      else if (ok) { setSold(true); playSound('coins', { volume: 0.4 }); timers.current.push(setTimeout(close, 5000)); }
       else setSellErr('Couldn’t sell back — try again.');
     } catch {
       setSellErr('Couldn’t sell back — try again.');
@@ -228,6 +232,12 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
                   <div className="gacha-reveal-sold">
                     <span className="gacha-reveal-sold-badge">✓ SOLD</span>
                     <span className="gacha-reveal-sold-amt up">+{usd(sellNetE6)} added to your balance</span>
+                    <button className="btn-primary" onClick={close}>Close</button>
+                  </div>
+                ) : sellPending ? (
+                  <div className="gacha-reveal-sold">
+                    <span className="gacha-reveal-sold-badge">⏳ SELLING</span>
+                    <span className="gacha-reveal-sold-amt muted">Processing — your balance will update shortly</span>
                     <button className="btn-primary" onClick={close}>Close</button>
                   </div>
                 ) : (

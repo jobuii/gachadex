@@ -238,7 +238,7 @@ export type CcPackStatus = {
   memo: string;
   pack: { status?: string; refunded?: boolean | null } | null;
   send: { nft_address?: string; insured_value?: number } | null;
-  buyback: Array<{ refund_amount?: string; status?: string }>;
+  buyback: Array<{ refund_amount?: string; status?: string; webhook_confirmed?: boolean }>;
 };
 /** Read-only pack status by memo — the reconciler uses it to resolve a stranded open (refunded? delivered?). */
 export function getPackStatus(memo: string, opts: { fetchFn?: typeof fetch } = {}): Promise<CcPackStatus> {
