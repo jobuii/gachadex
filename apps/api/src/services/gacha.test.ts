@@ -633,6 +633,46 @@ test('open: a purchase markup charges the user more, banks it to FEE_REVENUE; CC
   }
 });
 
+test('refund: a marked-up buy fully reverses the markup from FEE_REVENUE (no PoR leak) — bug #3', async () => {
+  await setGachaConfig(db, { markupBps: 1000 }); // +10% over CC's $50 price
+  try {
+    const user = await newUser();
+    const cc = fakeCc();
+    cc.generateFail = true; // pre-payment failure → immediate refund (settleRefund 'failed'), AFTER the buy posted the markup
+    const collBefore = await collOf(user);
+    const feeBefore = await feeRev();
+    const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'mk-rf' }, { chain: fakeChain(), cc, ...noWait });
+    assert.equal(r.status, 'failed'); // refunded
+    assert.equal(await collOf(user), collBefore, 'buyer fully refunded the all-in (price + markup)');
+    assert.equal(await feeRev(), feeBefore, 'markup reversed out of FEE_REVENUE — net zero, nothing left unbacked (the #3 leak)');
+  } finally {
+    await setGachaConfig(db, { markupBps: 0 }); // reset
+  }
+});
+
+test('refund: a marked-up buy by a REFERRED player — FEE_REVENUE absorbs the affiliate share, ledger stays balanced (#3)', async () => {
+  await setGachaConfig(db, { markupBps: 1000 }); // +10% = $5 markup on the $50 base
+  try {
+    const aff = await newUser();
+    await db.query(`INSERT INTO affiliate_terms(user_id, game_revenue_bps, active) VALUES($1, 1000, true)`, [aff]); // 10% game-revenue share
+    const buyer = await newUser();
+    await db.query(`UPDATE users SET referred_by = $1 WHERE id = $2`, [aff, buyer]);
+    const cc = fakeCc();
+    cc.generateFail = true; // refund AFTER the buy posted the markup + the affiliate share
+    const buyerBefore = await collOf(buyer);
+    const affBefore = await collOf(aff);
+    const feeBefore = await feeRev();
+    const r = await openPack(db, buyer, { machineCode: 'pokemon_50', idempotencyKey: 'mk-aff' }, { chain: fakeChain(), cc, ...noWait });
+    assert.equal(r.status, 'failed');
+    const share = (usdc(50) * 1000n) / 10000n * 1000n / 10000n; // 10% of the $5 markup = $0.50
+    assert.equal(await collOf(buyer), buyerBefore, 'buyer fully refunded the all-in');
+    assert.equal(await collOf(aff), affBefore + share, 'affiliate KEEPS its share (not clawed back from a third party)');
+    assert.equal(await feeRev(), feeBefore - share, 'FEE_REVENUE absorbs the un-clawed share — net −share, ledger conserves (no PoR leak)');
+  } finally {
+    await setGachaConfig(db, { markupBps: 0 }); // reset
+  }
+});
+
 test('open: markup=0 is byte-identical to no markup (no FEE_REVENUE leg)', async () => {
   const user = await newUser();
   const before = await collOf(user);

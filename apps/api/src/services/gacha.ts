@@ -51,14 +51,14 @@ export interface GachaCard { mint: string; name: string | null; grade: string | 
 export interface OpenResult { openId: string; status: string; card: GachaCard | null; verifyUrl: string | null; turboRefundE6?: string | null; duplicate?: boolean }
 
 interface OpenRow {
-  id: string; user_id: string; machine_code: string; price_e6: string; paid_with: string; cc_memo: string | null;
+  id: string; user_id: string; machine_code: string; price_e6: string; markup_e6: string; paid_with: string; cc_memo: string | null;
   payment_sig: string | null; payment_attempted_at: string | null; custody_pubkey: string | null; status: string;
   nft_mint: string | null; nft_name: string | null; nft_image: string | null; grade: string | null;
   insured_value_e6: string | null; rarity: string | null; nft_market_id: string | null; nft_year: string | null; turbo_refund_e6: string | null; created_at: string;
 }
 
 const OPEN_COLS =
-  `id, user_id, machine_code, price_e6::text AS price_e6, paid_with, cc_memo, payment_sig, payment_attempted_at::text AS payment_attempted_at, custody_pubkey, status,
+  `id, user_id, machine_code, price_e6::text AS price_e6, markup_e6::text AS markup_e6, paid_with, cc_memo, payment_sig, payment_attempted_at::text AS payment_attempted_at, custody_pubkey, status,
    nft_mint, nft_name, nft_image, grade, insured_value_e6::text AS insured_value_e6, rarity, nft_market_id, nft_year, turbo_refund_e6::text AS turbo_refund_e6, created_at::text AS created_at`;
 
 /** CC's provably-fair verify link for an open, or null before a memo exists. */
@@ -153,9 +153,9 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
   const anchor = await db.tx(async (q) => {
     const id = randomUUID();
     const ins = await q.query<{ id: string }>(
-      `INSERT INTO gacha_pack_opens(id, user_id, idempotency_key, machine_code, price_e6, custody_pubkey, paid_with, turbo, status)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,'pending') ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id`,
-      [id, userId, opts.idempotencyKey, opts.machineCode, (payWith === 'usdc' ? allIn : price).toString(), custodyPubkey, payWith, turbo],
+      `INSERT INTO gacha_pack_opens(id, user_id, idempotency_key, machine_code, price_e6, markup_e6, custody_pubkey, paid_with, turbo, status)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending') ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id`,
+      [id, userId, opts.idempotencyKey, opts.machineCode, (payWith === 'usdc' ? allIn : price).toString(), (payWith === 'usdc' ? markup : 0n).toString(), custodyPubkey, payWith, turbo],
     );
     if (!ins.rows[0]) {
       const ex = await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE user_id = $1 AND idempotency_key = $2`, [userId, opts.idempotencyKey]);
@@ -418,11 +418,17 @@ async function settleRefund(db: Db, openId: string, finalStatus: 'refunded' | 'f
         entries: [{ accountId: budget, amount: price }, { accountId: treasury, amount: -price }],
       });
     } else {
+      // Reverse the buy EXACTLY. The buyer paid `price` (= allIn); the GACHA_PACK_BUY split it: the CC base
+      // (price − markup) → TREASURY, and any GDEX markup → FEE_REVENUE. So refund the full allIn to the buyer but
+      // pull ONLY the CC base back from TREASURY and reverse the markup out of FEE_REVENUE — otherwise the markup
+      // would sit in FEE_REVENUE unbacked while TREASURY over-drained, a proof-of-reserves leak. The affiliate's
+      // share of the markup (already paid out, maybe spent) is NOT clawed back; FEE_REVENUE absorbs it, which stays
+      // balanced (no reserve leak). markup is 0 unless the markup knob is on, so this is a no-op for un-marked buys.
+      const markup = BigInt(row.markup_e6);
       const coll = await getOrCreateUserAccount(q, row.user_id, 'USER_COLLATERAL');
-      await postTxn(q, {
-        reason: 'GACHA_REFUND', refType: 'gacha_open', refId: openId,
-        entries: [{ accountId: coll, amount: price }, { accountId: treasury, amount: -price }],
-      });
+      const entries = [{ accountId: coll, amount: price }, { accountId: treasury, amount: -(price - markup) }];
+      if (markup > 0n) entries.push({ accountId: await getOrCreateSystemAccount(q, 'FEE_REVENUE'), amount: -markup });
+      await postTxn(q, { reason: 'GACHA_REFUND', refType: 'gacha_open', refId: openId, entries });
       // Gold is earned at payment (PACK_OPEN_EARN); a refunded open earned nothing, so claw the Gold back too.
       await reverseEarnedGold(q, row.user_id, openId);
     }
