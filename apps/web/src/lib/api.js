@@ -56,6 +56,7 @@ async function req(path, opts = {}) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     const e = new Error(err.error || `request failed (${res.status})`);
     e.status = res.status; // let callers distinguish permanent (4xx) from transient (5xx/network) failures
+    if (err.code) e.code = err.code; // machine-readable code (e.g. 'buyback_pending') for callers that branch on it
     throw e;
   }
   return res.json();

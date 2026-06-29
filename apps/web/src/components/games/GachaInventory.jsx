@@ -17,6 +17,7 @@ const hideBrokenImg = (e) => { e.currentTarget.style.visibility = 'hidden'; }; /
 export function GachaInventory({ onTradeMarket, refreshKey = 0, heading = 'Your gacha pulls' }) {
   const [inventory, setInventory] = useState([]);
   const [err, setErr] = useState(null);
+  const [note, setNote] = useState(null); // neutral "processing" notice (e.g. a sell-back broadcast, awaiting on-chain settle)
   const { signMessage } = useWallet();
 
   const load = useCallback(() => {
@@ -26,13 +27,17 @@ export function GachaInventory({ onTradeMarket, refreshKey = 0, heading = 'Your 
   useEffect(() => { load(); }, [load, refreshKey]);
 
   const sellBack = async (item) => {
-    setErr(null);
+    setErr(null); setNote(null);
     try { await api.sellGachaPrize(item.id, false); load(); } // manual sell-back keeps the lower (5%) cut
-    catch (e) { setErr(e.message); }
+    catch (e) {
+      // Sell-back broadcast but unconfirmed → the card stays 'selling' and the reconciler settles it shortly.
+      if (e.code === 'buyback_pending') { setNote(e.message); load(); }
+      else setErr(e.message);
+    }
   };
   const trade = (item) => { if (onTradeMarket && item?.marketId) onTradeMarket({ id: item.marketId }); };
   const convert = async (item) => {
-    setErr(null);
+    setErr(null); setNote(null);
     if (!window.confirm('Sell this card and open a 2× long on its market with the proceeds? You can adjust the position after.')) return;
     try {
       const r = await api.convertGachaPrize(item.id, { side: 'long', leverage: 2 });
@@ -42,7 +47,7 @@ export function GachaInventory({ onTradeMarket, refreshKey = 0, heading = 'Your 
     } catch (e) { setErr(e.message); }
   };
   const withdraw = async (item) => {
-    setErr(null);
+    setErr(null); setNote(null);
     if (!signMessage) { setErr('Connect a wallet that can sign messages to withdraw.'); return; }
     const dest = window.prompt('Withdraw this card NFT to which Solana wallet address?');
     if (!dest) return;
@@ -56,6 +61,7 @@ export function GachaInventory({ onTradeMarket, refreshKey = 0, heading = 'Your 
     <section className="gacha-inventory">
       <h4>{heading} ({inventory.length})</h4>
       {err && <div className="order-error">{err}</div>}
+      {note && <div className="order-pending">{note}</div>}
       <div className="gacha-card-grid">
         {inventory.map((it) => (
           <div key={it.id} className="gacha-card">

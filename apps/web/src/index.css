@@ -1437,6 +1437,7 @@ button { border-radius: var(--pill); }
 /* Order panel extras */
 .order-gated { background: rgba(248,81,73,0.1); border: 1px solid var(--danger); color: var(--danger); font-size: 0.5rem; padding: 0.5rem; margin-bottom: 0.5rem; line-height: 1.5; }
 .order-error { color: var(--danger); font-size: 0.5rem; margin-top: 0.5rem; line-height: 1.5; }
+.order-pending { color: var(--gold); font-size: 0.5rem; margin-top: 0.5rem; line-height: 1.5; } /* in-progress (e.g. sell-back broadcast, awaiting settle) — not an error */
 .order-signin-hint { font-size: 0.55rem; color: var(--text-muted); text-align: center; padding: 0.75rem; }
 .order-actions { display: flex; flex-direction: column; gap: 0.5rem; }
 .order-positions { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.75rem; }
