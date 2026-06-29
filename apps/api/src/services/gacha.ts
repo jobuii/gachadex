@@ -186,7 +186,8 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
       const feeAcc = markup > 0n ? await getOrCreateSystemAccount(q, 'FEE_REVENUE') : null;
       if (feeAcc) entries.push({ accountId: feeAcc, amount: markup });
       await postTxn(q, { reason: 'GACHA_PACK_BUY', refType: 'gacha_open', refId: id, entries });
-      if (feeAcc) await accrueGachaAffiliateShare(q, userId, feeAcc, markup, id); // affiliate share of the pack markup
+      // NB: the affiliate's share of the markup is NOT paid here — it accrues at COMPLETION (delivery or turbo
+      // auto-sell), so a refunded/undelivered buy pays no commission on a non-sale. See recordReveal/settleTurboSold.
       // Loyalty earn — only on paid (USDC) opens (spec §6b); floored, derived from the admin threshold knob.
       await earnGold(q, userId, goldEarnedForOpen(price, gachaConfig.freePackThresholdUsd.get()), 'PACK_OPEN_EARN', { refType: 'gacha_open', refId: id });
     }
@@ -306,6 +307,10 @@ async function settleTurboSold(db: Db, openId: string, buybackAmount: number): P
       entries: [{ accountId: coll, amount: payout }, { accountId: fee, amount: cut }, { accountId: treasury, amount: -gross }],
     });
     await accrueGachaAffiliateShare(q, row.user_id, fee, cut, openId); // affiliate share of the turbo sell-back cut
+    // + the buy-markup share — a turbo auto-sell is a completed sale, so the affiliate earns on the markup here too
+    // (not at buy, so a refunded/undelivered buy pays nothing). No-op when markup_e6 = 0.
+    const markupE6 = BigInt(row.markup_e6);
+    if (markupE6 > 0n) await accrueGachaAffiliateShare(q, row.user_id, fee, markupE6, openId);
     await q.query(`UPDATE gacha_pack_opens SET status = 'turbo_sold', turbo_refund_e6 = $2, settled_at = now() WHERE id = $1`, [openId, payout.toString()]);
     return { openId, status: 'turbo_sold', verifyUrl: verifyUrlFor(row.cc_memo), card: null, turboRefundE6: payout.toString() };
   });
@@ -377,6 +382,11 @@ async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promi
       `UPDATE gacha_pack_opens SET status='opened', nft_mint=$2, nft_name=$3, nft_image=$4, grade=$5, insured_value_e6=$6, rarity=$7, nft_market_id=$8, nft_year=$9, opened_at=now() WHERE id=$1`,
       [openId, card.mint, card.name, card.imageUrl, card.grade, card.insuredValueE6, card.rarity, marketId, card.year],
     );
+    // Affiliate markup share — paid NOW that the pack is delivered (a completed sale), not at buy. A refunded/
+    // undelivered open never reaches here, so no commission on a non-sale + nothing to claw back. No-op when
+    // markup_e6 = 0 (gold opens / markup knob off).
+    const markupE6 = BigInt(cur.markup_e6);
+    if (markupE6 > 0n) await accrueGachaAffiliateShare(q, cur.user_id, await getOrCreateSystemAccount(q, 'FEE_REVENUE'), markupE6, openId);
     return { openId, status: 'opened', verifyUrl: verifyUrlFor(cur.cc_memo), card: { mint: card.mint, name: card.name, grade: card.grade, imageUrl: card.imageUrl, valueE6: card.insuredValueE6, rarity: card.rarity, marketId, year: card.year } };
   });
 }
@@ -445,9 +455,9 @@ async function settleRefund(db: Db, openId: string, finalStatus: 'refunded' | 'f
       // Reverse the buy EXACTLY. The buyer paid `price` (= allIn); the GACHA_PACK_BUY split it: the CC base
       // (price − markup) → TREASURY, and any GDEX markup → FEE_REVENUE. So refund the full allIn to the buyer but
       // pull ONLY the CC base back from TREASURY and reverse the markup out of FEE_REVENUE — otherwise the markup
-      // would sit in FEE_REVENUE unbacked while TREASURY over-drained, a proof-of-reserves leak. The affiliate's
-      // share of the markup (already paid out, maybe spent) is NOT clawed back; FEE_REVENUE absorbs it, which stays
-      // balanced (no reserve leak). markup is 0 unless the markup knob is on, so this is a no-op for un-marked buys.
+      // would sit in FEE_REVENUE unbacked while TREASURY over-drained, a proof-of-reserves leak. There is no
+      // affiliate share to reverse: the markup commission accrues only at COMPLETION (delivery/turbo), which a
+      // refund precedes, so FEE_REVENUE nets exactly to zero here. markup is 0 unless the knob is on → no-op then.
       const markup = BigInt(row.markup_e6);
       const coll = await getOrCreateUserAccount(q, row.user_id, 'USER_COLLATERAL');
       const entries = [{ accountId: coll, amount: price }, { accountId: treasury, amount: -(price - markup) }];

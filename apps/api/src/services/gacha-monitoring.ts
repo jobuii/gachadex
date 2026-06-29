@@ -52,7 +52,7 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
       `SELECT le.reason, COALESCE(SUM(le.amount_uusdc::numeric), 0)::text AS total
          FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
         WHERE a.user_id IS NULL AND a.type = 'FEE_REVENUE'
-          AND le.reason IN ('GACHA_SELLBACK', 'GACHA_TURBO_SELL', 'GACHA_PACK_BUY')
+          AND le.reason IN ('GACHA_SELLBACK', 'GACHA_TURBO_SELL', 'GACHA_PACK_BUY', 'GACHA_REFUND')
         GROUP BY le.reason`,
     ),
     // Rebate cost = USDC drawn from the rewards budget to fund gold-bought packs (the budget legs are negative).
@@ -110,7 +110,7 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
            LEFT JOIN gacha_pack_opens o ON le.ref_type = 'gacha_open' AND o.id = le.ref_id
            LEFT JOIN gacha_nft_inventory ginv ON le.ref_type = 'gacha_prize' AND ginv.id = le.ref_id
            LEFT JOIN gacha_pack_opens oi ON oi.id = ginv.open_id
-          WHERE (a.type = 'FEE_REVENUE' AND le.reason IN ('GACHA_SELLBACK', 'GACHA_TURBO_SELL', 'GACHA_PACK_BUY'))
+          WHERE (a.type = 'FEE_REVENUE' AND le.reason IN ('GACHA_SELLBACK', 'GACHA_TURBO_SELL', 'GACHA_PACK_BUY', 'GACHA_REFUND'))
              OR (a.type = 'GACHA_REWARDS_BUDGET' AND le.reason = 'PACK_BUY_GOLD_FUND')
        )
        SELECT machine_code,
@@ -124,7 +124,7 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
   let sellBackCut = 0n;
   let markup = 0n;
   for (const r of fee.rows) {
-    if (r.reason === 'GACHA_PACK_BUY') markup += intStr(r.total);
+    if (r.reason === 'GACHA_PACK_BUY' || r.reason === 'GACHA_REFUND') markup += intStr(r.total); // GACHA_REFUND fee leg = the −markup reversal, so a refunded buy nets out of "markup banked"
     else sellBackCut += intStr(r.total);
   }
   const rebateCost = intStr(rebate.rows[0]?.total);

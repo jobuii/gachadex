@@ -689,24 +689,61 @@ test('refund: a marked-up buy fully reverses the markup from FEE_REVENUE (no PoR
   }
 });
 
-test('refund: a marked-up buy by a REFERRED player — FEE_REVENUE absorbs the affiliate share, ledger stays balanced (#3)', async () => {
+const MK_SHARE = (usdc(50) * 1000n) / 10000n * 1000n / 10000n; // 10% game-rev share of the $5 (10%) markup = $0.50
+async function referredBuyer(): Promise<{ aff: string; buyer: string }> {
+  const aff = await newUser();
+  await db.query(`INSERT INTO affiliate_terms(user_id, game_revenue_bps, active) VALUES($1, 1000, true)`, [aff]); // 10% game-revenue share
+  const buyer = await newUser();
+  await db.query(`UPDATE users SET referred_by = $1 WHERE id = $2`, [aff, buyer]);
+  return { aff, buyer };
+}
+
+test('refund: a marked-up buy by a referred player pays NO affiliate commission — the share accrues at delivery, not buy', async () => {
   await setGachaConfig(db, { markupBps: 1000 }); // +10% = $5 markup on the $50 base
   try {
-    const aff = await newUser();
-    await db.query(`INSERT INTO affiliate_terms(user_id, game_revenue_bps, active) VALUES($1, 1000, true)`, [aff]); // 10% game-revenue share
-    const buyer = await newUser();
-    await db.query(`UPDATE users SET referred_by = $1 WHERE id = $2`, [aff, buyer]);
+    const { aff, buyer } = await referredBuyer();
     const cc = fakeCc();
-    cc.generateFail = true; // refund AFTER the buy posted the markup + the affiliate share
+    cc.generateFail = true; // refunded BEFORE delivery → never a completed sale
     const buyerBefore = await collOf(buyer);
     const affBefore = await collOf(aff);
     const feeBefore = await feeRev();
-    const r = await openPack(db, buyer, { machineCode: 'pokemon_50', idempotencyKey: 'mk-aff' }, { chain: fakeChain(), cc, ...noWait });
+    const r = await openPack(db, buyer, { machineCode: 'pokemon_50', idempotencyKey: 'mk-aff-refund' }, { chain: fakeChain(), cc, ...noWait });
     assert.equal(r.status, 'failed');
-    const share = (usdc(50) * 1000n) / 10000n * 1000n / 10000n; // 10% of the $5 markup = $0.50
     assert.equal(await collOf(buyer), buyerBefore, 'buyer fully refunded the all-in');
-    assert.equal(await collOf(aff), affBefore + share, 'affiliate KEEPS its share (not clawed back from a third party)');
-    assert.equal(await feeRev(), feeBefore - share, 'FEE_REVENUE absorbs the un-clawed share — net −share, ledger conserves (no PoR leak)');
+    assert.equal(await collOf(aff), affBefore, 'affiliate paid NOTHING on a refunded buy (no commission on a non-sale)');
+    assert.equal(await feeRev(), feeBefore, 'FEE_REVENUE nets to zero — markup reversed, no share ever accrued');
+  } finally {
+    await setGachaConfig(db, { markupBps: 0 }); // reset
+  }
+});
+
+test('open: a marked-up DELIVERED pack by a referred player pays the affiliate the markup share AT DELIVERY', async () => {
+  await setGachaConfig(db, { markupBps: 1000 }); // +10% = $5 markup
+  try {
+    const { aff, buyer } = await referredBuyer();
+    const cc = fakeCc(); // default reveal → delivered (a completed sale)
+    const affBefore = await collOf(aff);
+    const feeBefore = await feeRev();
+    const r = await openPack(db, buyer, { machineCode: 'pokemon_50', idempotencyKey: 'mk-aff-open' }, { chain: fakeChain(), cc, ...noWait });
+    assert.equal(r.status, 'opened'); // delivered
+    assert.equal(await collOf(aff), affBefore + MK_SHARE, 'affiliate earns the markup share on a completed (delivered) sale');
+    assert.equal((await feeRev()) - feeBefore, usdc(5) - MK_SHARE, 'FEE_REVENUE keeps markup − share');
+  } finally {
+    await setGachaConfig(db, { markupBps: 0 }); // reset
+  }
+});
+
+test('open: a marked-up TURBO auto-sell by a referred player also pays the affiliate the markup share (completed sale)', async () => {
+  await setGachaConfig(db, { markupBps: 1000 }); // +10% = $5 markup
+  try {
+    const { aff, buyer } = await referredBuyer();
+    const cc = fakeCc();
+    cc.reveals = [{ success: true, code: 'TURBO_MODE_BUYBACK', buybackAmount: 30_000_000 }]; // auto-sold $30 (confirmed by default)
+    const affBefore = await collOf(aff);
+    const r = await openPack(db, buyer, { machineCode: 'pokemon_50', idempotencyKey: 'mk-aff-turbo', turbo: true }, { chain: fakeChain(), cc, ...noWait });
+    assert.equal(r.status, 'turbo_sold');
+    const cutShare = (usdc(30) * 1000n) / 10000n * 1000n / 10000n; // 10% of the 10% turbo cut on $30 = $0.30
+    assert.equal(await collOf(aff), affBefore + cutShare + MK_SHARE, 'affiliate earns BOTH the turbo-cut share and the markup share');
   } finally {
     await setGachaConfig(db, { markupBps: 0 }); // reset
   }
