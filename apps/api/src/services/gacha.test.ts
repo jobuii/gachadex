@@ -185,6 +185,24 @@ test('open: a sold-out machine (generatePack fails) refunds IMMEDIATELY — no 9
   assert.equal(cc.submits, 0); // never submitted a payment to CC
 });
 
+test('open: an operator-disabled machine is rejected on the BUY path (not just hidden), no charge (#8)', async () => {
+  const user = await newUser();
+  const before = await collOf(user);
+  await setGachaConfig(db, { disabledMachines: ['pokemon_50'] }); // operator disables the machine
+  try {
+    const cc = fakeCc();
+    await assert.rejects(
+      openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'disabled' }, { chain: fakeChain(), cc, ...noWait }),
+      (e: unknown) => (e as { code?: string })?.code === 'machine_disabled',
+    );
+    assert.equal(await collOf(user), before, 'no charge for a disabled machine');
+    assert.equal(cc.submits, 0, 'never paid CC');
+    assert.equal((await db.query<{ n: number }>(`SELECT count(*)::int n FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0].n, 0, 'no open row created');
+  } finally {
+    await setGachaConfig(db, { disabledMachines: [] }); // reset
+  }
+});
+
 test('open: a pre-submit fund/sign failure (memo stored, no payment) refunds immediately', async () => {
   const user = await newUser();
   const before = await collOf(user);

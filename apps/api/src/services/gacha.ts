@@ -131,6 +131,9 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
 
   const machine = (await cc.getMachines()).machines?.find((m) => m.code === opts.machineCode);
   if (!machine) throw new HttpError(404, 'unknown machine');
+  // #8: an operator-disabled machine must NOT be buyable. The lobby only HIDES disabled codes (routes/gacha.ts),
+  // so without this guard a direct /gacha/open with a disabled code (the default-off $2.5k/$5k packs) still buys.
+  if (gachaConfig.disabledMachines.get().includes(opts.machineCode)) throw new HttpError(403, 'machine unavailable', 'machine_disabled');
   const price = usdc(machine.price); // $ → micro-USDC (CC's base price — what we pay CC on-chain)
   if (price <= 0n) throw new HttpError(503, 'machine price unavailable');
   // Gold spend gates: the master switch + the pay-with-Gold toggle, with a free-pack-claim exception — the $25
