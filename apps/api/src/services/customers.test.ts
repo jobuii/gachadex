@@ -124,22 +124,17 @@ test("listCustomers surfaces each customer's LP-pool stake (lpE6), matching the 
   assert.equal(BigInt(row.freeE6), 10_000_000_000n - 300_000_000n, 'free collateral dropped by the LP deposit');
 });
 
-test('listCustomers surfaces NET Gold earned (PACK_OPEN_EARN minus reversals; spends excluded)', async () => {
+test('listCustomers surfaces the live Gold BALANCE (gold_balances), not lifetime earned', async () => {
   const userId = await newUser('wallet-pk-gold', 'deposit-addr-gold', 9);
-  await earnGold(db, userId, 25_000n, 'PACK_OPEN_EARN');
-  await earnGold(db, userId, 5_000n, 'PACK_OPEN_EARN');
-  // a refunded open reverses its earn → REDUCES "earned"
-  await db.query(`INSERT INTO gold_ledger(id, user_id, delta, reason) VALUES($1,$2,$3,'PACK_OPEN_EARN_REVERSAL')`, [randomUUID(), userId, '-5000']);
-  // a pay-with-Gold spend (negative) must NOT reduce "earned"
-  await db.query(`INSERT INTO gold_ledger(id, user_id, delta, reason) VALUES($1,$2,$3,'PACK_BUY_GOLD')`, [randomUUID(), userId, '-1000']);
-  // a spend-refund is POSITIVE but is NOT an open-earn → must also be excluded (this is what the old delta>0 filter got wrong)
-  await db.query(`INSERT INTO gold_ledger(id, user_id, delta, reason) VALUES($1,$2,$3,'PACK_REFUND_GOLD')`, [randomUUID(), userId, '1000']);
+  await earnGold(db, userId, 30_000n, 'PACK_OPEN_EARN'); // earned 30,000 over time (updates the balance + ledger)
+  // ...then spends / an admin reset later brought the live spendable balance down to 24,000
+  await db.query(`UPDATE gold_balances SET balance = 24000 WHERE user_id = $1`, [userId]);
 
   const { customers } = await listCustomers(db, { limit: 200, offset: 0, sort: 'joined' });
   const row = customers.find((c) => c.userId === userId)!;
-  assert.equal(row.goldEarned, '25000', '30000 earned − 5000 reversal = 25000; the −1000 spend AND the +1000 spend-refund are both excluded');
+  assert.equal(row.goldBalance, '24000', 'shows the live spendable balance (24000), NOT the 30000 lifetime earned');
 
-  // a customer who never touched gacha shows 0, not null
+  // a customer who never earned gold shows 0, not null
   const noGold = customers.find((c) => c.pubkey === 'wallet-pk-1')!;
-  assert.equal(noGold.goldEarned, '0', 'no gold ledger rows -> 0');
+  assert.equal(noGold.goldBalance, '0', 'no gold_balances row -> 0');
 });
