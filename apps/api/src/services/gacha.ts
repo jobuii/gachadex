@@ -36,6 +36,7 @@ const GACHA_OFF = () => new HttpError(404, 'classic gacha is not available');
 const MAX_REVEAL_ATTEMPTS = 3;
 const REVEAL_RETRY_MS = 1000; // gap between inline reveal-poll attempts (was 1500) — snappier reveal once CC's webhook lands
 const RECONCILE_GRACE_MS = 90_000;
+const RECONCILE_UNLANDED_MS = 600_000; // 10 min — a payment broadcast still unconfirmed by now provably expired (≫ the ~90s blockhash window); only then refund a stuck buy
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export interface GachaDeps {
@@ -363,7 +364,8 @@ async function reconcileOne(db: Db, openId: string, deps: GachaDeps): Promise<Op
   const row = await getOpenRow(db, openId);
   if (!row) throw new HttpError(404, 'open not found');
   if (row.status !== 'paid') return rowToResult(row);
-  const aged = nowMs - new Date(row.created_at).getTime() >= RECONCILE_GRACE_MS;
+  const ageMs = nowMs - new Date(row.created_at).getTime();
+  const aged = ageMs >= RECONCILE_GRACE_MS;
 
   // Never reached the CC payment (no attempt marker, no sig): a sold-out generatePack, or a pre-submit fund/sign
   // failure that stored a memo but never paid → no money reached CC → refund. Aged-guarded so the async sweep
@@ -381,8 +383,18 @@ async function reconcileOne(db: Db, openId: string, deps: GachaDeps): Promise<Op
       try {
         const st = await cc.getPackStatus(row.cc_memo);
         if (st.pack?.refunded) return await settleRefund(db, openId, 'refunded');
+        // Never-landed payment: well past the blockhash window CC STILL reports no confirmed purchase for this memo.
+        // The per-memo `status !== 'confirmed'` check is the real guard against refunding a payment that landed; the
+        // custody-balance check is a backstop (the custody is per-USER, so its funds may belong to another open). The
+        // broadcast expired without paying CC → refund the buyer. Once this open leaves 'paid', autoSweepCustodyLeftovers
+        // reclaims the funding (it skips users with a live 'paid' open).
+        const unlanded = ageMs >= RECONCILE_UNLANDED_MS;
+        if (unlanded && st.pack?.status !== 'confirmed' && row.custody_pubkey) {
+          const bal = (await deps.chain.custodyUsdcBalances([row.custody_pubkey]))[row.custody_pubkey] ?? 0n;
+          if (bal > 0n) return await settleRefund(db, openId, 'failed');
+        }
       } catch {
-        /* CC unreachable — leave 'paid', try again later */
+        /* CC or chain RPC unreachable, or the refund tx failed — leave 'paid', retry next pass */
       }
     }
   }

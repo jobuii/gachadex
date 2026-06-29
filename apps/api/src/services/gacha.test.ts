@@ -70,6 +70,7 @@ function fakeCc() {
     submitThrow: false,
     submitConf: 'finalized' as string, // submitTransaction confirmationStatus ('confirmed'|'finalized'|'submitted')
     packRefunded: false,
+    packStatus: undefined as string | undefined, // getPackStatus pack.status ('confirmed' = the payment landed)
     alwaysWait: false,
     buybackAmount: 40_000_000, // base units ($40)
     submits: 0,
@@ -78,7 +79,7 @@ function fakeCc() {
     async generatePack(_p: unknown) { if (cc.generateFail) throw new Error('generatePack failed'); return { memo: `memo-${randomUUID().slice(0, 8)}`, transaction: 'unsigned' }; },
     async submitTransaction(_s: string) { cc.submits++; if (cc.submitThrow) throw new Error('simulated submit failure (broadcast-then-timeout)'); return { success: !cc.submitNoSig, signature: cc.submitNoSig ? '' : `paysig-${cc.submits}`, confirmationStatus: cc.submitConf }; },
     async openPackReveal(_m: string) { if (cc.alwaysWait) return waiting() as never; return (cc.reveals.length ? cc.reveals.shift() : keptReveal()) as never; },
-    async getPackStatus(m: string) { return { memo: m, pack: { refunded: cc.packRefunded }, send: null, buyback: [] }; },
+    async getPackStatus(m: string) { return { memo: m, pack: { refunded: cc.packRefunded, status: cc.packStatus }, send: null, buyback: [] }; },
     async buyback(_p: unknown) { return { success: true, serializedTransaction: 'bb', refundAmount: cc.buybackAmount, memo: 'bb' }; },
     async buybackAvailable() { return { available: cc.buybackAmount > 0, amount: cc.buybackAmount }; },
   };
@@ -217,6 +218,48 @@ test('open: a submit that may have broadcast (marker set) is NOT auto-refunded �
   const rec = await reconcilePending(db, user, { chain: fakeChain(), cc, now: future, ...noWait });
   assert.equal(rec.recovered, 1);
   assert.equal(await collOf(user), before); // now made whole, on CC's confirmation
+});
+
+test('open: a never-landed payment is refunded after the hard window + funding becomes recoverable (bug #2)', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  cc.alwaysWait = true; // CC never confirms a reveal → the open stays 'paid' (payment unconfirmed)
+  const before = await collOf(user);
+  const chain = fakeChain();
+  const r0 = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'unlanded' }, { chain, cc, ...noWait });
+  assert.equal(r0.status, 'paid'); // charged, no card — stuck 'paid'
+  assert.equal(await collOf(user), before - PRICE); // debited
+  const open = (await db.query<{ custody_pubkey: string }>(`SELECT custody_pubkey FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0];
+  const statusNow = async () => (await db.query<{ s: string }>(`SELECT status s FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0].s;
+  chain.custodyBalances[open.custody_pubkey] = PRICE; // the price never left the custody — the payment never executed
+
+  // INSIDE the hard window: stays conservative (NOT refunded) even though CC has no confirmed purchase.
+  await reconcileAllPending(db, { chain, cc, now: () => Date.now() + 120_000, ...noWait }); // >90s grace, <10min window
+  assert.equal(await statusNow(), 'paid', 'not refunded inside the hard window');
+  assert.equal(await collOf(user), before - PRICE);
+
+  // PAST the hard window: CC still reports no confirmed purchase + the funding is still in custody → refund.
+  await reconcileAllPending(db, { chain, cc, now: () => Date.now() + 11 * 60_000, ...noWait });
+  assert.equal(await statusNow(), 'failed', 'refunded once the payment provably expired');
+  assert.equal(await collOf(user), before, 'buyer made whole');
+
+  // and the open is no longer 'paid' → autoSweepCustodyLeftovers can now reclaim the stranded funding (was blocked).
+  const { custodies } = await scanCustodyLeftovers(db, { chain, cc, ...noWait });
+  assert.ok(custodies.some((x) => x.custodyPubkey === open.custody_pubkey), 'stranded custody funding now recoverable');
+});
+
+test('open: a LANDED payment (CC status=confirmed) is NEVER refunded, even past the hard window with funds in custody', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  cc.alwaysWait = true; // reveal not delivered yet, but...
+  cc.packStatus = 'confirmed'; // ...CC confirms the purchase LANDED → the money is at CC awaiting delivery, not lost
+  const chain = fakeChain();
+  await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'landed' }, { chain, cc, ...noWait });
+  const open = (await db.query<{ custody_pubkey: string }>(`SELECT custody_pubkey FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0];
+  chain.custodyBalances[open.custody_pubkey] = PRICE; // even with funds visible in the (shared per-user) custody…
+  await reconcileAllPending(db, { chain, cc, now: () => Date.now() + 11 * 60_000, ...noWait });
+  // …a confirmed purchase is the real guard — it is never refunded (the balance gate alone must NOT trigger it).
+  assert.equal((await db.query<{ s: string }>(`SELECT status s FROM gacha_pack_opens WHERE user_id = $1`, [user])).rows[0].s, 'paid');
 });
 
 test('open: a CC-refunded pack credits the buy back', async () => {
