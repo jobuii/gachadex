@@ -3,6 +3,7 @@ import { formatUsd } from '@pokex/pricing';
 import { indexSeries, INDEX_SERIES_LABELS, SERIES_ORDER } from '@pokex/shared-types';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { GAME_ORDER, gameBrand } from '../lib/games.js';
+import { TrendSpark } from './TrendSpark';
 import * as api from '../lib/api.js';
 
 // The Markets "Indices" sub-tab: a financial-style overview of every index. Top-level sections are the GAMES
@@ -132,6 +133,7 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
                   <col className="io-col-name" />
                   <col className="io-col-price" />
                   <col className="io-col-chg" />
+                  <col className="io-col-trend" />
                   <col className="io-col-chg" />
                   <col className="io-col-chg" />
                   <col className="io-col-chg" />
@@ -143,7 +145,8 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
                   <tr>
                     <th className="label">Index</th>
                     <th className="num">Price</th>
-                    <th className="num">1D</th>
+                    <th className="num">24H %</th>
+                    <th className="io-trend">Trend</th>
                     <th className="num">1W</th>
                     <th className="num">1M</th>
                     <th className="num">YTD*</th>
@@ -161,7 +164,7 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
                       <Fragment key={m.id}>
                         {head && (
                           <tr className="io-subhead">
-                            <td colSpan={9}>{INDEX_SERIES_LABELS[series] ?? '—'}</td>
+                            <td colSpan={10}>{INDEX_SERIES_LABELS[series] ?? '—'}</td>
                           </tr>
                         )}
                         <tr className={`io-row ${m.tradeable ? '' : 'io-row-soon'}`} onClick={() => m.tradeable && onTradeMarket(m)}>
@@ -173,6 +176,7 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
                             <PriceCell market={m} />
                           </td>
                           <ChangeCell pct={m.change24hPct} />
+                          <td className="io-trend"><TrendSpark pct={m.change24hPct} /></td>
                           <ChangeCell pct={s.change1wPct} />
                           <ChangeCell pct={s.change1mPct} />
                           <ChangeCell pct={s.changeYtdPct} />

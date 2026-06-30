@@ -2027,7 +2027,15 @@ td.addr:hover { text-decoration: underline; }
 .io-col-price, .io-col-range { width: 6.5rem; }
 .io-col-chg { width: 5.25rem; }
 .io-col-action { width: 5.5rem; }
+.io-col-trend { width: 5rem; }
 /* .io-col-name carries no width → it absorbs the remaining space, identical for every panel (still aligned) */
+/* TREND sparkline column — markets indices + cards tables (a 24h-direction trend line: green up / red down) */
+.io-table th.io-trend, .io-table td.io-trend { text-align: center; padding-left: 0.4rem; padding-right: 0.4rem; }
+.screener-table th.screener-trend, .screener-table td.screener-trend { text-align: center; }
+.trend-spark { width: 54px; height: 20px; display: inline-block; vertical-align: middle; }
+.trend-spark.up { color: var(--success); }
+.trend-spark.down { color: var(--danger); }
+.trend-spark-na { color: var(--text-muted); font-family: ui-monospace, monospace; font-size: 0.7rem; }
 .io-table thead th { background: var(--bg-2); text-align: left; white-space: nowrap;
   font-family: var(--font-chat); font-size: 0.58rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--text-muted); padding: 0.62rem 0.9rem; border-bottom: 1px solid var(--border); }
