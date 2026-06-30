@@ -1401,8 +1401,69 @@ button { border-radius: var(--pill); }
 .btn-ghost:disabled { opacity: 0.5; cursor: default; }
 .btn-ghost.sm { font-size: 0.45rem; padding: 0.3rem 0.45rem; }
 
-.auth-pill { display: flex; align-items: center; gap: 0.5rem; }
-.auth-addr { font-size: 0.62rem; color: var(--gold); background: var(--bg-3); padding: 0.35rem 0.5rem; border: 1px solid var(--border); }
+/* Account pill (avatar + username) + identity/wallet dropdown — connected & signed-in. Token-driven so it
+   themes across all skins; sprite avatar reuses the chat/profile identity. */
+.acct { position: relative; display: flex; }
+.acct-pill {
+  display: flex; align-items: center; gap: 0.45rem;
+  background: var(--bg-3); border: 1px solid var(--border); color: var(--text);
+  padding: 0.28rem 0.5rem 0.28rem 0.32rem; border-radius: var(--pill);
+  cursor: pointer; font-family: var(--font-display);
+  transition: border-color 0.14s, background 0.14s;
+}
+.acct-pill:hover, .acct-pill.open { border-color: var(--accent); background: var(--bg-2); }
+.acct-pill:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 2px; }
+.acct-av {
+  width: 26px; height: 26px; border-radius: 6px; flex-shrink: 0;
+  object-fit: cover; image-rendering: pixelated; background: var(--bg-2); border: 1px solid var(--border);
+}
+.acct-handle {
+  font-size: 0.72rem; font-weight: var(--weight-strong); color: var(--text);
+  max-width: 9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acct-caret { display: grid; place-items: center; color: var(--text-muted); transition: transform 0.18s, color 0.16s; }
+.acct-caret svg { width: 13px; height: 13px; }
+.acct-pill.open .acct-caret { transform: rotate(180deg); color: var(--accent-lit); }
+
+.acct-menu {
+  position: absolute; top: calc(100% + 10px); right: 0; z-index: 120;
+  width: 250px; max-width: 86vw;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 24px 60px -22px rgba(0, 0, 0, 0.85); padding: 0.5rem;
+  animation: acct-pop 0.16s ease;
+}
+@keyframes acct-pop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+.acct-menu::before {
+  content: ""; position: absolute; top: -5px; right: 18px; width: 10px; height: 10px;
+  background: var(--bg-2); border-left: 1px solid var(--border); border-top: 1px solid var(--border); transform: rotate(45deg);
+}
+.acct-head { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.5rem 0.65rem; }
+.acct-head-av {
+  width: 38px; height: 38px; border-radius: 9px; flex-shrink: 0;
+  object-fit: cover; image-rendering: pixelated; background: var(--bg-3); border: 1px solid var(--border);
+}
+.acct-head-meta { min-width: 0; }
+.acct-head-name {
+  font-family: var(--font-display); font-weight: var(--weight-strong); font-size: 0.92rem; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acct-head-addr { font-size: 0.72rem; color: var(--text-muted); margin-top: 1px; font-family: ui-monospace, monospace; }
+.acct-copy, .acct-disconnect {
+  width: 100%; display: flex; align-items: center; gap: 0.5rem;
+  background: var(--bg-3); border: 1px solid var(--border); color: var(--text);
+  padding: 0.55rem 0.6rem; border-radius: var(--pill); cursor: pointer;
+  font-family: var(--font-display); font-size: 0.78rem;
+  transition: border-color 0.14s, background 0.14s, color 0.14s;
+}
+.acct-copy { margin-bottom: 0.4rem; }
+.acct-copy svg, .acct-disconnect svg { width: 15px; height: 15px; flex-shrink: 0; }
+.acct-copy:hover { border-color: var(--accent); }
+.acct-copy-addr { font-family: ui-monospace, monospace; color: var(--text); }
+.acct-copy-net { margin-left: auto; font-size: 0.64rem; color: var(--text-muted); font-weight: var(--weight-strong); letter-spacing: 0.3px; }
+.acct-disconnect { color: var(--danger); justify-content: center; }
+.acct-disconnect:hover { border-color: var(--danger); }
+.acct-copy:focus-visible, .acct-disconnect:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .acct-menu { animation: none; } }
 /* navbar auth buttons — bigger, readable text (Select Wallet / Sign In / Logout) */
 .navbar .wallet-adapter-button { font-size: 0.72rem !important; }
 .nav-actions .btn-primary, .nav-actions .btn-ghost { font-size: 0.68rem; padding: 0.55rem 0.95rem; }
