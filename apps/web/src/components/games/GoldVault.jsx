@@ -45,6 +45,37 @@ export function GoldVault({ refreshKey = 0 }) {
     return () => cancelAnimationFrame(raf.current);
   }, [balance]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── "How to earn Gold" guidance: a tap "i" toggletip (A) + a one-time intro coachmark (D) ──
+  const [howOpen, setHowOpen] = useState(false);
+  const [coachOpen, setCoachOpen] = useState(false);
+  const infoRef = useRef(null);
+  const popRef = useRef(null);
+
+  // Popover dismissal — outside-tap + Esc (WCAG 1.4.13: dismissible + keyboard-reachable). Tap-triggered,
+  // not hover, so it works on touch where the games page mostly lives.
+  useEffect(() => {
+    if (!howOpen) return undefined;
+    const onDown = (e) => { if (!popRef.current?.contains(e.target) && !infoRef.current?.contains(e.target)) setHowOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') { setHowOpen(false); infoRef.current?.focus(); } };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('pointerdown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [howOpen]);
+
+  // One-time intro coachmark — shows once (next visit after this ships), then never again. Marked seen the
+  // moment it shows (persisted), so a reload mid-view won't re-trigger it. Only fires when the vault renders.
+  useEffect(() => {
+    if (!enabled || !gold) return undefined;
+    let seen = true;
+    try { seen = localStorage.getItem('gachadex_gold_coach_seen') === '1'; } catch { /* private mode → treat as seen, never nag */ }
+    if (seen) return undefined;
+    const t = setTimeout(() => {
+      setCoachOpen(true);
+      try { localStorage.setItem('gachadex_gold_coach_seen', '1'); } catch { /* ignore */ }
+    }, 900);
+    return () => clearTimeout(t);
+  }, [enabled, gold]);
+
   if (!enabled || !gold) return null;
 
   const pct = Math.min(100, Math.round((balance / FREE_PACK_GOLD) * 100));
@@ -65,8 +96,18 @@ export function GoldVault({ refreshKey = 0 }) {
 
   return (
     <>
-      <div className={`gold-vault ${ready ? 'ready' : ''}`} title="Loyalty Gold — earned on every USDC open">
-        <span className="gv-label">GOLD</span>
+      <div className={`gold-vault ${ready ? 'ready' : ''} ${coachOpen ? 'gv-coach-on' : ''}`}>
+        <div className="gv-top">
+          <span className="gv-label">GOLD</span>
+          <button
+            type="button"
+            ref={infoRef}
+            className="gv-info"
+            aria-label="How to earn Gold"
+            aria-expanded={howOpen}
+            onClick={() => setHowOpen((o) => !o)}
+          >i</button>
+        </div>
         <div className="gv-mid"><GoldBar size={22} className="gv-bar" /><span className="gv-amt">{fmt(shown)}</span></div>
         {ready ? (
           <button className="gv-claim" disabled={busy} onClick={claim}>✦ Claim free pack</button>
@@ -80,6 +121,27 @@ export function GoldVault({ refreshKey = 0 }) {
           </div>
         )}
         {err && <div className="gv-err">{err}</div>}
+
+        {/* A — "How to earn Gold" toggletip: tap-triggered popover, details on demand (not a hover tooltip) */}
+        {howOpen && (
+          <div className="gv-howpop" ref={popRef} role="dialog" aria-label="How to earn Gold">
+            <div className="gv-howpop-title">How to earn Gold</div>
+            <div className="gv-earn"><span className="gv-earn-e" aria-hidden="true">🎴</span><span>Open a pack with <b>USDC</b> → earn <b>Gold</b> back (~2.5%)</span></div>
+            <div className="gv-earn"><span className="gv-earn-e" aria-hidden="true">🏆</span><span><b>25,000 Gold</b> = a free <b>$25 pack</b></span></div>
+            <div className="gv-earn"><span className="gv-earn-e" aria-hidden="true">💡</span><span><b>1,000 Gold ≈ $1</b> of pack value</span></div>
+            <div className="gv-howpop-fine">Gold pulls earn none · not withdrawable — it pays you back in free packs.</div>
+            <a className="gv-howpop-more" href="/docs#gold-rewards">Learn more →</a>
+          </div>
+        )}
+
+        {/* D — one-time intro coachmark (shown once per browser, then never again) */}
+        {coachOpen && (
+          <div className="gv-coach" role="dialog" aria-label="Gold vault tip">
+            <strong className="gv-coach-h">Meet your Gold vault</strong>
+            <span className="gv-coach-p">Earn Gold on every USDC pull — fill the ring for a free $25 pack.</span>
+            <button type="button" className="gv-coach-got" onClick={() => setCoachOpen(false)}>Got it</button>
+          </div>
+        )}
       </div>
       {revealOpen && (
         <GachaReveal

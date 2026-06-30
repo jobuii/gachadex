@@ -172,6 +172,39 @@
 .gv-claim:disabled { opacity: .7; cursor: default; }
 .gv-err { font-size: 10.5px; color: var(--down, #ef4444); margin-top: 5px; }
 @media (prefers-reduced-motion: reduce) { .gold-vault.ready, .gv-bar .shine, .gv-claim, .gv-ring-fg { animation: none; transition: none; } }
+
+/* ── "How to earn Gold" guidance on the vault: a tap "i" toggletip (A) + a one-time intro coachmark (D) ── */
+.gold-vault { position: relative; } /* anchor for the popover + coachmark */
+.gv-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.gv-info { position: relative; flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1px solid #4a4250; background: transparent; color: #9a93a3; font: 600 11px var(--font-base, inherit); line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; transition: border-color .15s, color .15s; }
+.gv-info::before { content: ''; position: absolute; inset: -12px; } /* ~42px tap target without enlarging the dot */
+.gv-info:hover, .gv-info:focus-visible { border-color: #ffd45a; color: #ffd45a; outline: none; }
+
+/* A — popover (opens below the vault, right-aligned; arrow under the "i") */
+.gv-howpop { position: absolute; z-index: 40; top: calc(100% + 10px); right: 0; width: 244px; max-width: 86vw;
+  background: linear-gradient(180deg, #16131d, #100d16); border: 1px solid #3a3348; border-radius: 12px; padding: 13px 13px 12px;
+  box-shadow: 0 22px 50px -18px rgba(0,0,0,.85); animation: gv-pop-in .15s ease-out; }
+.gv-howpop::before { content: ''; position: absolute; top: -6px; right: 14px; width: 11px; height: 11px; background: #16131d; border-left: 1px solid #3a3348; border-top: 1px solid #3a3348; transform: rotate(45deg); }
+.gv-howpop-title { font-family: var(--font-display, inherit); font-weight: 700; font-size: .82rem; color: #ffd45a; margin-bottom: 8px; }
+.gv-earn { display: flex; gap: 8px; align-items: flex-start; font-size: .76rem; color: #dcdce2; padding: 4px 0; line-height: 1.35; }
+.gv-earn-e { width: 18px; text-align: center; flex: none; }
+.gv-earn b { color: #fff; font-weight: 600; }
+.gv-howpop-fine { font-size: .66rem; color: var(--muted, #8b8b95); margin-top: 7px; padding-top: 7px; border-top: 1px solid #2a2535; line-height: 1.4; }
+.gv-howpop-more { display: inline-block; margin-top: 9px; font-size: .74rem; font-weight: 600; color: var(--cyan, #22d3ee); text-decoration: none; }
+.gv-howpop-more:hover { text-decoration: underline; }
+@keyframes gv-pop-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+/* D — one-time intro coachmark (highlight the vault + a pointing callout) */
+.gold-vault.gv-coach-on { animation: gv-coach-pulse 1.6s ease-in-out 2; }
+@keyframes gv-coach-pulse { 0%,100% { box-shadow: 0 0 0 2px rgba(255,212,90,.45), 0 0 28px rgba(255,212,90,.22); } 50% { box-shadow: 0 0 0 2px rgba(255,212,90,.7), 0 0 42px rgba(255,212,90,.42); } }
+.gv-coach { position: absolute; z-index: 41; top: calc(100% + 12px); right: 0; width: 250px; max-width: 88vw;
+  background: linear-gradient(160deg, #1b1726, #141019); border: 1px solid var(--violet, #8b5cf6); border-radius: 12px; padding: 12px 13px;
+  box-shadow: 0 22px 50px -18px rgba(139,92,246,.5); animation: gv-pop-in .25s ease-out; display: flex; flex-direction: column; gap: 5px; }
+.gv-coach::before { content: ''; position: absolute; top: -6px; right: 18px; width: 11px; height: 11px; background: #1b1726; border-left: 1px solid var(--violet, #8b5cf6); border-top: 1px solid var(--violet, #8b5cf6); transform: rotate(45deg); }
+.gv-coach-h { font-family: var(--font-display, inherit); font-size: .82rem; color: var(--text, #f5f5f7); }
+.gv-coach-p { font-size: .74rem; color: #c4c5cd; line-height: 1.4; }
+.gv-coach-got { align-self: flex-start; margin-top: 5px; background: linear-gradient(120deg, var(--cyan, #22d3ee), var(--violet, #8b5cf6), var(--pink, #f472b6)); color: #06060a; border: 0; border-radius: 8px; padding: .32rem .8rem; font: 700 .72rem var(--font-base, inherit); cursor: pointer; }
+@media (prefers-reduced-motion: reduce) { .gold-vault.gv-coach-on, .gv-howpop, .gv-coach { animation: none; } }
 .gacha-paywith { display: flex; gap: 0.4rem; margin: 0 0 0.5rem; }
 .gacha-pay { flex: 1; padding: 0.35rem 0.5rem; border-radius: 8px; border: 1px solid var(--border, #2a2a35); background: transparent; color: var(--muted, #8b8b9a); font-size: 0.8rem; cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s; }
 .gacha-pay.active { border-color: var(--cg, #f59e0b); color: var(--cg, #f59e0b); background: rgba(245, 158, 11, 0.1); }
