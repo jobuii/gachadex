@@ -8,7 +8,7 @@ import { lpShareValue } from './lp.ts';
 // NOT history.ts's "Transfer" set: LP_DEPOSIT/LP_WITHDRAW are EXCLUDED (LP capital is valued separately
 // via lpValue), and DROP_TIP is INCLUDED (a tip is capital leaving collateral). If a new external-flow
 // reason is added to the ledger, add it here too — otherwise the leaderboard silently counts it as PnL.
-const EXTERNAL_CAPITAL_REASONS = ['FAUCET', 'REFERRAL_BONUS', 'DEPOSIT', 'WITHDRAWAL', 'WITHDRAWAL_REVERSAL', 'DROP_TIP'];
+const EXTERNAL_CAPITAL_REASONS = ['FAUCET', 'REFERRAL_BONUS', 'DEPOSIT', 'WITHDRAWAL', 'WITHDRAWAL_REVERSAL', 'DROP_TIP', 'SIGNUP_CREDIT', 'SIGNUP_CREDIT_EXPIRE'];
 
 export interface LeaderboardRow {
   rank: number;
