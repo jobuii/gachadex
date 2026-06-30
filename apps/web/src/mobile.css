@@ -140,9 +140,9 @@
   }
   .page .positions-table td, .page .positions-table th { white-space: nowrap; }
 
-  /* leaderboard: rank + trader + PnL (equity/volume are desktop detail) */
+  /* leaderboard: rank + trader + PnL (Gold/volume are desktop detail) */
   .lb-row { grid-template-columns: 2.4rem minmax(5rem, 1fr) auto; padding: 0.6rem 0.7rem; }
-  .lb-equity, .lb-volume { display: none; }
+  .lb-gold, .lb-volume { display: none; }
 
   /* referral / wallet panels stack their fields */
   .ref-code-box { flex-direction: column; }

@@ -15,8 +15,9 @@ export interface LeaderboardRow {
   userId: string;
   pubkey: string;
   realizedPnlUusdc: string; // net booked PnL: (cash + LP value) - net external capital in  (fees & funding included)
-  equityUusdc: string; // cash + LP value + unrealized PnL
+  equityUusdc: string; // cash + LP value + unrealized PnL (kept for API back-compat + tests; no longer shown in the UI)
   volumeUusdc: string; // Σ notional traded across all fills
+  goldEarned: string; // lifetime Gold earned from pack opens (PACK_OPEN_EARN − refund reversals; whole Gold)
 }
 
 /**
@@ -39,12 +40,13 @@ interface RankedEntry {
   realized: bigint; // net booked PnL — the ranking key
   equity: bigint;
   volume: bigint;
+  goldEarned: bigint;
 }
 
 /** The full field, ranked by net realized PnL (tie-broken by equity). The heavy part: a set of
  *  set-based queries + in-memory aggregation. Shared by getLeaderboard (top-N + viewer) and rankMap. */
 async function computeRanked(db: Db): Promise<RankedEntry[]> {
-  const [users, balances, netCapital, volume, positions, marks, pool, lpShares] = await Promise.all([
+  const [users, balances, netCapital, volume, positions, marks, pool, lpShares, gold] = await Promise.all([
     db.query<{ id: string; solana_pubkey: string }>(`SELECT id, solana_pubkey FROM users`),
     db.query<{ user_id: string; type: string; amt: string }>(
       `SELECT a.user_id, a.type, COALESCE(b.amount_uusdc, 0)::text AS amt
@@ -78,6 +80,11 @@ async function computeRanked(db: Db): Promise<RankedEntry[]> {
               COALESCE((SELECT total_shares FROM lp_pool WHERE id = 'pool'), 0)::text AS shares`,
     ),
     db.query<{ user_id: string; shares: string }>(`SELECT user_id, shares::text AS shares FROM lp_positions WHERE shares > 0`),
+    // lifetime Gold earned from pack opens (PACK_OPEN_EARN minus refund reversals; spends excluded) — leaderboard flex metric
+    db.query<{ user_id: string; gold: string }>(
+      `SELECT user_id, COALESCE(SUM(delta) FILTER (WHERE reason IN ('PACK_OPEN_EARN', 'PACK_OPEN_EARN_REVERSAL')), 0)::text AS gold
+       FROM gold_ledger GROUP BY user_id`,
+    ),
   ]);
 
   const cash = new Map<string, bigint>(); // collateral + locked margin
@@ -106,6 +113,9 @@ async function computeRanked(db: Db): Promise<RankedEntry[]> {
     uPnl.set(p.user_id, (uPnl.get(p.user_id) ?? 0n) + pnl);
   }
 
+  const goldByUser = new Map<string, bigint>();
+  for (const r of gold.rows) goldByUser.set(r.user_id, BigInt(r.gold));
+
   return users.rows
     .map((u) => {
       const c = (cash.get(u.id) ?? 0n) + (lpValue.get(u.id) ?? 0n); // total cash incl. LP position value
@@ -116,6 +126,7 @@ async function computeRanked(db: Db): Promise<RankedEntry[]> {
         realized,
         equity: c + (uPnl.get(u.id) ?? 0n),
         volume: vol.get(u.id) ?? 0n,
+        goldEarned: goldByUser.get(u.id) ?? 0n,
       };
     })
     .sort((a, b) => (b.realized === a.realized ? cmp(b.equity, a.equity) : cmp(b.realized, a.realized)));
@@ -135,6 +146,7 @@ export async function getLeaderboard(
     realizedPnlUusdc: e.realized.toString(),
     equityUusdc: e.equity.toString(),
     volumeUusdc: e.volume.toString(),
+    goldEarned: e.goldEarned.toString(),
   });
 
   const rows = ranked.slice(0, limit).map(toRow);

@@ -48,6 +48,24 @@ test('a real USDC deposit is NOT counted as realized PnL (the reported bug)', as
   assert.equal(equity, usdc(5000).toString()); // the deposit IS equity — it's just not PnL
 });
 
+test('leaderboard surfaces lifetime Gold earned (PACK_OPEN_EARN minus reversals; spends excluded)', async () => {
+  const u = await newUser();
+  const gl = (delta: string, reason: string) =>
+    db.query(`INSERT INTO gold_ledger(id, user_id, delta, reason) VALUES($1,$2,$3,$4)`, [randomUUID(), u, delta, reason]);
+  await gl('25000', 'PACK_OPEN_EARN');
+  await gl('5000', 'PACK_OPEN_EARN');
+  await gl('-5000', 'PACK_OPEN_EARN_REVERSAL'); // a refunded open claws its earn back → reduces "earned"
+  await gl('-1000', 'PACK_BUY_GOLD'); // a pay-with-Gold spend must NOT reduce lifetime "earned"
+  const { you } = await getLeaderboard(db, { viewerUserId: u });
+  assert.ok(you);
+  assert.equal(you.goldEarned, '25000', '30000 earned − 5000 reversal = 25000; the −1000 spend is excluded');
+
+  // a user who never earned Gold shows 0, not null
+  const u2 = await newUser();
+  const { you: you2 } = await getLeaderboard(db, { viewerUserId: u2 });
+  assert.equal(you2!.goldEarned, '0', 'no gold_ledger rows -> 0');
+});
+
 test('realized PnL nets deposits, withdrawals, and DROP tips — leaving only trading P/L', async () => {
   const u = await newUser();
   await flow(u, 'DEPOSIT', 'TREASURY_USDC', usdc(1000)); // +1000 external capital in

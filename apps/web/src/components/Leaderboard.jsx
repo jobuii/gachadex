@@ -15,7 +15,7 @@ function Row({ r, mine }) {
         {mine && <span className="lb-you-tag">YOU</span>}
       </span>
       <span className={`lb-pnl ${up ? 'up' : 'down'}`}>{formatSignedUsd(r.realizedPnlUusdc)}</span>
-      <span className="lb-equity">{formatUsd(BigInt(r.equityUusdc))}</span>
+      <span className="lb-gold">{Number(r.goldEarned ?? 0).toLocaleString()}</span>
       <span className="lb-volume">{formatUsd(BigInt(r.volumeUusdc), { compact: true })}</span>
     </div>
   );
@@ -53,7 +53,7 @@ export function Leaderboard() {
           <span className="lb-rank">#</span>
           <span className="lb-trader">TRADER</span>
           <span className="lb-pnl">REALIZED PnL</span>
-          <span className="lb-equity">EQUITY</span>
+          <span className="lb-gold">GOLD EARNED</span>
           <span className="lb-volume">VOLUME</span>
         </div>
 

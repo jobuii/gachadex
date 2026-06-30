@@ -139,7 +139,7 @@
 :root:not([data-theme="arcade"]) .sc-val,
 :root:not([data-theme="arcade"]) .lb-row:not(.lb-head) .lb-rank,
 :root:not([data-theme="arcade"]) .lb-row:not(.lb-head) .lb-pnl,
-:root:not([data-theme="arcade"]) .lb-row:not(.lb-head) .lb-equity,
+:root:not([data-theme="arcade"]) .lb-row:not(.lb-head) .lb-gold,
 :root:not([data-theme="arcade"]) .lb-row:not(.lb-head) .lb-volume,
 :root:not([data-theme="arcade"]) .field-hint,
 :root:not([data-theme="arcade"]) .modal-sub.val,
