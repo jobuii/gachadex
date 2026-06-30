@@ -126,51 +126,47 @@ export function NavBalance({ onManageFunds }) {
       </div>
 
       {open && (
-        <>
-          <div className="navbal-scrim" aria-hidden="true" onClick={() => setOpen(false)} />
-          <div className="navbal-pop" ref={popRef} role="dialog" aria-label="Your balances">
-            <span className="navbal-grab" aria-hidden="true" />
-            <div className="navbal-pop-head">
-              <span className="navbal-pop-title">YOUR MONEY</span>
-              <button type="button" className="navbal-mask" onClick={toggleMask} aria-pressed={masked}>
-                {masked ? <EyeOff /> : <EyeOn />}<span>{masked ? 'Show' : 'Hide'}</span>
-              </button>
-            </div>
+        <div className="navbal-pop" ref={popRef} role="dialog" aria-label="Your balances">
+          <div className="navbal-pop-head">
+            <span className="navbal-pop-title">YOUR MONEY</span>
+            <button type="button" className="navbal-mask" onClick={toggleMask} aria-pressed={masked}>
+              {masked ? <EyeOff /> : <EyeOn />}<span>{masked ? 'Show' : 'Hide'}</span>
+            </button>
+          </div>
 
-            <div className="navbal-row usdc">
-              <span className="navbal-ricon usdc" aria-hidden="true">$</span>
+          <div className="navbal-row usdc">
+            <span className="navbal-ricon usdc" aria-hidden="true">$</span>
+            <div className="navbal-meta">
+              <div className="navbal-nm"><b>USDC</b><span className="navbal-tag tradeable">Available</span></div>
+              <div className="navbal-sub">Trade &amp; withdraw</div>
+            </div>
+            <div className="navbal-amt">
+              <span className="navbal-big">{masked ? '••••••' : formatUsd(BigInt(bal.availableUusdc))}</span>
+              <div className="navbal-unit">USDC</div>
+            </div>
+          </div>
+
+          {showGold && (
+            <div className="navbal-row gold">
+              <span className="navbal-ricon gold" aria-hidden="true"><GoldBar size={22} /></span>
               <div className="navbal-meta">
-                <div className="navbal-nm"><b>USDC</b><span className="navbal-tag tradeable">Available</span></div>
-                <div className="navbal-sub">Trade &amp; withdraw</div>
+                <div className="navbal-nm"><b>Gold</b><span className="navbal-tag loyalty">Loyalty</span></div>
+                <div className="navbal-sub">Non-withdrawable · 1,000 ≈ $1</div>
               </div>
               <div className="navbal-amt">
-                <span className="navbal-big">{masked ? '••••••' : formatUsd(BigInt(bal.availableUusdc))}</span>
-                <div className="navbal-unit">USDC</div>
+                <span className="navbal-big gold">{masked ? '••••••' : Number(gold.balance).toLocaleString()}</span>
+                <div className="navbal-unit">GOLD</div>
               </div>
             </div>
+          )}
 
-            {showGold && (
-              <div className="navbal-row gold">
-                <span className="navbal-ricon gold" aria-hidden="true"><GoldBar size={22} /></span>
-                <div className="navbal-meta">
-                  <div className="navbal-nm"><b>Gold</b><span className="navbal-tag loyalty">Loyalty</span></div>
-                  <div className="navbal-sub">Non-withdrawable · 1,000 ≈ $1</div>
-                </div>
-                <div className="navbal-amt">
-                  <span className="navbal-big gold">{masked ? '••••••' : Number(gold.balance).toLocaleString()}</span>
-                  <div className="navbal-unit">GOLD</div>
-                </div>
-              </div>
-            )}
-
-            {onManageFunds && (
-              <div className="navbal-actions">
-                <button type="button" className="btn-primary navbal-act" onClick={manage}>Deposit</button>
-                <button type="button" className="btn-ghost navbal-act" onClick={manage}>Withdraw</button>
-              </div>
-            )}
-          </div>
-        </>
+          {onManageFunds && (
+            <div className="navbal-actions">
+              <button type="button" className="btn-primary navbal-act" onClick={manage}>Deposit</button>
+              <button type="button" className="btn-ghost navbal-act" onClick={manage}>Withdraw</button>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

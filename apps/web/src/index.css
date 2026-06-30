@@ -1501,8 +1501,6 @@ button { border-radius: var(--pill); }
 .navbal-caret svg { width: 13px; height: 13px; }
 .navbal-chip.open .navbal-caret { transform: rotate(180deg); color: var(--accent-lit); }
 
-.navbal-scrim { display: none; }            /* desktop: no scrim (anchored dropdown + outside-click closes) */
-.navbal-grab { display: none; }             /* desktop: no grab handle */
 .navbal-pop {
   position: absolute; top: calc(100% + 10px); right: 0; z-index: 120;
   width: 340px; max-width: 92vw;
