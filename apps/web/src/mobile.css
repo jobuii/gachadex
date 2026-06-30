@@ -24,6 +24,7 @@
 
   /* ---- top bar: logo + chat + theme + wallet (links live in the tab bar) ---- */
   .navbar { padding: 0 0.6rem; height: var(--m-bar-h); gap: 0.4rem; }
+  .mkt-ticker { margin: 11px 10px; } /* tighter sides on a phone; vertical stays symmetric */
   .nav-links, .nav-social-link { display: none; }
   .nav-left { gap: 0.55rem; }
   .nav-brand { gap: 0.4rem; }

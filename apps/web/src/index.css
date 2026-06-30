@@ -479,6 +479,39 @@ button { border-radius: var(--pill); }
   transition: grid-template-columns 0.3s ease;
 }
 
+/* Running ticker tape — biggest 24h card movers, below the navbar on the Trade view. Equal top + bottom
+   margin = symmetric whitespace (nav → ticker → content; .main-grid has no top margin). The item set is
+   duplicated and the track translates -50% for a seamless loop; hover / reduced-motion pause it. Token-driven. */
+.mkt-ticker {
+  margin: 14px 18px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent);
+          mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent);
+}
+.mkt-ticker-track {
+  display: flex; align-items: center; width: max-content;
+  animation: mkt-ticker-scroll 40s linear infinite;
+}
+@keyframes mkt-ticker-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.mkt-ticker:hover .mkt-ticker-track { animation-play-state: paused; }
+/* per-item margin (not a track `gap`) so the track is exactly 2× one set → translateX(-50%) loops seamlessly */
+.mkt-tick {
+  display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
+  background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: pointer;
+  margin: 7px; padding: 4px 10px; font-size: 12.5px; transition: background 0.14s, border-color 0.14s;
+}
+.mkt-tick:hover { background: var(--bg-3); border-color: var(--border); }
+.mkt-tick:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 1px; }
+.mkt-tick-nm { font-family: var(--font-display); font-weight: 600; color: var(--text); }
+.mkt-tick-pr { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.mkt-tick-ch { font-family: ui-monospace, monospace; font-weight: 600; font-size: 11px; padding: 1px 6px; border-radius: 5px; }
+.mkt-tick-ch.up { color: var(--success); background: rgba(52, 211, 153, 0.1); }
+.mkt-tick-ch.down { color: var(--danger); background: rgba(244, 63, 94, 0.1); }
+@media (prefers-reduced-motion: reduce) { .mkt-ticker-track { animation: none; } }
+
 .main-grid.sidebar-collapsed {
   grid-template-columns: 60px 1fr 280px;
 }
