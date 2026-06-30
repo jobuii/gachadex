@@ -1465,6 +1465,67 @@ button { border-radius: var(--pill); }
 .acct-disconnect:hover { border-color: var(--danger); }
 .acct-copy:focus-visible, .acct-disconnect:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .acct-menu { animation: none; } }
+
+/* Option B — unified balance chip (available USDC + abbreviated Gold) + popover. Token-driven (all skins);
+   anchored dropdown like the account pill (navbar has no scrim/overflow → no stacking trap). */
+.navbal { position: relative; display: flex; }
+.navbal-chip {
+  display: flex; align-items: center; gap: 0.4rem;
+  background: var(--bg-3); border: 1px solid var(--border); color: var(--text);
+  padding: 0.28rem 0.55rem; border-radius: var(--pill); cursor: pointer;
+  font-family: var(--font-display); transition: border-color 0.14s, background 0.14s;
+}
+.navbal-chip:hover, .navbal-chip.open { border-color: var(--accent); background: var(--bg-2); }
+.navbal-chip:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 2px; }
+.navbal-leg { display: flex; align-items: center; gap: 0.3rem; }
+.navbal-glyph.usdc {
+  width: 17px; height: 17px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center;
+  font-size: 0.6rem; font-weight: 700; color: #fff;
+  background: radial-gradient(circle at 35% 30%, var(--accent-lit), var(--accent) 78%);
+}
+.navbal-ingot { flex-shrink: 0; }
+.navbal-val { font-size: 0.72rem; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -0.2px; }
+.navbal-val.gold { color: #FCE5AE; } /* gold currency tint — matches the GoldVault amount */
+.navbal-dot { color: var(--text-muted); opacity: 0.6; }
+.navbal-caret { display: grid; place-items: center; color: var(--text-muted); transition: transform 0.18s, color 0.16s; }
+.navbal-caret svg { width: 12px; height: 12px; }
+.navbal-chip.open .navbal-caret { transform: rotate(180deg); color: var(--accent-lit); }
+
+.navbal-pop {
+  position: absolute; top: calc(100% + 10px); right: 0; z-index: 120;
+  width: 276px; max-width: 88vw;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 24px 60px -22px rgba(0, 0, 0, 0.85); padding: 0.5rem; animation: acct-pop 0.16s ease;
+}
+.navbal-pop::before {
+  content: ""; position: absolute; top: -5px; right: 18px; width: 10px; height: 10px;
+  background: var(--bg-2); border-left: 1px solid var(--border); border-top: 1px solid var(--border); transform: rotate(45deg);
+}
+.navbal-pop-head { display: flex; align-items: center; justify-content: space-between; padding: 0.35rem 0.4rem 0.5rem; }
+.navbal-pop-title { font-family: var(--font-display); font-weight: 600; font-size: 0.66rem; letter-spacing: 0.5px; color: var(--text-muted); }
+.navbal-eye { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-muted); cursor: pointer; transition: color 0.14s, border-color 0.14s, background 0.14s; }
+.navbal-eye:hover { color: var(--text); border-color: var(--border); background: var(--bg-3); }
+.navbal-eye:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 1px; }
+.navbal-eye svg { width: 15px; height: 15px; }
+
+.navbal-row { display: flex; align-items: center; gap: 0.55rem; padding: 0.5rem 0.45rem; border-radius: 8px; }
+.navbal-row + .navbal-row { margin-top: 1px; }
+.navbal-ricon { width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; display: grid; place-items: center; font-weight: 700; font-size: 0.82rem; }
+.navbal-ricon.usdc { color: #fff; background: radial-gradient(circle at 35% 30%, var(--accent-lit), var(--accent) 78%); }
+.navbal-ricon.gold { background: var(--bg-3); border: 1px solid var(--border); }
+.navbal-meta { flex: 1; min-width: 0; }
+.navbal-nm { display: flex; align-items: center; gap: 0.4rem; font-family: var(--font-display); font-weight: 600; font-size: 0.82rem; color: var(--text); }
+.navbal-tag { font-family: var(--font-display); font-size: 0.56rem; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; padding: 0.1rem 0.35rem; border-radius: 5px; border: 1px solid var(--border); background: var(--bg-3); }
+.navbal-tag.tradeable { color: var(--accent-lit); }
+.navbal-tag.loyalty { color: #FCE5AE; }
+.navbal-subtle { font-size: 0.66rem; color: var(--text-muted); margin-top: 1px; }
+.navbal-big { margin-left: auto; font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 0.82rem; color: var(--text); }
+.navbal-big.gold { color: #FCE5AE; }
+
+.navbal-actions { display: flex; gap: 0.4rem; padding: 0.5rem 0.4rem 0.3rem; }
+.navbal-act { flex: 1; display: inline-flex; align-items: center; justify-content: center; }
+@media (prefers-reduced-motion: reduce) { .navbal-pop { animation: none; } }
+
 /* navbar auth buttons — bigger, readable text (Select Wallet / Sign In / Logout) */
 .navbar .wallet-adapter-button { font-size: 0.72rem !important; }
 .nav-actions .btn-primary, .nav-actions .btn-ghost { font-size: 0.68rem; padding: 0.55rem 0.95rem; }

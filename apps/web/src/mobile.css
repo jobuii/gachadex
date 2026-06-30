@@ -35,6 +35,12 @@
   .nav-actions { gap: 0.4rem; }
   .acct-handle, .acct-caret { display: none; } /* account pill = avatar-only on mobile; the dropdown still shows the name + address */
   .acct-pill { padding: 0.28rem; }
+  /* balance chip: compact on mobile (drop the caret, tighten) so the chip + avatar pill both fit a phone bar */
+  .navbal-chip { gap: 0.28rem; padding: 0.24rem 0.42rem; }
+  .navbal-caret { display: none; }
+  .navbal-val { font-size: 0.66rem; }
+  .navbal-glyph.usdc { width: 15px; height: 15px; font-size: 0.54rem; }
+  .navbal-leg { gap: 0.24rem; }
   .theme-trigger { font-size: 0.42rem; padding: 0.4rem 0.45rem; }
   .navbar .wallet-adapter-button {
     font-size: 0.45rem !important;
