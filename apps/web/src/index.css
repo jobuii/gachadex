@@ -1466,65 +1466,74 @@ button { border-radius: var(--pill); }
 .acct-copy:focus-visible, .acct-disconnect:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .acct-menu { animation: none; } }
 
-/* Option B — unified balance chip (available USDC + abbreviated Gold) + popover. Token-driven (all skins);
-   anchored dropdown like the account pill (navbar has no scrim/overflow → no stacking trap). */
+/* Option B unified balance chip. Desktop: full chip (USDC + Gold legs · live-pulse · in-chip eye + caret) →
+   an anchored "YOUR MONEY" popover. Mobile (mobile.css): collapses to a single $-only tap target → a bottom
+   sheet that expands to both. Cyan = USDC's currency colour (fixed, like the gold ingot is intrinsically
+   gold); everything else is token-driven so it themes across skins. */
 .navbal { position: relative; display: flex; }
+
 .navbal-chip {
-  display: flex; align-items: center; gap: 0.4rem;
-  background: var(--bg-3); border: 1px solid var(--border); color: var(--text);
-  padding: 0.28rem 0.55rem; border-radius: var(--pill); cursor: pointer;
-  font-family: var(--font-display); transition: border-color 0.14s, background 0.14s;
+  display: flex; align-items: center; gap: 0; height: 40px; padding: 0 6px 0 8px;
+  border-radius: var(--pill); background: var(--bg-3); border: 1px solid var(--border); color: var(--text);
+  cursor: pointer; user-select: none; position: relative; overflow: hidden;
+  transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
 }
-.navbal-chip:hover, .navbal-chip.open { border-color: var(--accent); background: var(--bg-2); }
+.navbal-chip:hover, .navbal-chip.open { border-color: var(--accent); background: var(--bg-2); box-shadow: 0 0 0 1px var(--accent); }
 .navbal-chip:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 2px; }
-.navbal-leg { display: flex; align-items: center; gap: 0.3rem; }
-.navbal-glyph.usdc {
-  width: 17px; height: 17px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center;
-  font-size: 0.6rem; font-weight: 700; color: #fff;
-  background: radial-gradient(circle at 35% 30%, var(--accent-lit), var(--accent) 78%);
+.navbal-leg { display: flex; align-items: center; gap: 7px; padding: 0 8px; }
+.navbal-glyph {
+  width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center;
+  font-family: var(--font-display); font-weight: 700; font-size: 12px; color: #06121a;
+  background: radial-gradient(circle at 35% 30%, #7DECFB, #22D3EE 70%); box-shadow: 0 0 12px -2px rgba(34, 211, 238, 0.6);
 }
 .navbal-ingot { flex-shrink: 0; }
-.navbal-val { font-size: 0.72rem; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -0.2px; }
-.navbal-val.gold { color: #FCE5AE; } /* gold currency tint — matches the GoldVault amount */
-.navbal-dot { color: var(--text-muted); opacity: 0.6; }
-.navbal-caret { display: grid; place-items: center; color: var(--text-muted); transition: transform 0.18s, color 0.16s; }
-.navbal-caret svg { width: 12px; height: 12px; }
+.navbal-val { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 14px; letter-spacing: -0.2px; color: var(--text); min-width: 44px; text-align: right; }
+.navbal-val.gold { color: #FCE5AE; min-width: 36px; }
+.navbal-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--success); margin-left: -2px; box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); animation: navbal-pulse 2.4s ease-out infinite; }
+@keyframes navbal-pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); } 70% { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } }
+.navbal-div { color: var(--text-muted); font-size: 14px; opacity: 0.6; line-height: 1; }
+.navbal-tools { display: flex; align-items: center; gap: 2px; padding-left: 4px; }
+.navbal-eye { width: 28px; height: 28px; border-radius: 6px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; display: grid; place-items: center; transition: color 0.15s, background 0.15s; }
+.navbal-eye:hover { background: var(--bg-2); color: var(--text); }
+.navbal-eye:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 1px; }
+.navbal-eye svg { width: 16px; height: 16px; }
+.navbal-caret { color: var(--text-muted); display: grid; place-items: center; width: 16px; transition: transform 0.2s, color 0.18s; }
+.navbal-caret svg { width: 13px; height: 13px; }
 .navbal-chip.open .navbal-caret { transform: rotate(180deg); color: var(--accent-lit); }
 
+.navbal-scrim { display: none; }            /* desktop: no scrim (anchored dropdown + outside-click closes) */
+.navbal-grab { display: none; }             /* desktop: no grab handle */
 .navbal-pop {
   position: absolute; top: calc(100% + 10px); right: 0; z-index: 120;
-  width: 276px; max-width: 88vw;
+  width: 340px; max-width: 92vw;
   background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius);
-  box-shadow: 0 24px 60px -22px rgba(0, 0, 0, 0.85); padding: 0.5rem; animation: acct-pop 0.16s ease;
+  box-shadow: 0 30px 70px -24px rgba(0, 0, 0, 0.9); padding: 6px; animation: acct-pop 0.16s ease;
 }
-.navbal-pop::before {
-  content: ""; position: absolute; top: -5px; right: 18px; width: 10px; height: 10px;
-  background: var(--bg-2); border-left: 1px solid var(--border); border-top: 1px solid var(--border); transform: rotate(45deg);
-}
-.navbal-pop-head { display: flex; align-items: center; justify-content: space-between; padding: 0.35rem 0.4rem 0.5rem; }
-.navbal-pop-title { font-family: var(--font-display); font-weight: 600; font-size: 0.66rem; letter-spacing: 0.5px; color: var(--text-muted); }
-.navbal-eye { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text-muted); cursor: pointer; transition: color 0.14s, border-color 0.14s, background 0.14s; }
-.navbal-eye:hover { color: var(--text); border-color: var(--border); background: var(--bg-3); }
-.navbal-eye:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 1px; }
-.navbal-eye svg { width: 15px; height: 15px; }
-
-.navbal-row { display: flex; align-items: center; gap: 0.55rem; padding: 0.5rem 0.45rem; border-radius: 8px; }
-.navbal-row + .navbal-row { margin-top: 1px; }
-.navbal-ricon { width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; display: grid; place-items: center; font-weight: 700; font-size: 0.82rem; }
-.navbal-ricon.usdc { color: #fff; background: radial-gradient(circle at 35% 30%, var(--accent-lit), var(--accent) 78%); }
-.navbal-ricon.gold { background: var(--bg-3); border: 1px solid var(--border); }
+.navbal-pop::before { content: ""; position: absolute; top: -5px; right: 22px; width: 10px; height: 10px; background: var(--bg-2); border-left: 1px solid var(--border); border-top: 1px solid var(--border); transform: rotate(45deg); }
+.navbal-pop-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 10px 8px; }
+.navbal-pop-title { font-family: var(--font-display); font-weight: 600; font-size: 13px; letter-spacing: 0.2px; color: var(--text-muted); }
+.navbal-mask { display: flex; align-items: center; gap: 6px; font-family: var(--font-display); font-size: 11.5px; font-weight: 500; color: var(--text-muted); background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px; cursor: pointer; transition: color 0.15s, border-color 0.15s; }
+.navbal-mask:hover { color: var(--text); border-color: var(--accent); }
+.navbal-mask svg { width: 14px; height: 14px; }
+.navbal-row { display: flex; align-items: flex-start; gap: 12px; padding: 13px 12px; border-radius: 8px; }
+.navbal-row + .navbal-row { margin-top: 2px; }
+.navbal-ricon { width: 36px; height: 36px; border-radius: 9px; flex-shrink: 0; display: grid; place-items: center; font-family: var(--font-display); font-weight: 700; font-size: 16px; }
+.navbal-ricon.usdc { color: #06121a; background: radial-gradient(circle at 35% 30%, #7DECFB, #22D3EE 70%); box-shadow: 0 0 16px -4px rgba(34, 211, 238, 0.55); }
+.navbal-ricon.gold { background: linear-gradient(160deg, #2a2114, #1a1610); border: 1px solid #3a2e16; }
 .navbal-meta { flex: 1; min-width: 0; }
-.navbal-nm { display: flex; align-items: center; gap: 0.4rem; font-family: var(--font-display); font-weight: 600; font-size: 0.82rem; color: var(--text); }
-.navbal-tag { font-family: var(--font-display); font-size: 0.56rem; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; padding: 0.1rem 0.35rem; border-radius: 5px; border: 1px solid var(--border); background: var(--bg-3); }
-.navbal-tag.tradeable { color: var(--accent-lit); }
-.navbal-tag.loyalty { color: #FCE5AE; }
-.navbal-subtle { font-size: 0.66rem; color: var(--text-muted); margin-top: 1px; }
-.navbal-big { margin-left: auto; font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 0.82rem; color: var(--text); }
+.navbal-nm { display: flex; align-items: center; gap: 8px; }
+.navbal-nm b { font-family: var(--font-display); font-weight: 600; font-size: 14px; color: var(--text); }
+.navbal-tag { font-family: var(--font-display); font-size: 9.5px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; border: 1px solid; }
+.navbal-tag.tradeable { color: #22D3EE; background: rgba(34, 211, 238, 0.12); border-color: rgba(34, 211, 238, 0.28); }
+.navbal-tag.loyalty { color: #F5B544; background: rgba(245, 181, 68, 0.12); border-color: rgba(245, 181, 68, 0.28); }
+.navbal-sub { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; }
+.navbal-amt { text-align: right; flex-shrink: 0; }
+.navbal-big { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 16px; letter-spacing: -0.3px; color: var(--text); }
 .navbal-big.gold { color: #FCE5AE; }
-
-.navbal-actions { display: flex; gap: 0.4rem; padding: 0.5rem 0.4rem 0.3rem; }
+.navbal-unit { font-size: 10.5px; color: var(--text-muted); font-family: var(--font-display); font-weight: 500; margin-top: 2px; }
+.navbal-actions { display: flex; gap: 8px; padding: 8px 6px 6px; }
 .navbal-act { flex: 1; display: inline-flex; align-items: center; justify-content: center; }
-@media (prefers-reduced-motion: reduce) { .navbal-pop { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .navbal-pop, .navbal-pulse { animation: none; } }
 
 /* navbar auth buttons — bigger, readable text (Select Wallet / Sign In / Logout) */
 .navbar .wallet-adapter-button { font-size: 0.72rem !important; }

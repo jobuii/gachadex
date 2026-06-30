@@ -35,12 +35,26 @@
   .nav-actions { gap: 0.4rem; }
   .acct-handle, .acct-caret { display: none; } /* account pill = avatar-only on mobile; the dropdown still shows the name + address */
   .acct-pill { padding: 0.28rem; }
-  /* balance chip: compact on mobile (drop the caret, tighten) so the chip + avatar pill both fit a phone bar */
-  .navbal-chip { gap: 0.28rem; padding: 0.24rem 0.42rem; }
-  .navbal-caret { display: none; }
-  .navbal-val { font-size: 0.66rem; }
-  .navbal-glyph.usdc { width: 15px; height: 15px; font-size: 0.54rem; }
-  .navbal-leg { gap: 0.24rem; }
+  /* balance chip: collapse to a single $-only tap target (Gold shrinks to an ingot dot); the bottom sheet
+     expands to both. Keeps the chip + the avatar pill comfortably inside a phone bar. */
+  .navbal-chip { height: 36px; padding: 0 7px; gap: 4px; }
+  .navbal-chip .navbal-pulse,
+  .navbal-chip .navbal-div,
+  .navbal-chip .navbal-tools,
+  .navbal-chip .navbal-leg.gold .navbal-val { display: none; }
+  .navbal-leg { padding: 0 2px; gap: 5px; }
+  .navbal-glyph { width: 18px; height: 18px; font-size: 11px; }
+  .navbal-val { font-size: 13px; min-width: 0; }
+  /* popover → bottom sheet (Option D style): slides up from the bottom over a scrim, with a grab handle */
+  .navbal-scrim { display: block; position: fixed; inset: 0; z-index: 190; background: rgba(3, 3, 7, 0.55); backdrop-filter: blur(2px); animation: navbal-fade 0.2s ease; }
+  .navbal-pop {
+    position: fixed; top: auto; left: 0; right: 0; bottom: 0; width: auto; max-width: none; z-index: 200;
+    border-radius: 18px 18px 0 0; padding: 8px 10px 20px; animation: navbal-sheet 0.26s cubic-bezier(0.2, 0.9, 0.3, 1.05);
+  }
+  .navbal-pop::before { display: none; } /* no caret notch on the sheet */
+  .navbal-grab { display: block; width: 40px; height: 4px; border-radius: 3px; background: var(--border); margin: 4px auto 10px; }
+  @keyframes navbal-sheet { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  @keyframes navbal-fade { from { opacity: 0; } to { opacity: 1; } }
   .theme-trigger { font-size: 0.42rem; padding: 0.4rem 0.45rem; }
   .navbar .wallet-adapter-button {
     font-size: 0.45rem !important;
