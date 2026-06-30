@@ -15,7 +15,7 @@ export interface CustomerRow {
   joinedAt: string;
   depositAddress: string | null;
   nftCustodyAddress: string | null; // per-user Classic-Gacha NFT custody wallet (derived; holds CC NFTs + buyback USDC)
-  goldEarned: string; // net Gold earned from opens (PACK_OPEN_EARN − reversals of refunded opens; excludes spends/spend-refunds/resets; whole Gold)
+  goldBalance: string; // live spendable Gold balance (the gold_balances cache; whole Gold)
   freeE6: string; // available collateral (USER_COLLATERAL)
   lpE6: string; // current value of their LP-pool stake (shares marked to pool NAV)
   lockedE6: string; // margin locked in open positions (USER_POSITION_MARGIN)
@@ -78,7 +78,7 @@ export async function listCustomers(
     withdrawals_e6: string;
     pending_e6: string;
     open_positions: number;
-    gold_earned: string;
+    gold_balance: string;
   }>(
     // qty/price are 1e6 fixed-point, so notional (uUSDC) = Σ(qty*price)/1e6; numeric avoids bigint overflow.
     `WITH vol AS (
@@ -126,9 +126,9 @@ export async function listCustomers(
      tip AS (
        SELECT user_id, SUM(amount_uusdc) AS tipped_e6 FROM drop_tips GROUP BY user_id
      ),
-     -- net Gold earned from opens: PACK_OPEN_EARN minus its reversals (refunded opens); spends, spend-refunds + admin resets excluded
+     -- live spendable Gold balance (the gold_balances cache, kept in sync with the ledger: earns − spends − admin resets)
      gold AS (
-       SELECT user_id, SUM(delta) FILTER (WHERE reason IN ('PACK_OPEN_EARN', 'PACK_OPEN_EARN_REVERSAL')) AS gold_earned FROM gold_ledger GROUP BY user_id
+       SELECT user_id, balance AS gold_balance FROM gold_balances
      )
      SELECT u.id, u.solana_pubkey, u.display_name, u.status,
             u.created_at::text AS joined_at,
@@ -147,7 +147,7 @@ export async function listCustomers(
             COALESCE(wd.withdrawals_e6, 0)::text AS withdrawals_e6,
             COALESCE(wd.pending_e6, 0)::text AS pending_e6,
             COALESCE(op.open_positions, 0)::int AS open_positions,
-            COALESCE(gold.gold_earned, 0)::text AS gold_earned
+            COALESCE(gold.gold_balance, 0)::text AS gold_balance
      FROM users u
      LEFT JOIN deposit_addresses da ON da.user_id = u.id
      LEFT JOIN accounts ca ON ca.user_id = u.id AND ca.type = 'USER_COLLATERAL'
@@ -180,7 +180,7 @@ export async function listCustomers(
       joinedAt: x.joined_at,
       depositAddress: x.deposit_address,
       nftCustodyAddress: nftCustodyAddr(x.derivation_index),
-      goldEarned: x.gold_earned,
+      goldBalance: x.gold_balance,
       freeE6: x.free_e6,
       lpE6: lpShareValue(BigInt(x.lp_shares), lpNav, lpTotalShares).toString(),
       lockedE6: x.locked_e6,
