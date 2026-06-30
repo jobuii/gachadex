@@ -39,7 +39,7 @@ function readTheme() {
     accent: v('--gold', '#f0c040'),
     up: v('--success', '#3fb950'),
     down: v('--danger', '#f85149'),
-    font: v('--font-base', "'Press Start 2P', monospace"),
+    font: v('--font-base', "'IBM Plex Sans', sans-serif"),
   };
 }
 

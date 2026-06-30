@@ -13,9 +13,13 @@
   --success:     #3fb950;
   --danger:      #f85149;
   --gold:        #f0c040;
-  /* skin tokens — defaults = Retro/Arcade; overridden per-skin in themes.css */
-  --font-base:    'Press Start 2P', monospace;
-  --font-display: 'Press Start 2P', monospace;
+  /* skin tokens. The DEFAULT font is the modern brand face — NEVER the pixel font — so a missing or
+     late-applied data-theme (e.g. the bundle still parsing on a slow mobile) can't flash Press Start 2P.
+     The pixel font is re-applied ONLY for the explicit Retro/Arcade skin (themes.css). The colour/shape
+     defaults below stay retro and are overridden per-skin in themes.css. (See also the pre-paint theme
+     bootstrap in index.html, which sets data-theme before first paint to kill the FOUC entirely.) */
+  --font-base:    'IBM Plex Sans', sans-serif;
+  --font-display: 'Space Grotesk', sans-serif;
   --cb-opacity:   .4;
   /* shape language — retro defaults (sharp, chunky, pixel weight); skins override in themes.css */
   --radius:       0px;   /* panels / inputs / boxes */

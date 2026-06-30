@@ -16,7 +16,12 @@
    readable PIXEL companion (Pixelify Sans — 8-bit character but built for text). Press Start 2P stays
    for the brand/headers only (unreadable at chat density). */
 :root { --font-chat: var(--font-base); }
-[data-theme="arcade"] { --font-chat: 'Pixelify Sans', 'VT323', monospace; }
+/* Arcade is the ONLY skin that uses the pixel font. index.css :root now defaults to the modern brand
+   face (so the pixel font can never leak as a fallback / FOUC), so Retro/Arcade re-applies it explicitly. */
+[data-theme="arcade"] {
+  --font-base: 'Press Start 2P', monospace; --font-display: 'Press Start 2P', monospace;
+  --font-chat: 'Pixelify Sans', 'VT323', monospace;
+}
 
 /* ---- GachaDex (DEFAULT) · near-black + cyan/violet/pink memecoin brand.
    Space Grotesk display · IBM Plex Sans body (distinctive, not Inter) · JetBrains Mono numerals.
