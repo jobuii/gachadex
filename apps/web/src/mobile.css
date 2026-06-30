@@ -33,6 +33,8 @@
   .chat-toggle .chat-label { display: none; } /* icon-only on mobile → frees the space the wordmark needs */
   .nav-docs { display: inline-flex; } /* surface Docs as a top-bar icon on mobile (desktop uses the text nav link) */
   .nav-actions { gap: 0.4rem; }
+  .acct-handle, .acct-caret { display: none; } /* account pill = avatar-only on mobile; the dropdown still shows the name + address */
+  .acct-pill { padding: 0.28rem; }
   .theme-trigger { font-size: 0.42rem; padding: 0.4rem 0.45rem; }
   .navbar .wallet-adapter-button {
     font-size: 0.45rem !important;
