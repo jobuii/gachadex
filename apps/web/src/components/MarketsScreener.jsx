@@ -144,7 +144,7 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
                     </td>
                     <td className="num"><PriceCell market={m} /></td>
                     <td className={`num ${up ? 'up' : 'down'}`}>{up ? '+' : ''}{ch.toFixed(2)}%</td>
-                    <td className="screener-trend"><TrendSpark pct={m.change24hPct} /></td>
+                    <td className="screener-trend"><TrendSpark pct={m.change24hPct} seed={m.id} /></td>
                     <td className="num">{fmtVol(m.volume24hUsd)}</td>
                     <td><span className="screener-badge">{m.rarity || '—'}</span></td>
                   </tr>

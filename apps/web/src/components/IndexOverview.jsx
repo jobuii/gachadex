@@ -176,7 +176,7 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
                             <PriceCell market={m} />
                           </td>
                           <ChangeCell pct={m.change24hPct} />
-                          <td className="io-trend"><TrendSpark pct={m.change24hPct} /></td>
+                          <td className="io-trend"><TrendSpark pct={m.change24hPct} seed={m.id} /></td>
                           <ChangeCell pct={s.change1wPct} />
                           <ChangeCell pct={s.change1mPct} />
                           <ChangeCell pct={s.changeYtdPct} />
