@@ -69,7 +69,7 @@ export type CcMachine = {
   videoHevc?: string; // HEVC/mp4 fallback for Safari
   public?: boolean;
 };
-export type CcPackNft = { id?: string; nft_address: string; name: string; description?: string; rarity: string; image: string; insured_value: number };
+export type CcPackNft = { id?: string; nft_address: string; name: string; description?: string | null; rarity: string; image: string; insured_value: number; attributes?: { trait_type?: string; value?: unknown }[] };
 export type CcWinner = {
   winner: string;
   nft_address: string;
@@ -154,6 +154,14 @@ const ccAbs = (p: string | null | undefined): string | null => (!p ? null : /^ht
 /** Pull a "PSA 10" / "CGC 9.5" style grade out of a CC card's text (the pool feed has no grade field).
  *  Prefer `description` — the `name` is truncated to 32 chars, which drops the grade for ~half the pool. */
 const GRADE_RE = /\b(PSA|CGC|BGS|SGC|TAG|Beckett|CGA)\b[^\d]{0,14}(\d+(?:\.5)?)/i;
+const GRADE_NUM_RE = /\d+(?:\.\d+)?/;
+/** Read a CC card attribute by trait_type. getNfts carries the same Grading Company / The Grade / GradeNum
+ *  traits the reveal does — so we can recover the grade even when the text (name/description) has none. */
+const attrVal = (attrs: CcPackNft['attributes'], key: string): string | null => {
+  const hit = (attrs ?? []).find((a) => (a?.trait_type ?? '').toLowerCase() === key.toLowerCase());
+  const v = hit && hit.value != null ? String(hit.value).trim() : '';
+  return v || null;
+};
 
 export function toLobbyMachine(m: CcMachine): LobbyMachine {
   const tiers = Object.entries(m.odds ?? {}).map(([label, p]) => {
@@ -167,8 +175,22 @@ export function toLobbyMachine(m: CcMachine): LobbyMachine {
   };
 }
 export function toLobbyCard(n: CcPackNft): LobbyCard {
-  const g = (n.description || n.name || '').match(GRADE_RE); // description has the full (untruncated) name → the grade
-  return { mint: n.nft_address, name: n.name, imageUrl: n.image, valueE6: e6(n.insured_value), rarity: n.rarity, grade: g ? `${g[1].toUpperCase()} ${g[2]}` : null };
+  // Prefer the structured grade attributes (the reveal path reads these too) — robust against CC giving a
+  // short product `name` + a null `description`, where the grade lives ONLY in attributes (e.g. "Charizard
+  // ex" → Grading Company "CGC", The Grade "GEM MINT 10" ⇒ "CGC 10").
+  const company = attrVal(n.attributes, 'Grading Company');
+  const num =
+    attrVal(n.attributes, 'GradeNum')?.match(GRADE_NUM_RE)?.[0] ??
+    attrVal(n.attributes, 'The Grade')?.match(GRADE_NUM_RE)?.[0] ??
+    attrVal(n.attributes, 'Grade')?.match(GRADE_NUM_RE)?.[0] ?? null;
+  // fall back to parsing the (possibly 32-char-truncated) name/description text
+  const m = (n.description || n.name || '').match(GRADE_RE);
+  const fromText = m ? `${m[1].toUpperCase()} ${m[2]}` : null;
+  // precedence: a COMPLETE attribute grade (company + number) wins; else the text parse; else a partial
+  // attribute (company-only or a bare number) — so a half-populated attribute never shadows a fuller
+  // grade sitting in the text (CC normally pairs the traits, but the code shouldn't depend on it).
+  const fullAttrs = company && num ? `${company} ${num}` : null;
+  return { mint: n.nft_address, name: n.name, imageUrl: n.image, valueE6: e6(n.insured_value), rarity: n.rarity, grade: fullAttrs || fromText || company || num || null };
 }
 export function toLobbyWinner(w: CcWinner): LobbyWinner {
   return {
