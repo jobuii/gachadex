@@ -2,9 +2,23 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- Set the skin BEFORE first paint (synchronous, before any CSS) so a slow-to-execute bundle — common
+         on mobile — can never flash the :root font. Mirrors initialSkin() in src/store/theme.js; keep the
+         skin list + storage key in sync with it. -->
+    <script>
+      (function () {
+        var SKINS = ['gachadex', 'arcade', 'indigo', 'voltage', 'bounty', 'grandline', 'antiquity', 'mythic'];
+        var skin = 'gachadex';
+        try { var s = localStorage.getItem('gachadex_skin'); if (SKINS.indexOf(s) >= 0) skin = s; } catch (e) {}
+        document.documentElement.setAttribute('data-theme', skin);
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" href="/GachaDexPFP2.png" />
     <link rel="apple-touch-icon" href="/GachaDexPFP2.png" />
+    <!-- Preload the default (GachaDex) brand fonts so the first paint is the real font, not a fallback.
+         Press Start 2P loads too but only renders on the explicit Retro/Arcade skin. -->
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#06060a" />
