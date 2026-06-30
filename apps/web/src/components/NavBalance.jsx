@@ -53,7 +53,9 @@ export function NavBalance({ onManageFunds }) {
     }).catch(() => {});
     load();
     const t = setInterval(load, 12000);
-    return () => { alive = false; clearInterval(t); };
+    // On a user change (sign-out / account switch) this cleanup runs before the next effect — drop the stale
+    // balance and close the menu so the popover can't auto-resurface and another account's balance can't flash.
+    return () => { alive = false; clearInterval(t); setOpen(false); setBal(null); setGold(null); };
   }, [user]);
 
   // Popover/sheet dismissal — outside-tap + Esc.
