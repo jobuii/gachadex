@@ -36,6 +36,7 @@ function isGroupedWith(m, prev) {
     && new Date(m.createdAt).getTime() - new Date(prev.createdAt).getTime() < 5 * 60 * 1000;
 }
 const usd0 = (e6) => formatUsd(BigInt(e6 ?? 0), { decimals: 0 }); // tolerate a missing field rather than blank the rail
+const usd2 = (e6) => formatUsd(BigInt(e6 ?? 0)); // 2-decimal (the pack-pull value + price show cents)
 
 // leaderboard rank -> badge tier (ascending cutoff; first the rank fits wins). Only the top 100 earn one.
 const RANK_TIERS = [
@@ -57,24 +58,35 @@ function RankBadge({ rank }) {
 // BIG BET (gold) / BIG WIN (green) action bar — a trade broadcast that persists inline in the rail.
 function ActionBar({ m, rank, isMod, onDelete }) {
   const meta = m.meta || {};
+  const pull = meta.variant === 'big_pull';
   const win = meta.variant === 'big_win';
   const side = String(meta.side || '').toUpperCase();
   const roe = meta.roeBps != null ? `+${Math.round(meta.roeBps / 100)}%` : null;
+  const mult = pull && Number(meta.paidE6) > 0 ? (Number(meta.valueE6) / Number(meta.paidE6)).toFixed(1) : null; // value ÷ pack cost → "Nx"
   return (
-    <div className={`chat-event ${win ? 'big-win' : 'big-bet'}`}>
+    <div className={`chat-event ${pull ? 'big-pull' : win ? 'big-win' : 'big-bet'}`}>
       <span className="chat-event-tag">
-        {win ? '🏆 BIG WIN' : '🔥 BIG BET'}
+        {pull ? '🃏 BIG PACK PULL!' : win ? '🏆 BIG WIN' : '🔥 BIG BET'}
         {isMod && <button className="chat-mod-btn chat-mod-del chat-event-del" title="Delete" onClick={onDelete}>✕</button>}
       </span>
       <span className="chat-event-body">
         <b>{m.handle}</b><RankBadge rank={rank} />{m.isMod ? <span className="chat-mod-chip">MOD</span> : null}{' '}
-        {win ? (
+        {pull ? (
+          <>pulled <b>{meta.cardName}</b></>
+        ) : win ? (
           <>won <b>{usd0(meta.pnlE6)}</b>{roe && <b className="chat-event-roe"> {roe}</b>}</>
         ) : (
           <>opened <b>{usd0(meta.notionalE6)}</b></>
-        )}{' '}
-        <span className={`chat-event-side ${side.toLowerCase()}`}>{side}</span> on <b>{meta.marketName}</b>
+        )}
+        {!pull && <>{' '}<span className={`chat-event-side ${side.toLowerCase()}`}>{side}</span> on <b>{meta.marketName}</b></>}
       </span>
+      {pull && (
+        <span className="chat-event-pull">
+          <b className="chat-event-pull-val">{usd2(meta.valueE6)}</b>
+          {mult && <span className="chat-event-pull-mult">{mult}x</span>}
+          <span className="chat-event-pull-sub">{mult ? '· ' : ''}{usd2(meta.paidE6)} {meta.machineCode}</span>
+        </span>
+      )}
     </div>
   );
 }

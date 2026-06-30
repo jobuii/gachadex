@@ -241,6 +241,49 @@ export async function emitGameWinEvent(
   } satisfies ChatMessage);
 }
 
+export interface PackPullInput {
+  userId: string;
+  cardName: string | null;
+  rarity: string | null;
+  valueE6: bigint; // the pulled card's insured value
+  paidE6: bigint; // the pack's list price (CC base) → the "Nx" = value ÷ paid
+  machineCode: string;
+}
+
+/**
+ * Persist + broadcast a Classic Gacha "BIG PACK PULL!" action bar — a gold variant fired when a player pulls
+ * a Rare or Epic card. Shows the card, its insured value, the multiple over what the pack cost, and the
+ * machine. No market join (a pulled card may not map to a GDEX market). Best-effort — callers swallow its
+ * errors so a chat hiccup can never roll back a delivery.
+ */
+export async function emitPackPullEvent(db: Db, evt: PackPullInput): Promise<void> {
+  const r = await db.query<{ dn: string | null; pk: string; av: string | null; is_mod: boolean }>(
+    `SELECT u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av, u.is_mod FROM users u WHERE u.id = $1`,
+    [evt.userId],
+  );
+  if (!r.rows[0]) return; // user vanished between commit and emit — nothing to announce
+  const handle = handleFor(r.rows[0].dn, r.rows[0].pk);
+  const card = evt.cardName || 'a card';
+  const mult = evt.paidE6 > 0n ? Number(evt.valueE6) / Number(evt.paidE6) : 0; // value ÷ what the pack cost → the "Nx"
+  const meta: Record<string, unknown> = {
+    variant: 'big_pull',
+    cardName: card,
+    rarity: evt.rarity,
+    valueE6: evt.valueE6.toString(),
+    paidE6: evt.paidE6.toString(),
+    machineCode: evt.machineCode,
+  };
+  const body = `${handle} pulled ${card} — ${formatUsd(evt.valueE6)} (${mult.toFixed(1)}x on ${formatUsd(evt.paidE6)})`;
+  const id = randomUUID();
+  const ins = await db.query<{ created_at: string }>(
+    `INSERT INTO chat_messages(id, user_id, body, kind, meta) VALUES($1, $2, $3, 'event', $4) RETURNING created_at`,
+    [id, evt.userId, body, JSON.stringify(meta)],
+  );
+  publish('chat', 'event', {
+    id, userId: evt.userId, handle, avatar: r.rows[0].av, body, createdAt: ins.rows[0].created_at, replyTo: null, kind: 'event', meta, isMod: r.rows[0].is_mod,
+  } satisfies ChatMessage);
+}
+
 export interface Profile {
   userId: string;
   username: string | null; // the chosen display name (null if unset)

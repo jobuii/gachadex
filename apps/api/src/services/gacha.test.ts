@@ -539,6 +539,39 @@ test('open: best-effort matches the won card to a GDEX market + surfaces a verif
   assert.ok(r.verifyUrl && r.verifyUrl.includes('/api/vrf/verify?memo='));
 });
 
+test('chat: a Rare/Epic pull broadcasts a gold BIG PACK PULL event; Common/Uncommon does not', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  cc.reveals = [{ success: true, nft_address: 'MintEpicPull', rarity: 'Epic', nftWon: { content: { metadata: { name: 'Charizard Holo', attributes: [{ trait_type: 'insured value', value: 2000 }] }, links: { image: 'img' } } } }];
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'pull-epic' }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(r.status, 'opened');
+  const row = (await db.query<{ meta: unknown; kind: string }>(`SELECT meta, kind FROM chat_messages WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`, [user])).rows[0];
+  assert.ok(row, 'a chat row was written for the epic pull');
+  assert.equal(row.kind, 'event');
+  const meta = (typeof row.meta === 'string' ? JSON.parse(row.meta) : row.meta) as Record<string, string>;
+  assert.equal(meta.variant, 'big_pull');
+  assert.equal(meta.cardName, 'Charizard Holo');
+  assert.equal(meta.valueE6, usdc(2000).toString()); // the $2,000 card
+  assert.equal(meta.paidE6, usdc(50).toString());     // the $50 pack (CC base) → the web shows 40.0x
+  assert.equal(meta.machineCode, 'pokemon_50');
+
+  // a RARE pull (the other "big" tier) also broadcasts
+  const userR = await newUser();
+  const ccR = fakeCc();
+  ccR.reveals = [{ success: true, nft_address: 'MintRarePull', rarity: 'Rare', nftWon: { content: { metadata: { name: 'Blastoise', attributes: [{ trait_type: 'insured value', value: 300 }] }, links: { image: 'img' } } } }];
+  await openPack(db, userR, { machineCode: 'pokemon_50', idempotencyKey: 'pull-rare' }, { chain: fakeChain(), cc: ccR, ...noWait });
+  const rr = (await db.query<{ meta: unknown }>(`SELECT meta FROM chat_messages WHERE user_id = $1 AND kind = 'event' LIMIT 1`, [userR])).rows[0];
+  assert.ok(rr, 'a chat row was written for the rare pull');
+  assert.equal(((typeof rr.meta === 'string' ? JSON.parse(rr.meta) : rr.meta) as Record<string, string>).variant, 'big_pull');
+
+  // a Common/Uncommon pull does NOT broadcast
+  const user2 = await newUser();
+  const cc2 = fakeCc();
+  cc2.reveals = [{ success: true, nft_address: 'MintCommonPull', rarity: 'Uncommon', nftWon: { content: { metadata: { name: 'Pidgey', attributes: [{ trait_type: 'insured value', value: 60 }] } } } }];
+  await openPack(db, user2, { machineCode: 'pokemon_50', idempotencyKey: 'pull-common' }, { chain: fakeChain(), cc: cc2, ...noWait });
+  assert.equal((await db.query<{ n: number }>(`SELECT count(*)::int n FROM chat_messages WHERE user_id = $1`, [user2])).rows[0].n, 0, 'no chat event for an Uncommon pull');
+});
+
 // ── P4: loyalty Gold ──
 const goldBal = async (userId: string): Promise<bigint> =>
   BigInt((await db.query<{ balance: string }>(`SELECT balance FROM gold_balances WHERE user_id = $1`, [userId])).rows[0]?.balance ?? '0');

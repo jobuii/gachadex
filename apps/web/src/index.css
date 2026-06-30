@@ -315,9 +315,20 @@ button { border-radius: var(--pill); }
 }
 .chat-event.big-bet { border-color: var(--gold);    background: rgba(240, 192, 64, 0.10); }
 .chat-event.big-win { border-color: var(--success); background: rgba(63, 185, 80, 0.10); }
+/* BIG PACK PULL — all-gold, COMPACT: gold badge + value + multiplier on a tight gold bar */
+/* explicit gold (NOT var(--gold) — that's cyan in the arcade theme); --pg drives badge + value + multiplier */
+.chat-event.big-pull { --pg: #f5c33b; gap: 0.02rem; padding: 0.3rem 0.5rem; border-color: #c89a2c; background: linear-gradient(100deg, rgba(240, 192, 64, 0.22), rgba(240, 192, 64, 0.05)); }
 .chat-event-tag { font-size: 0.85rem; font-weight: 700; letter-spacing: 0.06em; display: flex; align-items: center; }
 .chat-event.big-bet .chat-event-tag { color: var(--gold); }
 .chat-event.big-win .chat-event-tag { color: var(--success); }
+.chat-event.big-pull .chat-event-tag { color: var(--pg); font-size: 0.72rem; letter-spacing: 0.05em; }
+/* the "{handle} pulled {card}" line stays one row (ellipsis), tight under the badge */
+.chat-event.big-pull .chat-event-body { display: block; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* value line: gold value + gold multiplier, then a muted "· price machine" */
+.chat-event-pull { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.3rem; line-height: 1.15; }
+.chat-event-pull-val { color: var(--pg); font-size: 0.9rem; font-weight: 800; letter-spacing: 0.01em; }
+.chat-event-pull-mult { color: var(--pg); font-size: 0.74rem; font-weight: 700; }
+.chat-event-pull-sub { font-size: 0.68rem; color: var(--text-muted); }
 .chat-event-body { font-size: 0.7rem; color: var(--text); line-height: 1.6; word-break: break-word; }
 .chat-event-roe { color: var(--success); }
 .chat-event-side.long  { color: var(--success); }
@@ -1749,6 +1760,12 @@ td.addr:hover { text-decoration: underline; }
   padding: 1.1rem 1.25rem; margin-bottom: 1rem; border-radius: 14px; border: 1px solid var(--border);
   background: linear-gradient(135deg, var(--bg-3), var(--bg-2)); overflow: hidden;
 }
+/* Portfolio: profile bar (grows) + the loyalty Gold box (fixed 200px) side by side; wraps the box below on
+   narrow screens. The banner's own bottom margin moves to the row so spacing below is unchanged; when the
+   Gold box self-hides (Gold off / no session) the banner is the only child and reclaims the full width. */
+.pf-banner-row { display: flex; align-items: stretch; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.pf-banner-row .pf-banner { flex: 1 1 340px; min-width: 0; margin-bottom: 0; }
+.pf-banner-row .gold-vault { display: flex; flex-direction: column; justify-content: center; }
 .pf-banner-glow { position: absolute; inset-inline: 0; top: 0; height: 1px; opacity: 0.5;
   background: linear-gradient(to right, transparent, var(--accent), transparent); }
 .pf-avatar { position: relative; flex-shrink: 0; width: 104px; height: 104px; border-radius: 14px;
