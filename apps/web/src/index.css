@@ -1515,8 +1515,9 @@ button { border-radius: var(--pill); }
 .lb-head { color: var(--text-muted); font-size: 0.55rem; background: var(--bg-3); }
 .lb-rank { text-align: center; }
 .lb-trader { display: flex; align-items: center; gap: 0.5rem; color: var(--text); overflow: hidden; }
-.lb-pnl, .lb-equity, .lb-volume { text-align: right; }
-.lb-equity, .lb-volume { color: var(--text-muted); }
+.lb-pnl, .lb-gold, .lb-volume { text-align: right; }
+.lb-volume { color: var(--text-muted); }
+.lb-gold { color: #f5c33b; } /* lifetime Gold earned — explicit gold (theme --gold is cyan in arcade) */
 .lb-row:not(.lb-head):hover { background: var(--bg-3); }
 .lb-you { background: rgba(240, 192, 64, 0.08); border-left: 3px solid var(--gold); }
 .lb-you-tag { font-size: 0.4rem; color: var(--bg); background: var(--gold); padding: 0.12rem 0.3rem; }
