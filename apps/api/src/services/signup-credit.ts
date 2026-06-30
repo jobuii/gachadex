@@ -189,3 +189,48 @@ export async function creditSummary(q: Queryer, userId: string): Promise<{ grant
   const s = await creditState(q, userId);
   return { grantedE6, remainingE6: max0(min(s.grantE6, c)) };
 }
+
+export interface SignupCreditOverview {
+  budgetE6: string; // CREDIT_BUDGET balance (the program's funding / hard cap)
+  feeRevenueE6: string; // FEE_REVENUE balance available to top up the budget
+  totalIssuedE6: string; // Σ granted across all users (the "total bonuses issued" box)
+  activeGrants: number;
+  reviewQueue: Array<{ userId: string; pubkey: string; grantedE6: string; pendingWithdrawalE6: string }>;
+}
+
+/** Admin Perks overview: balances, total issued, and the first-withdrawal review queue (credit-origin
+ *  accounts with a `requested` withdrawal that hasn't been cleared and has no prior confirmed withdrawal). */
+export async function signupCreditOverview(db: Db): Promise<SignupCreditOverview> {
+  const budget = await getBalance(db, await getOrCreateSystemAccount(db, 'CREDIT_BUDGET'));
+  const fee = await getBalance(db, await getOrCreateSystemAccount(db, 'FEE_REVENUE'));
+  const tot = await db.query<{ t: string; n: number }>(
+    `SELECT COALESCE(SUM(granted_e6), 0)::text AS t, COUNT(*) FILTER (WHERE expired_at IS NULL)::int AS n FROM signup_credits`,
+  );
+  const q = await db.query<{ user_id: string; pubkey: string; granted: string; pending: string }>(
+    `SELECT sc.user_id, u.solana_pubkey AS pubkey, sc.granted_e6::text AS granted,
+            COALESCE(SUM(w.amount_e6), 0)::text AS pending
+     FROM signup_credits sc
+     JOIN users u ON u.id = sc.user_id
+     JOIN withdrawals w ON w.user_id = sc.user_id AND w.status = 'requested'
+     WHERE sc.first_withdrawal_reviewed = false
+       AND NOT EXISTS (SELECT 1 FROM withdrawals w2 WHERE w2.user_id = sc.user_id AND w2.status = 'confirmed')
+     GROUP BY sc.user_id, u.solana_pubkey, sc.granted_e6`,
+  );
+  return {
+    budgetE6: budget.toString(),
+    feeRevenueE6: fee.toString(),
+    totalIssuedE6: tot.rows[0]?.t ?? '0',
+    activeGrants: tot.rows[0]?.n ?? 0,
+    reviewQueue: q.rows.map((r) => ({ userId: r.user_id, pubkey: r.pubkey, grantedE6: r.granted, pendingWithdrawalE6: r.pending })),
+  };
+}
+
+/** Operator clears a credit-origin account's first-withdrawal hold (after reviewing the cluster signal), so the
+ *  auto-process loop will pay it next pass. Returns whether a held row was actually cleared. */
+export async function clearFirstWithdrawalReview(db: Db, userId: string): Promise<boolean> {
+  const r = await db.query<{ user_id: string }>(
+    `UPDATE signup_credits SET first_withdrawal_reviewed = true WHERE user_id = $1 AND first_withdrawal_reviewed = false RETURNING user_id`,
+    [userId],
+  );
+  return !!r.rows[0];
+}

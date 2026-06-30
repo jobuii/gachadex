@@ -53,11 +53,8 @@ export function signupCreditConfigView(): SignupCreditConfigView {
   };
 }
 
-/** Operator update (admin Perks page). Only provided fields change. */
-export async function setSignupCreditConfig(
-  db: Db,
-  patch: Partial<{ enabled: boolean; grantUsd: number; wagerDepositUsd: number; wagerVolumeUsd: number; expiryDays: number }>,
-): Promise<SignupCreditConfigView> {
+/** Operator update (admin Perks page). Only provided fields change; each value is validated by its knob. */
+export async function setSignupCreditConfig(db: Db, patch: Record<string, unknown>): Promise<SignupCreditConfigView> {
   if (patch.enabled !== undefined) await enabled.set(db, patch.enabled);
   if (patch.grantUsd !== undefined) await grantUsd.set(db, patch.grantUsd);
   if (patch.wagerDepositUsd !== undefined) await wagerDepositUsd.set(db, patch.wagerDepositUsd);

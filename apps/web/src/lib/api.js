@@ -278,6 +278,12 @@ export const adminSetAffiliateDefaults = (body, adminKey) => adminReq('/admin/af
 export const adminGetMods = (adminKey) => adminGet('/admin/chat/mods', adminKey);
 export const adminSetMod = (userId, action, adminKey) => adminReq(`/admin/chat/mods/${userId}`, adminKey, { action });
 export const adminGetChatUsers = (adminKey) => adminGet('/admin/chat/users', adminKey); // { users: [{handle, pubkey, messages, lastAt, isMod}] }
+
+// Perks: free signup credit (docs/signup-credit-spec.md). { config, budgetE6, feeRevenueE6, totalIssuedE6, activeGrants, reviewQueue }
+export const adminGetSignupCredit = (adminKey) => adminGet('/admin/perks/signup-credit', adminKey);
+export const adminSetSignupCreditConfig = (body, adminKey) => adminReq('/admin/perks/signup-credit/config', adminKey, body);
+export const adminFundCreditBudget = (amountUsd, adminKey) => adminReq('/admin/perks/signup-credit/fund', adminKey, { amountUsd });
+export const adminClearCreditReview = (userId, adminKey) => adminReq(`/admin/perks/signup-credit/review/${userId}`, adminKey);
 // Chat admin view: live action-bar thresholds + DROP config/pot bucket.
 export const adminGetChatThresholds = (adminKey) => adminGet('/admin/chat/thresholds', adminKey);
 export const adminSetChatThresholds = (body, adminKey) => adminReq('/admin/chat/thresholds', adminKey, body);

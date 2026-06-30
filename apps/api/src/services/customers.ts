@@ -16,6 +16,8 @@ export interface CustomerRow {
   depositAddress: string | null;
   nftCustodyAddress: string | null; // per-user Classic-Gacha NFT custody wallet (derived; holds CC NFTs + buyback USDC)
   goldBalance: string; // live spendable Gold balance (the gold_balances cache; whole Gold)
+  freeCreditE6: string; // signup-credit grant received (docs/signup-credit-spec.md; 0 if none)
+  creditRemainingE6: string; // still-locked credit = min(outstanding grant, free collateral)
   freeE6: string; // available collateral (USER_COLLATERAL)
   lpE6: string; // current value of their LP-pool stake (shares marked to pool NAV)
   lockedE6: string; // margin locked in open positions (USER_POSITION_MARGIN)
@@ -79,6 +81,8 @@ export async function listCustomers(
     pending_e6: string;
     open_positions: number;
     gold_balance: string;
+    free_credit_e6: string;
+    credit_remaining_e6: string;
   }>(
     // qty/price are 1e6 fixed-point, so notional (uUSDC) = Σ(qty*price)/1e6; numeric avoids bigint overflow.
     `WITH vol AS (
@@ -129,6 +133,15 @@ export async function listCustomers(
      -- live spendable Gold balance (the gold_balances cache, kept in sync with the ledger: earns − spends − admin resets)
      gold AS (
        SELECT user_id, balance AS gold_balance FROM gold_balances
+     ),
+     -- free signup credit (docs/signup-credit-spec.md): the grant received, + the still-outstanding grant
+     -- (Σ SIGNUP_CREDIT − Σ SIGNUP_CREDIT_EXPIRE on collateral); "Remaining" clamps that to free collateral
+     credit AS (
+       SELECT sc.user_id, sc.granted_e6 AS free_credit,
+              COALESCE((SELECT SUM(le.amount_uusdc) FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
+                        WHERE a.user_id = sc.user_id AND a.type = 'USER_COLLATERAL'
+                          AND le.reason IN ('SIGNUP_CREDIT','SIGNUP_CREDIT_EXPIRE')), 0) AS outstanding_g
+       FROM signup_credits sc
      )
      SELECT u.id, u.solana_pubkey, u.display_name, u.status,
             u.created_at::text AS joined_at,
@@ -147,7 +160,9 @@ export async function listCustomers(
             COALESCE(wd.withdrawals_e6, 0)::text AS withdrawals_e6,
             COALESCE(wd.pending_e6, 0)::text AS pending_e6,
             COALESCE(op.open_positions, 0)::int AS open_positions,
-            COALESCE(gold.gold_balance, 0)::text AS gold_balance
+            COALESCE(gold.gold_balance, 0)::text AS gold_balance,
+            COALESCE(credit.free_credit, 0)::text AS free_credit_e6,
+            LEAST(GREATEST(COALESCE(credit.outstanding_g, 0), 0), GREATEST(COALESCE(coll.amount_uusdc, 0), 0))::text AS credit_remaining_e6
      FROM users u
      LEFT JOIN deposit_addresses da ON da.user_id = u.id
      LEFT JOIN accounts ca ON ca.user_id = u.id AND ca.type = 'USER_COLLATERAL'
@@ -162,6 +177,7 @@ export async function listCustomers(
      LEFT JOIN fund ON fund.user_id = u.id
      LEFT JOIN lp ON lp.user_id = u.id
      LEFT JOIN gold ON gold.user_id = u.id
+     LEFT JOIN credit ON credit.user_id = u.id
      ORDER BY ${orderBy} DESC NULLS LAST, u.created_at DESC
      LIMIT $1 OFFSET $2`,
       [opts.limit, opts.offset],
@@ -181,6 +197,8 @@ export async function listCustomers(
       depositAddress: x.deposit_address,
       nftCustodyAddress: nftCustodyAddr(x.derivation_index),
       goldBalance: x.gold_balance,
+      freeCreditE6: x.free_credit_e6,
+      creditRemainingE6: x.credit_remaining_e6,
       freeE6: x.free_e6,
       lpE6: lpShareValue(BigInt(x.lp_shares), lpNav, lpTotalShares).toString(),
       lockedE6: x.locked_e6,

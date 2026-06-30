@@ -153,3 +153,23 @@ test('needsFirstWithdrawalReview — first credit-origin withdrawal is held, the
   await db.query(`UPDATE signup_credits SET first_withdrawal_reviewed = true WHERE user_id = $1`, [u]);
   assert.equal(await sc.needsFirstWithdrawalReview(db, u), false, 'cleared by operator → no longer held');
 });
+
+test('integration — first deposit triggers the deposit-first grant; a second deposit does not re-grant', async () => {
+  await signupCreditConfig.enabled.set(db, true);
+  await signupCreditConfig.grantUsd.set(db, 25);
+  const { creditDeposit } = await import('./custody/deposits.ts');
+  const u = await newUser();
+  await fundFee(usdc(100));
+  await sc.fundCreditBudget(db, usdc(100));
+  const dep = async (amount: bigint) => {
+    const id = randomUUID();
+    await db.query(`INSERT INTO deposits(id, user_id, onchain_sig, asset, amount_in_raw, status) VALUES($1,$2,$3,'USDC',$4,'detected')`, [id, u, 'sig-' + id, amount.toString()]);
+    return creditDeposit(db, id);
+  };
+  assert.ok(await dep(usdc(200)), 'first deposit credited');
+  assert.equal(await collBal(u), usdc(225), '$200 deposit + $25 grant');
+  assert.equal(await sc.withdrawableBalance(db, u), usdc(200), 'the $25 grant is locked; only the $200 deposit is withdrawable (wagering unmet, no volume)');
+  await dep(usdc(50)); // second deposit — must NOT grant again (one per user)
+  assert.equal(await collBal(u), usdc(275), '+$50 deposit, no second grant');
+  assert.equal(await sc.withdrawableBalance(db, u), usdc(250), '$250 own capital withdrawable, $25 grant still locked');
+});

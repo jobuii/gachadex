@@ -7,6 +7,8 @@ import { rl } from './_ratelimit.ts';
 import { requireAdminKey } from './admin.ts';
 import { gachaAdminConfig, setGachaConfig } from '../services/gacha-config.ts';
 import { gachaMonitoring, fundGachaRewardsBudget } from '../services/gacha-monitoring.ts';
+import { signupCreditConfigView, setSignupCreditConfig } from '../services/signup-credit-config.ts';
+import { fundCreditBudget, signupCreditOverview, clearFirstWithdrawalReview } from '../services/signup-credit.ts';
 import { reconcileStuckPrizes } from '../services/gacha-reconcile.ts'; // web3-free (DB + DAS) → eager-safe
 import { recentRestocks } from '../services/gacha-stock.ts'; // web3-free (DB + CC read client) → eager-safe
 import { resetGoldBalances } from '../services/gold.ts'; // web3-free (DB only) → eager-safe
@@ -357,6 +359,28 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
     const usd = Number((req.body as { amountUsd?: unknown } | undefined)?.amountUsd);
     if (!Number.isFinite(usd) || usd <= 0) throw new HttpError(400, 'amountUsd must be a positive number');
     return fundGachaRewardsBudget(await getDb(), BigInt(Math.round(usd * 1e6)));
+  });
+
+  // --- Perks: free signup credit (docs/signup-credit-spec.md). Dark until signup_credit_enabled. ---
+  // Overview: knobs + CREDIT_BUDGET/FEE_REVENUE balances + total issued + the first-withdrawal review queue.
+  app.get('/admin/perks/signup-credit', rl(config.routeRateLimits.admin), async () => {
+    return { config: signupCreditConfigView(), ...(await signupCreditOverview(await getDb())) };
+  });
+  // Apply a partial knob patch (each field validated by its own live knob).
+  app.post('/admin/perks/signup-credit/config', rl(config.routeRateLimits.admin), async (req) => {
+    const b = req.body;
+    if (typeof b !== 'object' || b === null || Array.isArray(b)) throw new HttpError(400, 'bad config body');
+    return { config: await setSignupCreditConfig(await getDb(), b as Record<string, unknown>) };
+  });
+  // Top up the program: move earned fees FEE_REVENUE → CREDIT_BUDGET (clamped to the fee balance).
+  app.post('/admin/perks/signup-credit/fund', rl(config.routeRateLimits.admin), async (req) => {
+    const usd = Number((req.body as { amountUsd?: unknown } | undefined)?.amountUsd);
+    if (!Number.isFinite(usd) || usd <= 0) throw new HttpError(400, 'amountUsd must be a positive number');
+    return { movedE6: (await fundCreditBudget(await getDb(), BigInt(Math.round(usd * 1e6)))).toString() };
+  });
+  // Clear a credit-origin account's first-withdrawal hold (after reviewing) — the auto-process loop pays it next pass.
+  app.post('/admin/perks/signup-credit/review/:userId', rl(config.routeRateLimits.admin), async (req) => {
+    return { cleared: await clearFirstWithdrawalReview(await getDb(), (req.params as { userId: string }).userId) };
   });
 
   // Recover inventory rows stranded in 'selling'/'withdrawing' by a crash mid-flight (DAS owner is the oracle).
