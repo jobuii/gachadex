@@ -7,10 +7,10 @@ import { useChat } from '../store/chat';
 // + a glyph from NAV_ICONS (views without `short` — Home, which lives on the logo — get no tab).
 const VIEWS = [
   { id: 'home', label: 'Home' },
-  { id: 'trade', label: 'Exchange', short: 'Trade' },
+  { id: 'trade', label: 'Trade', short: 'Trade' },
+  { id: 'games', label: 'Play', short: 'Play' }, // shown only when GAMES_ENABLED (gamesVisible); sits right after Trade
   { id: 'markets', label: 'Markets', short: 'Markets' },
   { id: 'pool', label: 'Pool', short: 'Pool' },
-  { id: 'games', label: 'Games', short: 'Games' },
   { id: 'leaderboard', label: 'Leaderboard', short: 'Ranks' },
   { id: 'docs', label: 'Docs' }, // routes to /docs (no `short` → desktop nav only, like Home)
   { id: 'portfolio', label: 'Portfolio', short: 'Folio' }, // always the rightmost nav option
@@ -73,7 +73,9 @@ export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat, game
             <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24h-6.66l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
           </svg>
         </a>
-        <button type="button" className="chat-toggle nav-docs" onClick={() => navigate('/docs')} title="Docs" aria-label="Docs">📖</button>
+        <button type="button" className="chat-toggle nav-docs" onClick={() => navigate('/docs')} title="Docs" aria-label="Docs">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" /></svg>
+        </button>
         <AuthButton />
       </div>
     </nav>

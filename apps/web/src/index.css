@@ -241,6 +241,7 @@ button { border-radius: var(--pill); }
 .chat-toggle.active { color: var(--gold); border-color: var(--gold); background: rgba(240, 192, 64, 0.08); }
 /* Docs is a desktop nav link; on mobile (where the nav links are hidden) it surfaces as this top-bar icon instead */
 .nav-docs { display: none; }
+.nav-docs svg { width: 15px; height: 15px; } /* book line-icon, sized to match the X social icon */
 .chat-badge {
   background: var(--accent); color: #fff; font-size: 0.4rem; line-height: 1;
   padding: 0.15rem 0.3rem; border-radius: 8px; min-width: 0.8rem; text-align: center;
