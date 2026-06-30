@@ -120,13 +120,12 @@ Layered, strongest → weakest. **The plan's saving grace is the manual-review h
   - **Low leverage + position-size cap on bonus money** — smaller winners, less to chase.
   - **Anomaly detection** on the signature: signup → bonus → high-lev trade → deposit-exactly-$50 → churn-exactly-$1k → withdraw. (Precedent: referral bonuses already pay only the "first N" referrers — an anti-farming cap.)
 
-### 3.1 Velocity alarm — REWORKED from the original "freeze signups at 50/day"
-> **Do NOT globally freeze account creation.** That is a self-inflicted DoS: any anonymous person spins up 51 throwaway wallets (free, minutes) and freezes signup for *all* real users until an admin unfreezes — and it doesn't even stop the bot (its accounts were already created; it can spread across days/IPs). Accounts without a grant are harmless.
+### 3.1 Velocity alarm (mechanism #5 — freeze the GRANT, never signups)
+**Trigger:** more than **N new accounts/day** (knob `signup_credit_daily_account_alert`, default **50**). **Action:** raise a flag on the admin **Perks page** + **auto-freeze new bonus grants** — existing accounts and *signups continue normally*; only the free-money issuance pauses. **The admin can unfreeze** from the Perks page.
 
-Instead:
-- **Velocity spike → auto-pause GRANT issuance** (people can still sign up; the free money pauses) + **admin alert** on the Perks page.
-- **Per-signal, not one global counter** — per IP/subnet/fingerprint/funding-cluster, so a farm trips only its own limit.
-- The **program budget cap** (`signup_credit_program_budget_usd`) is the real hard stop.
+> **The one change from the original ask:** the original #5 said "freeze account creation". Don't — that's a self-inflicted DoS: anyone could spin up 51 throwaway wallets to halt signup for *all* real users, and it wouldn't even stop the bot (its accounts already exist). Freezing only the **grant** is safe and achieves the same goal — an account with no free money is harmless.
+
+Optional refinements: also apply **per-signal** caps (per IP/subnet/fingerprint/funding-cluster) so one farm trips only its own limit rather than the global switch; the **program budget cap** (`signup_credit_program_budget_usd`) remains the ultimate hard stop.
 
 ### 3.2 How the on-chain clustering works — in depth, plain English (design only; NOT built in Phase 1)
 
@@ -183,7 +182,7 @@ Reason-list updates required: `EXTERNAL_CAPITAL_REASONS` (`leaderboard.ts`) and 
 
 - **No new account type** — the grant is drawn from the existing `LP_POOL` (DECIDED, §9.2).
 - **`signup_credits`** table (or reason-derived): `user_id`, `granted_e6`, `granted_at`, `last_trade_at`, `wagering_met_at`, `expired_at`, `cluster_id`/funding-source, `first_withdrawal_reviewed`, `bonus_cashout_paid_e6` (running total of bonus-derived withdrawals, for the §2.6 cap).
-- **Knobs (liveKnob pattern):** `signup_credit_enabled` (bool), `signup_credit_usd` (grant amount), `signup_credit_program_budget_usd` (max cumulative LP drain; grants pause when hit), `signup_credit_wager_deposit_usd` (50), `signup_credit_wager_volume_usd` (1000 ≈ 20× turnover; defensible up to ~40×), `signup_credit_expiry_days` (7), `signup_credit_max_cashout_usd` (§2.6 — **$0 → unlimited**, operator-set), `signup_credit_max_leverage` + `signup_credit_max_position_usd` (§2.7 — **default unlimited / no restriction**), grant velocity thresholds.
+- **Knobs (liveKnob pattern):** `signup_credit_enabled` (bool), `signup_credit_usd` (grant amount), `signup_credit_program_budget_usd` (max cumulative LP drain; grants pause when hit), `signup_credit_wager_deposit_usd` (50), `signup_credit_wager_volume_usd` (1000 ≈ 20× turnover; defensible up to ~40×), `signup_credit_expiry_days` (7), `signup_credit_max_cashout_usd` (§2.6 — **$0 → unlimited**, operator-set), `signup_credit_max_leverage` + `signup_credit_max_position_usd` (§2.7 — **default unlimited / no restriction**), `signup_credit_daily_account_alert` (§3.1, default 50 — flag + auto-freeze grants, admin unfreeze).
 - **Solvency:** because grants come from `LP_POOL` (real USDC), they create **no unbacked liability** (unlike the faucet) — PoR stays intact. The only invariant: `LP_POOL` must not be driven negative, and the program cap (`signup_credit_program_budget_usd`) bounds the drain. (Distinct from the faucet's `db/init.ts` ban, which exists precisely because faucet credit is *un*backed.)
 
 ---
