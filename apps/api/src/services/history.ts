@@ -115,6 +115,8 @@ const TXN_TYPE: Record<string, 'Transfer' | 'Realized PNL' | 'Funding Fee' | 'Co
   DEPOSIT: 'Transfer',
   WITHDRAWAL: 'Transfer',
   WITHDRAWAL_REVERSAL: 'Transfer',
+  SIGNUP_CREDIT: 'Transfer',
+  SIGNUP_CREDIT_EXPIRE: 'Transfer',
   REALIZED_PNL: 'Realized PNL',
   FUNDING: 'Funding Fee',
   OPEN_FEE: 'Commission',

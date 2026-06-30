@@ -902,3 +902,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_resting_user_idem ON resting_orders(user_id
 CREATE UNIQUE INDEX IF NOT EXISTS uq_resting_pos_kind ON resting_orders(position_id, kind) WHERE status='active' AND reduce_only;
 -- the trigger sweep range-scans active orders per market
 CREATE INDEX IF NOT EXISTS idx_resting_active ON resting_orders(market_id, kind, trigger_price_e6) WHERE status='active';
+
+-- Free signup-credit grants (docs/signup-credit-spec.md). One row per user (the grant is once). The grant
+-- MONEY is a SIGNUP_CREDIT ledger entry into USER_COLLATERAL (and SIGNUP_CREDIT_EXPIRE on claw-back) — those
+-- ledger sums are the authority for the outstanding grant G; this row tracks lifecycle: hard-expiry anchor
+-- (granted_at), the claw-back marker (expired_at), and the first-withdrawal review flag. Dark until
+-- signup_credit_enabled. "credit-origin account" = a row exists here.
+CREATE TABLE IF NOT EXISTS signup_credits (
+  id                        TEXT PRIMARY KEY,
+  user_id                   TEXT NOT NULL REFERENCES users(id),
+  granted_e6                BIGINT NOT NULL,                        -- the original grant (for the admin "Free Credit" column)
+  granted_at                TIMESTAMPTZ NOT NULL DEFAULT now(),     -- hard-expiry anchor (signup_credit_expiry_days from here)
+  expired_at                TIMESTAMPTZ,                            -- set when the sweep claws the residual back to CREDIT_BUDGET
+  first_withdrawal_reviewed BOOLEAN NOT NULL DEFAULT false          -- operator cleared the first credit-origin withdrawal
+);
+-- one grant per user (also makes the grant idempotent: a duplicate insert is a no-op)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_signup_credit_user ON signup_credits(user_id);
