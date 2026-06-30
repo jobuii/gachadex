@@ -1,6 +1,6 @@
 # Free Signup Credit — Spec
 
-**Status:** DRAFT / investigation → spec. Not built. Flag-gated when built.
+**Status:** DRAFT → **QA'd + revised** (grounding + adversarial design review, 2026-06-30). Not built; flag-gated when built. The QA caught a **principal-leak in the earlier withdrawable formula** (old §2.4) and a headline contradiction — both fixed; §2.2 is now the single authoritative rule. Remaining product calls in §9.
 **Author:** design session 2026-06-30.
 **One-liner:** Give new accounts a configurable amount of **free, tradeable, non-withdrawable** USDC credit, with loss-prevention so we never give away the principal and bound the cost of withdrawable winnings.
 
@@ -41,49 +41,50 @@ reason: 'SIGNUP_CREDIT'
 − CREDIT_BUDGET    (system)    −grantE6
 ```
 
-**Funding = `CREDIT_BUDGET`, topped up from `FEE_REVENUE` (DECIDED, §9.2).** The operator funds the program by transferring earned fees into the budget (admin Perks page): `+CREDIT_BUDGET / −FEE_REVENUE`. Each grant then debits `CREDIT_BUDGET`; **clamp so a grant can't exceed the CREDIT_BUDGET balance** (the funded balance is the hard cap — when it runs dry, grants pause until topped up). Backed by the real custody USDC that backed those fees, so solvency/PoR holds. Reuse `creditCapped`-style clamp logic. Record the grant per user (`signup_credits` row, or `Σ SIGNUP_CREDIT` by reason). **Add `SIGNUP_CREDIT` to `EXTERNAL_CAPITAL_REASONS` and `TXN_TYPE`** — else the leaderboard miscounts the grant as trading PnL (warning at `leaderboard.ts:10`).
+**Funding = `CREDIT_BUDGET`, topped up from `FEE_REVENUE` (DECIDED, §9.2).** The operator funds the program by transferring earned fees into the budget (admin Perks page): `+CREDIT_BUDGET / −FEE_REVENUE`. Each grant then debits `CREDIT_BUDGET`; **clamp so a grant can't exceed the CREDIT_BUDGET balance** (the funded balance is the hard cap — when it runs dry, grants pause until topped up). Backed by the real custody USDC that backed those fees, so solvency/PoR holds. **Lock `CREDIT_BUDGET` `FOR UPDATE` when debiting it (`getBalanceForUpdate`, `ledger.ts:144`) — do NOT reuse the unlocked `creditCapped` pattern (QA M3):** `creditCapped` clamps on the *user's* headroom and lets its source go negative, so two concurrent grants would both read the same budget balance and overdraw it (→ unbacked liability → PoR breach). Record the grant per user (`signup_credits` row, or `Σ SIGNUP_CREDIT` by reason). **Reason-list updates (QA L1): add `SIGNUP_CREDIT` *and* `SIGNUP_CREDIT_EXPIRE` to `EXTERNAL_CAPITAL_REASONS` (`leaderboard.ts:11`)** — else the grant is miscounted as trading PnL and the claw-back as a trading loss — **and add both to `TXN_TYPE` (`history.ts`)** or they vanish from users' transaction history.
 
-### 2.2 The non-withdrawable floor (the whole trick)
-Enforced at the one chokepoint:
-
-```
-remainingCredit = min(grantTotal, collateral)      // the still-present credit
-floorWithdrawable = max(0, collateral − remainingCredit)
-                  = max(0, collateral − grantTotal)
-```
-
-- **No deposit, $50 credit:** trade to $90 → withdrawable `90−50 = $40` (true winnings). Lose to $30 → `remaining = 30`, withdrawable `$0` (credit absorbed the loss). **The $50 principal never leaves, ever.**
-- **$100 deposit on top of $50 credit:** withdrawable = `max(0, collateral − 50)` = deposit + net winnings; the $50 stays locked.
-
-### 2.3 Wagering gate (layered ON TOP of the floor)
-Winnings derived from the bonus do not withdraw until the account has:
-- **deposited ≥ $50 real USDC** (the deposit must *clear first*), **and**
-- **traded ≥ $1,000 volume after the deposit cleared.**
-
-> **Calibration (research):** turnover is universally `multiple × bonus`. $1,000 on a $50 grant = **20× turnover** — *conservative/player-friendly*; the industry band is ~20×–50× (avg ~35×), and **>40× is the aggressive ceiling** that reads as predatory. 20× is a fine launch value with headroom to raise toward 30–40× if abuse runs hot. Keep it a knob. (Do NOT cite per-bonus-type bands like "no-deposit 40–70×" — that claim failed verification; see Appendix A.)
-
-> **Definitional pin (important):** collateral is one fungible pool, so you cannot cleanly tag a trade's notional as "real-money" vs "bonus" volume. The implementable interpretation of "bonus volume doesn't count" is: **count only volume traded after the qualifying $50 deposit has cleared.** Same spirit, actually buildable. (Pure lot-tracking of bonus-vs-deposit dollars is possible but high-complexity; not recommended for v1.)
-
-### 2.4 Precise withdrawable rule (pin these edges before coding)
-A depositor's **own deposit is always withdrawable** (it's their money); only **bonus-derived winnings** are gated. So:
+### 2.2 The non-withdrawable rule (the WHOLE trick — SINGLE AUTHORITY)
+There is exactly **one** withdrawal-cap helper, `withdrawableBalance(userId)` — the only thing §8 changes at the chokepoint. Definitions: `C` = current USER_COLLATERAL balance, `G` = grant principal still outstanding (`Σ SIGNUP_CREDIT − Σ SIGNUP_CREDIT_EXPIRE` for the user), `D` = the user's own net capital still in (`Σ DEPOSIT − Σ prior own-withdrawals`, floored at 0).
 
 ```
-ownNetDeposits = Σ(DEPOSIT) − Σ(WITHDRAWAL) − Σ(WITHDRAWAL_REVERSAL inverse) ...   // their real capital in
-bonusWinnings  = max(0, collateral − grantTotal − ownNetDeposits)                  // profit beyond grant+deposits
-withdrawable   = ownNetDeposits_available + (wageringMet ? bonusWinnings : 0)
+floor (never withdrawable) = min(G, C)
+withdrawable = wageringMet
+    ? max(0, C − G)              // post-wagering: everything above the grant principal
+    : min(max(0, C − G), D)      // pre-wagering: only your OWN deposited capital back — no winnings
 ```
-clamped to `≥ 0` and `≤ collateral`, and never below the credit floor. The exact formula is the single place the loss-absorption policy lives — write it as one tested helper `withdrawableBalance(q, userId)` shared by `requestWithdrawal`, the UI "max withdrawable", and `treasury.ts` liability math.
 
-> **Research validates this loss-ordering.** The floor model spends the user's *withdrawable* money (deposit + winnings) down first and only erodes the credit floor once collateral drops below the grant — i.e. **"cash-before-bonus"**, which is exactly the standard casino rule ("the casino first uses up our cash balance; it only uses the bonus balance once cash is gone"). So no custom policy invention needed — we match mature practice.
+- The grant `G` is **never** withdrawable (the floor). Losses hit the user's own money first — "cash-before-bonus" (validated vs casino practice).
+- `max(0, C − G)` is the absolute ceiling on what can ever leave; the wagering gate just restricts it to `D` until met.
+- **Worked examples (these now agree with §2.3 — the earlier draft did not):**
+  - **No deposit, $50 grant, trade to $90:** pre-wagering `min(40, 0) = $0` — winnings are **locked until they deposit $50 + trade $1,000**, then `max(0,90−50)=$40` unlocks. *(The earlier draft wrongly said $40 immediately — QA C2.)*
+  - **$100 deposit + $50 grant, lose $80 → C=$70:** `min(max(0,70−50), 100) = $20` — surviving cash; **the $50 grant never leaks.** *(The earlier §2.4 formula wrongly returned $70 — QA C1.)*
+  - **$100 deposit + $50 grant, win to $200, wagering met:** `max(0,200−50) = $150` — deposit + winnings, grant still locked.
 
-### 2.5 Expiry
-Credit expires **7 days after the last trade** (dormant = no trade in the window). On expiry, claw the **remaining** credit back:
+### 2.3 Wagering gate — a LIVE condition, not a sticky flag
+`wageringMet` is evaluated **at withdrawal time** as BOTH currently true:
+- **net deposits `D` ≥ $50** (the deposit must still be in — see below), **and**
+- **cumulative post-first-deposit trade volume ≥ $1,000.**
+
+> **Why live, not sticky (fixes a bypass — QA H3):** a one-time flag lets a bot deposit $50, flip the flag, immediately withdraw the $50 (own money), then cash out grant-funded winnings with no real money left in. Requiring `D ≥ $50` *at withdrawal time* forces the deposit to actually stay.
+
+> **Calibration (research):** turnover = `multiple × bonus`; $1,000 on $50 = 20× — conservative (industry ~20–50×, avg ~35×, >40× predatory); a knob. **Caveat (QA H2): on a *leveraged* perp, $1,000 of volume is one round-trip for a few dollars of fees — turnover alone is weak friction.** If abuse appears, turn ON the §2.7 leverage cap during the bonus phase and/or switch wagering to fees-paid or realized-loss-based. (Do NOT cite per-type bands; see Appendix A.)
+
+> **"Bonus volume doesn't count" (definitional):** collateral is one fungible pool — can't tag a trade as bonus-vs-real. Buildable interpretation: count only volume **after the $50 deposit has cleared**.
+
+### 2.4 Notes on the rule (the earlier separate formula was wrong)
+- §2.2 is the **single authority.** The earlier `ownNetDeposits + bonusWinnings` formula was **removed** — it ignored trading losses and **leaked the grant** on any deposit-then-lose path (QA C1).
+- **Do NOT reuse this helper in `treasury.ts` PoR liability math (QA M7).** Non-withdrawable credit is *still a real liability* (it sits in USER_COLLATERAL, is tradeable, and its winnings become cashable). PoR must keep counting the full `|TREASURY_USDC|`; subtracting the floor would understate liabilities and break the solvency check.
+- **`G = 0` must be byte-identical to today (QA L2):** a normal (non-credit) user's `withdrawableBalance` = `max(0, C − 0) = C` = the current raw balance read. Test this equivalence so the chokepoint change can't regress normal withdrawals.
+
+### 2.5 Expiry — HARD from grant (QA M1)
+Credit expires at **`min(7 days after grant, 7 days after last trade)`** — i.e. a **hard 7-day cap from grant** (the research precedents are hard-from-receipt: DraftKings 24h, FanDuel 7d). A pure "7 days after last trade" sliding window is wrong: a dust trade every 6 days keeps the free option alive forever. On expiry, claw the still-present credit back:
 ```
 reason: 'SIGNUP_CREDIT_EXPIRE'
-− USER_COLLATERAL  remainingCredit
-+ CREDIT_BUDGET    remainingCredit
+− USER_COLLATERAL  clawAmount
++ CREDIT_BUDGET    clawAmount
 ```
-Only the unspent floor (`min(grant, collateral)`) is clawed; winnings above it are untouched. A background sweep (like the gacha reconcilers) handles expiry.
+- **`clawAmount` must count credit parked in open-position margin, not just free collateral (QA M2).** Margin moves `USER_COLLATERAL → USER_POSITION_MARGIN` on open, so `min(G, freeCollateral)` can read ~$0 for a user holding the grant as margin → the sweep would claw nothing, mark the row expired, and (if "expired" drops `G` from the floor) **un-lock the principal when the position later closes.** Fix: compute against `free + locked margin`, and **only reduce `G` by what was actually clawed** (never zero `G` while collateral/margin still backs it); claw the residual when the position closes.
+- **Lock the `USER_COLLATERAL` row `FOR UPDATE` in the sweep** — it races position-close + withdrawal. Idempotent; reuses the gacha-reconciler pattern.
 
 ### 2.6 Max-cashout cap on bonus winnings (ADDED from research — biggest single loss-bound)
 The casino/sportsbook playbook **caps how much of the bonus-derived winnings can ever be withdrawn** — commonly ~$100 for a free/no-deposit bonus (next.io, WizardofOdds). This is the single cleanest bound on per-account house loss. Knob `signup_credit_max_cashout_usd`, **fully operator-set across the whole range $0 → unlimited:**
@@ -91,7 +92,7 @@ The casino/sportsbook playbook **caps how much of the bonus-derived winnings can
 - **a positive $ cap** (e.g. $100–$250 conservative) = a credit-origin account's lifetime *bonus-derived* withdrawals are capped at that; anything above stays locked / is clawed.
 - **unlimited** (a sentinel, e.g. blank / −1) = no cap (full giveaway).
 
-Only the **bonus-funded upside** is capped — the user's own deposits + winnings on their own deposited capital are never capped. This turns the per-account worst case from "unbounded leveraged upside" into a number you choose.
+**Scope + attribution (QA H5, M4).** With one fungible pool you can't cleanly split "winnings from the free $50" vs "winnings from a $1,000 deposit", so the cap is defined on **bonus-derived withdrawals = withdrawals attributed deposit-first, then winnings**, tracked cumulatively in `bonus_cashout_paid_e6`: a withdrawal first draws down the user's own net deposits (uncapped), only the remainder counts against the cap. **Graduation:** the cap is the *free-money* bound — it should **lift once the user's net deposits reach the grant** (real buy-in ≥ the free money), so a genuine depositor's profit isn't capped at, say, $100. *(Open — the exact graduation threshold, net-deposits ≥ grant vs a multiple, is a product decision; see §9.)* Net: a *free* account's worst case is bounded to the cap; real depositors graduate out.
 
 ### 2.7 Bonus-active trading caps (ADDED from research — operator-adjustable, DEFAULT = no restriction)
 Casinos cap **max bet per round ($5–$10)** while a bonus is in play, to stop someone converting a small bonus into a huge swing. The perp analogue is **optional** caps on **leverage**, **max position notional ("max bet")**, applied only while an account holds unspent credit (`remainingCredit > 0`) and hasn't met wagering. **These are operator knobs and DEFAULT to OFF / unlimited** — out of the box a credit account trades exactly like a normal account (full leverage + size). The operator can tighten them later from the Perks page if abuse appears. Knobs (all default unlimited): `signup_credit_max_leverage`, `signup_credit_max_position_usd`.
@@ -114,9 +115,9 @@ Layered, strongest → weakest. **The plan's saving grace is the manual-review h
   - **Crucial lesson (Hop):** they set a *conservative false-positive bar* and refused any method with "a non-negligible chance of eliminating legitimate users." So **cluster signal feeds the manual-review queue (#d) — do NOT auto-block on it.** Cap grants/payouts per cluster + surface "1 of N funded from the same wallet" to the reviewer.
   - Caveat: this evidence is from one-time airdrop *snapshots*, not live real-time gating — applying it continuously is reasonable but unproven; lean on review, not auto-deny.
 - **c. Cheap filters** — device fingerprint + IP/subnet **velocity caps on GRANTS** (not signups). Catches lazy bots.
-- **d. Manual-review hold on the FIRST withdrawal from any credit-origin account.** Reuse the existing manual path: the `withdrawal_auto_process` knob, the daily cap, and the PoR freeze already exist. **Route credit-origin first-withdrawals to manual** (don't auto-approve). Real USDC doesn't leave until a heuristic/human clears it, with the cluster signal from (b) in view.
+- **d. Manual-review hold on the FIRST withdrawal from any credit-origin account.** **NOT automatic from the §8 chokepoint change (QA H4):** auto-approval runs in `willAutoApprove` / `processAllRequested` (`withdrawals.ts`), which select purely by `amount ≤ auto-cap` — nothing there excludes credit accounts. You must add a **per-user "needs manual review" condition the auto-approval query honours.** Definitions: **"credit-origin account"** = ever received a `SIGNUP_CREDIT` grant; **"first withdrawal"** = no prior `confirmed` withdrawal. Such a withdrawal is forced to stay `requested` (manual) regardless of `withdrawal_auto_process`/amount; a human/heuristic clears it (with the §3b cluster signal in view) before real USDC leaves. Reuses the existing manual path + daily cap + PoR freeze.
 - **e. Backstops that bound the blast radius:**
-  - **The `CREDIT_BUDGET` balance is the hard ceiling** — top it up from `FEE_REVENUE`; when it's empty, grants pause. Total exposure can never exceed what you funded.
+  - **The `CREDIT_BUDGET` balance caps the PRINCIPAL granted** — top it up from `FEE_REVENUE`; when empty, grants pause. **It does NOT cap total program cost (QA H1):** credit users' winning *trades* settle from `LP_POOL` (uncapped by the budget), bounded only by the per-account §2.6 max-cashout × the number of accounts (which is unbounded until §3 sybil defense ships). What actually bounds the variable cost: the §2.6 cap + the sybil gates + the optional Phase-2 LP reconciliation (§9.2) — not the budget alone.
   - **Low leverage + position-size cap on bonus money** — smaller winners, less to chase.
   - **Anomaly detection** on the signature: signup → bonus → high-lev trade → deposit-exactly-$50 → churn-exactly-$1k → withdraw. (Precedent: referral bonuses already pay only the "first N" referrers — an anti-farming cap.)
 
@@ -182,7 +183,7 @@ Reason-list updates required: `EXTERNAL_CAPITAL_REASONS` (`leaderboard.ts`) and 
 
 ## 7. Schema / config
 
-- **New system account type** `CREDIT_BUDGET` in `SYSTEM_ACCOUNT_TYPES` (DECIDED, §9.2), funded from `FEE_REVENUE` via an admin transfer on the Perks page.
+- **New system account type** `CREDIT_BUDGET` — add to BOTH the `AccountType` TS union (`ledger.ts:13-29`) **and** the `SYSTEM_ACCOUNT_TYPES` array (or it won't type-check). Funded from `FEE_REVENUE` via an admin transfer on the Perks page (DECIDED, §9.2).
 - **`signup_credits`** table (or reason-derived): `user_id`, `granted_e6`, `granted_at`, `last_trade_at`, `wagering_met_at`, `expired_at`, `cluster_id`/funding-source, `first_withdrawal_reviewed`, `bonus_cashout_paid_e6` (running total of bonus-derived withdrawals, for the §2.6 cap).
 - **Knobs (liveKnob pattern):** `signup_credit_enabled` (bool), `signup_credit_usd` (grant amount; each grant clamped to the live `CREDIT_BUDGET` balance, which is the hard cap), `signup_credit_wager_deposit_usd` (50), `signup_credit_wager_volume_usd` (1000 ≈ 20× turnover; defensible up to ~40×), `signup_credit_expiry_days` (7), `signup_credit_max_cashout_usd` (§2.6 — **$0 → unlimited**, operator-set), `signup_credit_max_leverage` + `signup_credit_max_position_usd` (§2.7 — **default unlimited / no restriction**), `signup_credit_daily_account_alert` (§3.1, default 50 — flag + auto-freeze grants, admin unfreeze).
 - **Solvency:** grants debit `CREDIT_BUDGET`, funded from `FEE_REVENUE` (real, already-collected fee USDC), so they create **no unbacked liability** (unlike the faucet) — PoR stays intact. Invariant: a grant can't exceed the `CREDIT_BUDGET` balance (clamp; never drive it negative) — the funded balance is the cap. (Distinct from the faucet's `db/init.ts` ban, which exists precisely because faucet credit is *un*backed.)
@@ -207,6 +208,7 @@ Plus: credit-origin accounts skip auto-approval (route to manual) for the first 
 1. **Free-on-signup vs deposit-first — RECOMMENDATION RECORDED: deposit-first.** Free-on-signup maximises reach but keeps account cost ≈ $0 (abuse magnet, contained only by §3); **deposit-first** (bonus unlocks/matches only after a real deposit) is the only design that's *close to bot-proof*. Recommendation = **deposit-first**. *Free-on-signup is left for now* (not chosen, not ruled out) — revisit if reach matters more than abuse-resistance. Build Phase 1 so the grant trigger is a config (deposit-gated vs at-signup) rather than hard-coded.
 2. **Who funds the cost — DECIDED: a dedicated `CREDIT_BUDGET`, topped up from `FEE_REVENUE`.** The operator transfers earned fees into `CREDIT_BUDGET` from the admin Perks page; grants debit it, and the funded balance is the hard cap. Self-funded from house profits → visible, capped, and the principal stays off the LP pool. **Honest nuance:** a credit user's winning *trades* are still paid by `LP_POOL` (the engine's PnL counterparty), so the LP pool bears the trading-winnings portion even though `CREDIT_BUDGET` owns the principal. To fully insulate LPs, **Phase 2** can add a periodic reconciliation that reimburses `LP_POOL` for credit-origin PnL out of `CREDIT_BUDGET`. v1 = `CREDIT_BUDGET`-for-principal + the cap (already far better than LP-funding). *(Switched from an earlier LP-pool-funded draft because there are meaningful third-party LPs — their capital shouldn't silently fund promos.)*
 3. **Which §3 gates ship first** (still open) — at minimum (a) one per-account cost gate + (d) manual hold + (e) capped budget. (b) on-chain clustering is the highest-leverage add.
+4. **QA-surfaced calls (from the adversarial design review):** (a) the §2.6 **graduation threshold** (net-deposits ≥ grant, or a multiple) — when a real depositor stops being capped; (b) accept-or-harden the **weak turnover gate on a leveraged perp** (QA H2 — $1k volume ≈ one round-trip; mitigate by enabling the §2.7 leverage cap during the bonus phase, or wagering on fees-paid / realized-loss instead of raw volume); (c) **policy for stranded winnings** (QA M6 — winnings blocked by the cap or never-met wagering, neither withdrawable nor clawed: leave tradeable-only, or claw on expiry).
 
 ---
 
@@ -220,12 +222,13 @@ Plus: credit-origin accounts skip auto-approval (route to manual) for the first 
 
 ## 11. Test plan (high level)
 
-- Floor math: no-deposit grant — win → withdrawable = winnings; lose → withdrawable 0; principal never withdrawable. Deposit + grant — own deposit withdrawable, bonus winnings gated until wagering met.
-- Wagering: deposit must clear first; volume counted only post-deposit; not-met blocks bonus winnings, met releases them.
-- Expiry: dormant 7d claws back remaining only, not winnings; a trade resets the clock.
-- Budget: grant clamped/blocked when the `CREDIT_BUDGET` balance is insufficient (never drive it negative); the `FEE_REVENUE`→`CREDIT_BUDGET` transfer moves only available fees; never creates unbacked liability.
-- Sybil: credit-origin first-withdrawal does NOT auto-approve; velocity spike pauses grants (not signups); per-cluster cap blocks the Nth grant in a cluster.
-- Solvency: `withdrawableBalance` is consistent with `treasury.ts` PoR liability; `db/init.ts` invariant holds.
+- Withdrawable rule (§2.2): no-deposit grant, win → withdrawable **$0 until wagering met** (then = winnings); lose → $0; **principal never withdrawable**. Deposit+grant, lose past the deposit → withdrawable = surviving cash, **grant never leaks** (the C1 regression). Deposit+grant, win + wagering met → deposit + winnings, grant locked. **`G=0` (normal user) → withdrawable == raw balance (L2 equivalence).**
+- Wagering (§2.3): LIVE check — `D ≥ $50` at withdrawal time (deposit-then-withdraw must NOT keep it met); post-deposit volume ≥ $1,000; not-met blocks winnings, met releases.
+- Max-cashout (§2.6): bonus-derived withdrawals capped, attributed deposit-first; cap lifts once net deposits ≥ grant.
+- Expiry (§2.5): **hard 7d from grant** (a late trade does NOT extend past the hard cap); claw counts margin-parked credit; `G` reduced only by what's clawed; no un-lock when a position later closes.
+- Budget: grant clamped/blocked when `CREDIT_BUDGET` is insufficient; budget debit **locked `FOR UPDATE`** so concurrent grants can't overdraw (M3); never creates unbacked liability.
+- Sybil: a credit-origin first-withdrawal does NOT auto-approve even with `withdrawal_auto_process` on; velocity spike pauses grants (not signups).
+- Solvency/PoR: `withdrawableBalance` is **NOT** used in `treasury.ts` PoR liability — PoR still counts the full `|TREASURY_USDC|` incl. the credit (M7); `db/init.ts` invariant holds.
 
 ---
 
