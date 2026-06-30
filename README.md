@@ -6,7 +6,7 @@ basket **indices** — Top 100 / Top 250 (all three games) plus a Pokémon **Gra
 published in three weighting methodologies (**GJ** price-weighted, **G&P** equal-weight, **Pokedaq**
 5%-capped) — with an index-anchored synthetic mark, a pooled-LP counterparty, funding, and
 liquidations — plus a leaderboard, referrals, a sortable **markets screener**, shareable **PnL cards**,
-**delegated trading keys** (for bots / the official CLI), seven selectable UI **skins**, and a **live
+**delegated trading keys** (for bots / the official CLI), eight selectable UI **skins**, and a **live
 chat & social layer** (reactions, rank badges, presence, moderation, and a **DROP** giveaway pot).
 
 > **Two run modes.** The same engine runs on **play money** (a faucet, for demo/testing) or on **real
@@ -52,8 +52,8 @@ chat & social layer** (reactions, rank badges, presence, moderation, and a **DRO
   is in progress — see [Chat, social & DROP](#chat-social--drop).)
 - **Trade by API** — mint scoped **delegated keys** (trade-only; can never withdraw) for bots or the
   official `gachadex` CLI / SDK, without exposing your main wallet.
-- **Reskin the app** — pick one of **7 skins** (retro arcade default, plus Pokémon / One Piece / Magic
-  themes); a separate sidebar **game switcher** filters markets by game.
+- **Reskin the app** — pick one of **8 skins** (default **gachadex**, the modern house look; plus retro
+  **arcade** and Pokémon / One Piece / Magic themes); a separate sidebar **game switcher** filters markets by game.
 - Everything is **server-authoritative** and streamed live over WebSocket; the browser is a renderer.
 
 ---
@@ -435,18 +435,20 @@ not a prize-table business. "EV calibration" here means two things:
    feature/enable and to understand the sell-back economics per price tier ($25/$50/$100/$250/$1000).
 2. **Set GDEX's margin knobs so the house nets positive.** Three live-tunable knobs (admin **Gacha** tab):
    the **sell-back cut** (5% manual / 10% instant), an optional **purchase markup** (default 0), and the
-   **free-pack rebate** (Tokens loyalty: ~**2.5%** of every paid open accrues toward a free `$25` pack at the
-   `$1000`-spend threshold, funded as real USDC from the `GACHA_REWARDS_BUDGET` account).
+   **free-pack rebate** (**Gold** loyalty, flag `GOLD_ENABLED`: ~**2.5%** of every paid open accrues as
+   **Gold** toward a free `$25` pack at the `$1000`-spend threshold — valued `1,000 Gold ≈ $1`, so
+   `25,000 Gold = a free $25 pack`; earned via the `PACK_OPEN_EARN` ledger reason into `gold_balances` /
+   `gold_ledger`, non-withdrawable, funded as real USDC from the `GACHA_REWARDS_BUDGET` account).
 
    The tension: **the rebate is paid on _every_ open, but the cut is earned only on _sold-back_ opens.** So
    there's a break-even sell-back rate — at the default 5% cut and ~2.5% rebate (≈ `$1.10` cut on a ~`$22`
    buyback vs ~`$0.63` rebate on a `$25` pack): **break-even ≈ 57% sell-back**. The operator's CC data shows
    ~90% sell back, so the spec concludes **no markup is required** — but if real players _hold or withdraw_
    more than expected (especially grail buyers on the `$1000` machine), the rebate can outrun the cut and the
-   house bleeds; the markup knob is the backstop. With `TOKENS_ENABLED` **off** there is **no rebate liability**
+   house bleeds; the markup knob is the backstop. With `GOLD_ENABLED` **off** there is **no rebate liability**
    at all — the cut + markup is pure margin and the 57% figure doesn't apply.
 
-   **Calibrating concretely:** decide on Tokens, set the knobs for the expected sell-back behavior, **pre-fund
+   **Calibrating concretely:** decide on Gold, set the knobs for the expected sell-back behavior, **pre-fund
    `GACHA_REWARDS_BUDGET`** to cover the free-pack liability, then watch the monitoring readout (below) — the
    live sell-back rate vs the 57% break-even, and the **per-machine net** — and adjust the knobs live (or
    disable / mark-up a tier that's net-negative).
@@ -462,7 +464,7 @@ not a prize-table business. "EV calibration" here means two things:
   for the selected machine. The **admin tab** currently shows only the machine name/price + enable toggle —
   **there is no operator stock / restock / cross-machine-odds view yet** (the data is fetched but not
   surfaced; a per-machine live stock+odds panel with restock highlighting is a planned add).
-- **Monitoring readout** (admin Gacha tab): the §6 economics (sell-back cut + markup revenue vs Token-rebate
+- **Monitoring readout** (admin Gacha tab): the §6 economics (sell-back cut + markup revenue vs Gold-rebate
   cost, the operator net, and the live sell-back rate vs the ~57% break-even); activity (packs opened all-time
   + 24h, USDC volume, prize value, biggest pull, players, withdraws, realized rarity odds); **per-machine**
   opens, net, and realized odds; and **stuck-row counts**.
@@ -497,7 +499,7 @@ not a prize-table business. "EV calibration" here means two things:
       is the worst part (a wrong number for a *completed* sale). The API already returns the true `payoutE6`; the
       web discards it. Web-only fix (use `payoutE6` for the confirmation; apply buyback% + cap to the estimate);
       reveal + multi-pull summary only (the inventory list shows no quote).
-    - **#8 — operator-disabled machines were still buyable via `POST /gacha/open`. FIXED (held on the fix stack).**
+    - **#8 — operator-disabled machines were still buyable via `POST /gacha/open`. FIXED — merged to `master`, live.**
       `openPack` didn't consult `gachaConfig.disabledMachines` (enforced only in the lobby list + admin display),
       so the default-disabled `pokemon_2500` / `pokemon_5000` / `pokemon_151` packs could be opened by a direct
       call. `openPack` now rejects a disabled code (403 `machine_disabled`) before charging.
@@ -548,7 +550,7 @@ deliver the caller's own data.
 
 ```
 gachadex/                   (pnpm workspaces + Turborepo)
-  apps/web                  React 19 + Vite SPA — Vercel (7 selectable skins; default retro "Press Start 2P")
+  apps/web                  React 19 + Vite SPA — Vercel (8 selectable skins; default "gachadex" modern, arcade = retro pixel)
   apps/api                  Fastify + WebSocket backend: ledger, engine, oracle, liquidations, custody
   packages/pricing          Shared money math (price/PnL/margin/liq/mark) — FE previews must equal the engine
   packages/shared-types     Shared zod schemas + constants for the REST + WebSocket contracts
@@ -566,7 +568,9 @@ the web app, so the liquidation price / fees the user previews are exactly what 
 `orders · fills · positions · funding_rates · liquidations` (trading) ·
 `lp_pool · lp_positions` (liquidity) · `deposit_addresses · deposits · withdrawals · system_flags ·
 settings · worker_leases · provider_rate` (real-funds custody + operator config + provider rate-limit) ·
-`chat_messages · chat_reactions · chat_mod_actions · drop_tips` + mod flags on `users` (chat & social).
+`chat_messages · chat_reactions · chat_mod_actions · drop_tips` + mod flags on `users` (chat & social) ·
+`gold_balances · gold_ledger` (loyalty **Gold**) · `gacha_pack_opens · gacha_nft_inventory ·
+gacha_machine_stock · gacha_restock_events` (**Classic Gacha** — CC real-NFT packs).
 The same `schema.sql` runs on PGlite locally and on managed Postgres in prod; it's idempotent and
 applied on boot (`db/migrate.ts`).
 
@@ -643,6 +647,9 @@ to the browser). Copy `apps/api/.env.example` → `apps/api/.env`; every key has
 | `DROP_INTERVAL_MIN` / `DROP_HOUSE_FLOOR_USD` / `DROP_GDEX_MIN` | `60` / `250` / `500000` | DROP round knobs (Phase 2 mechanic) |
 | `RESTING_ORDERS_ENABLED` | `false` | Gates **Limit / Stop-Loss / Take-Profit** resting orders (all fill at the mark; SL/TP are reduce-only position brackets = a free OCO). Ships **dark** — the routes 404 + the sweep no-ops until `true` |
 | `GAMES_ENABLED` | `false` | Gates the **Games** surface (provably-fair USDC games). One switch — reveals the customer Games tab/page **and** enables the game APIs together. Ships **dark** |
+| `CLASSIC_GACHA_ENABLED` | `false` | Gates **Classic Gacha** (Collector Crypt real-NFT packs). **On in prod** — open/sell/withdraw routes also require real-funds (403 in play-money) |
+| `GOLD_ENABLED` | `false` | Loyalty **Gold** — pay-with-Gold + the ~2.5% free-pack rebate earn (the `gold_balances`/`gold_ledger` ledger). **On in prod**. The free-pack liability is pre-funded into the `GACHA_REWARDS_BUDGET` account (not an env var) |
+| `GACHA_AUTO_SWEEP_ENABLED` | `false` | Lets the reconcile loop auto-sweep stranded custody USDC (pack price parked by a crash between fund-custody and CC payment) back to hot. **On in prod** |
 
 ---
 
@@ -718,7 +725,7 @@ test file: `cd apps/api && npx tsx --test src/services/<name>.test.ts`.
   `lib/ws.js`).
 - **Frontend** is React 19 + zustand + plain CSS under `apps/web/src` (`components/`, `store/`, `lib/api.js`,
   `lib/ws.js`). Theming is token-driven (`index.css` + `themes.css`, `store/theme.js`); a feature renders
-  across all 7 skins by using the CSS tokens (`--bg`, `--gold`, `--accent`, …) rather than hardcoded
+  across all 8 skins by using the CSS tokens (`--bg`, `--gold`, `--accent`, …) rather than hardcoded
   colors/fonts. Check `mockups/*.html` + `references/*.png` for the approved design before building a UI
   control.
 
@@ -764,7 +771,7 @@ three** — `markets.game` (Pokémon / One Piece / Magic), a per-game index cata
 series** (GJ / G&P / Pokedaq), the **Scrydex-primary** feed (tcgpl eBay cross-check + One Piece fallback)
 with a **Scrydex graded** ladder, a sidebar **game switcher**, a Markets page with an **Indices | Cards**
 toggle (a financial **Index Overview** table — per-game, per-series, with 1D/1W/1M/YTD + 52W — alongside a
-sortable card screener with a JPY toggle), and **7 UI skins**. **Delegated trading keys** (scoped, revocable) back the official
+sortable card screener with a JPY toggle), and **8 UI skins**. **Delegated trading keys** (scoped, revocable) back the official
 `gachadex` CLI / SDK and **search-and-bet** (on-demand market listing). A **chat & social layer** ships
 alongside — live chat with reactions, **profile avatars** + a Portfolio identity banner, leaderboard rank
 badges, presence, and moderation, plus the **DROP** giveaway-pot teaser with real-USDC player tipping
@@ -779,11 +786,13 @@ revenue stream — **trading fees / funding / liquidation penalties** — is **o
 **Operator responsibility before real money on mainnet:** the security audit, KYC/AML, and geofencing
 are yours to put in place — the code only gates on `ALLOW_MAINNET_FUNDS=true`, it does not verify them.
 
-**Classic Gacha** (Collector Crypt real-NFT packs, section above) is built end to end but **off by default**
-behind `CLASSIC_GACHA_ENABLED` + real-funds gating, **not yet merged or launched** — pre-launch work is
-operator-side: EV/margin calibration, pre-funding `GACHA_REWARDS_BUDGET`, a CC-mainnet live test, and KYC.
-An operator **per-machine stock + odds + restock** panel is planned (the data is already in the feed, just
-not yet surfaced in the admin tab).
+**Classic Gacha** (Collector Crypt real-NFT packs, section above) is **merged and LIVE in prod** —
+`CLASSIC_GACHA_ENABLED` is **on** (the flag still defaults off in code) + real-funds-gated, and customers
+are pulling real packs. The unattended money-safety + CC-API-audit fixes (auto-refund / sweep / reconcile,
+plus the #1/#2/#3/#6/#8 fixes + affiliate-on-delivery) are all merged + live; the remaining deferred/open
+items (#7 sell-back display, the secondary list) are tracked in the Classic Gacha section above. An
+operator **per-machine stock + odds + restock** panel is still planned (the data is already in the feed,
+just not yet surfaced in the admin tab).
 
 Still deferred: the full **DROP** round mechanic (the scheduled draw, the rare.win pack-open, and the
 on-chain NFT prize — needs rare.win API access), the **Sealed** price feed (the Sealed index stays gated
