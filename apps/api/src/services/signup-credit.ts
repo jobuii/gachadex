@@ -80,6 +80,7 @@ export async function grantSignupCredit(db: Db, userId: string): Promise<bigint>
   if (!signupCreditConfig.enabled.get()) return 0n;
   const want = usdc(signupCreditConfig.grantUsd.get());
   if (want <= 0n) return 0n;
+  if ((await enforceSignupVelocity(db)).frozen) return 0n; // velocity latch (or an admin pause) → issue nothing
   return db.tx(async (q) => {
     const id = randomUUID();
     const claimed = await q.query<{ id: string }>(
@@ -123,18 +124,50 @@ export async function fundCreditBudget(db: Db, amountE6: bigint): Promise<bigint
   });
 }
 
+/** New accounts created in the last 24h — the velocity signal for the grant-freeze (spec §3.1 / mechanism #5). */
+export async function signupCount24h(q: Queryer): Promise<number> {
+  const r = await q.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM users WHERE created_at > now() - interval '24 hours'`);
+  return r.rows[0]?.n ?? 0;
+}
+
 /**
- * Hard-expiry sweep (spec §2.5 / M1, M2). Claws the residual grant of accounts whose grant is older than
- * `expiryDays` back to CREDIT_BUDGET. Margin-safe: claws only what's in free collateral, reduces the
- * outstanding grant by exactly what's clawed, and only marks the row expired once nothing is outstanding —
- * so credit parked in open-position margin is clawed on a later sweep after the position closes, never
- * un-locking the principal. Idempotent (row-locked).
+ * Velocity guard (spec §3.1 / mechanism #5): if more than `dailyAccountCap` accounts were created in the last
+ * 24h, LATCH `signup_credit_frozen` so no further grants issue until an admin unfreezes. Only ever SETS the
+ * latch (never clears it — an auto-unfreeze would re-open the flood the moment the 24h window rolls). Signups
+ * themselves are never blocked; only the free-money issuance pauses. Returns the live count / cap / frozen.
+ */
+export async function enforceSignupVelocity(db: Db): Promise<{ count: number; cap: number; frozen: boolean }> {
+  const cap = signupCreditConfig.dailyAccountCap.get();
+  const count = await signupCount24h(db);
+  let frozen = signupCreditConfig.frozen.get();
+  // Only latch while the program is live — a flood that predates go-live shouldn't greet the operator with a
+  // frozen banner the moment they enable. Reads are always returned (the overview shows the live count/cap).
+  if (signupCreditConfig.enabled.get() && !frozen && count > cap) {
+    await signupCreditConfig.frozen.set(db, true);
+    frozen = true;
+  }
+  return { count, cap, frozen };
+}
+
+/**
+ * Dormancy-expiry sweep (spec §2.5 / M1, M2). Claws the residual grant of accounts that have gone UNUSED —
+ * no fills in the last `expiryDays` days AND the grant itself is at least that old — back to CREDIT_BUDGET.
+ * An account that has traded within the window keeps its credit (the grant is the start-of-clock, so a
+ * never-traded account expires `expiryDays` after the grant). Margin-safe: claws only what's in free
+ * collateral, reduces the outstanding grant by exactly what's clawed, and only marks the row expired once
+ * nothing is outstanding — so credit parked in open-position margin is clawed on a later sweep after the
+ * position closes, never un-locking the principal. Idempotent (row-locked).
  */
 export async function expireSignupCredits(db: Db): Promise<{ swept: number; clawedE6: bigint }> {
   const days = signupCreditConfig.expiryDays.get();
   const due = await db.query<{ user_id: string }>(
-    `SELECT user_id FROM signup_credits
-     WHERE expired_at IS NULL AND granted_at < now() - ($1::int * interval '1 day')`,
+    `SELECT sc.user_id FROM signup_credits sc
+     WHERE sc.expired_at IS NULL
+       AND sc.granted_at < now() - ($1::int * interval '1 day')
+       AND NOT EXISTS (
+         SELECT 1 FROM fills f JOIN orders o ON o.id = f.order_id
+         WHERE o.user_id = sc.user_id AND f.created_at > now() - ($1::int * interval '1 day')
+       )`,
     [days],
   );
   let swept = 0;
@@ -195,6 +228,7 @@ export interface SignupCreditOverview {
   feeRevenueE6: string; // FEE_REVENUE balance available to top up the budget
   totalIssuedE6: string; // Σ granted across all users (the "total bonuses issued" box)
   activeGrants: number;
+  signups24h: number; // new accounts in the last 24h (velocity signal vs dailyAccountCap)
   reviewQueue: Array<{ userId: string; pubkey: string; grantedE6: string; pendingWithdrawalE6: string }>;
 }
 
@@ -221,6 +255,7 @@ export async function signupCreditOverview(db: Db): Promise<SignupCreditOverview
     feeRevenueE6: fee.toString(),
     totalIssuedE6: tot.rows[0]?.t ?? '0',
     activeGrants: tot.rows[0]?.n ?? 0,
+    signups24h: await signupCount24h(db),
     reviewQueue: q.rows.map((r) => ({ userId: r.user_id, pubkey: r.pubkey, grantedE6: r.granted, pendingWithdrawalE6: r.pending })),
   };
 }

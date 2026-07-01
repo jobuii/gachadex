@@ -38,16 +38,27 @@ export function SignupCreditView({ adminKey }) {
         Grant new depositors a <strong>non-withdrawable, tradeable</strong> USDC credit. Funded from earned fees
         (FEE_REVENUE → the budget); the budget balance is the hard cap. The grant fires on a customer's first deposit.
         Winnings withdraw only after they deposit ≥ the wager amount and trade ≥ the wager volume; the principal never
-        cashes out. <strong>Dark</strong> until Enabled.
+        cashes out. Unused credit expires after the dormancy window, and grants auto-freeze if new accounts spike past
+        the daily cap. <strong>Dark</strong> until Enabled.
       </p>
       {err && <div className="order-error">{err}</div>}
       {msg && <div className="ref-msg up">{msg}</div>}
+
+      {data.config.frozen && (
+        <div className="order-error" style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+          <span>⚠ <strong>Grants FROZEN.</strong> {data.signups24h} new accounts in the last 24h exceeded the cap of {data.config.dailyAccountCap} — new bonuses are paused (existing accounts and signups are unaffected). If this surge is legitimate, raise the daily cap below before unfreezing; otherwise investigate the wallets first.</span>
+          <button className="btn-primary sm" disabled={busy === 'unfreeze'} onClick={() => run('unfreeze', async () => { await api.adminSetSignupCreditConfig({ frozen: false }, adminKey); setMsg('Grants unfrozen — issuance resumes (re-freezes automatically if signups are still over the cap).'); })}>
+            {busy === 'unfreeze' ? '…' : 'Unfreeze grants'}
+          </button>
+        </div>
+      )}
 
       <div className="stat-cards" style={{ marginBottom: '0.8rem' }}>
         <div className="stat-card"><span className="sc-label">Budget (CREDIT_BUDGET)</span><span className="sc-val">{usd(data.budgetE6)}</span></div>
         <div className="stat-card"><span className="sc-label">Fees available</span><span className="sc-val">{usd(data.feeRevenueE6)}</span></div>
         <div className="stat-card"><span className="sc-label">Total bonuses issued</span><span className="sc-val">{usd(data.totalIssuedE6)}</span></div>
         <div className="stat-card"><span className="sc-label">Active grants</span><span className="sc-val">{data.activeGrants}</span></div>
+        <div className="stat-card"><span className="sc-label">Signups (24h)</span><span className="sc-val" style={data.config.frozen ? { color: '#ef4444' } : undefined}>{data.signups24h} / {data.config.dailyAccountCap}</span></div>
       </div>
 
       <div className="ref-code-box" style={{ gap: '0.5rem', marginBottom: '0.8rem', flexWrap: 'wrap' }}>
@@ -65,8 +76,9 @@ export function SignupCreditView({ adminKey }) {
         <label className="field-label"><span>Grant ($)</span><input className="wallet-input" type="number" min="0" value={form.grantUsd} onChange={(e) => set('grantUsd', Number(e.target.value))} style={{ width: 90 }} /></label>
         <label className="field-label"><span>Wager deposit ($)</span><input className="wallet-input" type="number" min="0" value={form.wagerDepositUsd} onChange={(e) => set('wagerDepositUsd', Number(e.target.value))} style={{ width: 100 }} /></label>
         <label className="field-label"><span>Wager volume ($)</span><input className="wallet-input" type="number" min="0" value={form.wagerVolumeUsd} onChange={(e) => set('wagerVolumeUsd', Number(e.target.value))} style={{ width: 110 }} /></label>
-        <label className="field-label"><span>Expiry (days)</span><input className="wallet-input" type="number" min="1" value={form.expiryDays} onChange={(e) => set('expiryDays', Number(e.target.value))} style={{ width: 90 }} /></label>
-        <button className="btn-primary sm" disabled={busy === 'cfg'} onClick={() => run('cfg', async () => { await api.adminSetSignupCreditConfig(form, adminKey); setMsg('Settings saved.'); })}>{busy === 'cfg' ? '…' : 'Save settings'}</button>
+        <label className="field-label"><span>Expiry (days, dormant)</span><input className="wallet-input" type="number" min="1" value={form.expiryDays} onChange={(e) => set('expiryDays', Number(e.target.value))} style={{ width: 110 }} /></label>
+        <label className="field-label"><span>Daily acct cap</span><input className="wallet-input" type="number" min="1" value={form.dailyAccountCap} onChange={(e) => set('dailyAccountCap', Number(e.target.value))} style={{ width: 100 }} /></label>
+        <button className="btn-primary sm" disabled={busy === 'cfg'} onClick={() => run('cfg', async () => { const { frozen: _f, ...tunables } = form; await api.adminSetSignupCreditConfig(tunables, adminKey); setMsg('Settings saved.'); })}>{busy === 'cfg' ? '…' : 'Save settings'}</button>
       </div>
 
       <h3 style={{ marginTop: '1rem' }}>First-withdrawal review queue ({data.reviewQueue.length})</h3>

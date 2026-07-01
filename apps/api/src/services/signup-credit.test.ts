@@ -42,6 +42,24 @@ async function fundFee(amount: bigint): Promise<void> {
 const collBal = async (u: string) => getBalance(db, await getOrCreateUserAccount(db, u, 'USER_COLLATERAL'));
 const sysBal = async (t: 'CREDIT_BUDGET' | 'FEE_REVENUE') => getBalance(db, await getOrCreateSystemAccount(db, t));
 
+// Record a trade for a user `ageDays` days ago (the dormancy sweep keys off fills → orders.user_id). Reuses a
+// single shared test market. Minimal FK chain: market → order + position → fill.
+let _mkt: string | null = null;
+async function ensureMarket(): Promise<string> {
+  if (_mkt) return _mkt;
+  _mkt = 'mkt-' + randomUUID().slice(0, 8);
+  await db.query(`INSERT INTO markets(id, kind, symbol, display_name) VALUES($1,'card',$2,'Test Market')`, [_mkt, _mkt]);
+  return _mkt;
+}
+async function addFill(userId: string, ageDays = 0): Promise<void> {
+  const mkt = await ensureMarket();
+  const oid = 'o-' + randomUUID().slice(0, 8), pid = 'p-' + randomUUID().slice(0, 8), fid = 'f-' + randomUUID().slice(0, 8);
+  const one = usdc(1).toString();
+  await db.query(`INSERT INTO orders(id, user_id, market_id, idempotency_key, kind, side, qty_e6, leverage_e2, status) VALUES($1,$2,$3,$4,'market','long',$5,100,'filled')`, [oid, userId, mkt, 'idem-' + oid, one]);
+  await db.query(`INSERT INTO positions(id, user_id, market_id, side, qty_e6, avg_entry_e6, margin_uusdc, leverage_e2) VALUES($1,$2,$3,'long',$4,$5,0,100)`, [pid, userId, mkt, one, one]);
+  await db.query(`INSERT INTO fills(id, order_id, position_id, market_id, exec_price_e6, qty_e6, created_at) VALUES($1,$2,$3,$4,$5,$6, now() - ($7::int * interval '1 day'))`, [fid, oid, pid, mkt, one, one, ageDays]);
+}
+
 test('floorWithdrawable — the §2.2 rule (single authority)', () => {
   const G = usdc(50);
   // no deposit, won to $90: pre-wagering nothing; once wagering met, the $40 winnings unlock (C2)
@@ -118,24 +136,34 @@ test('wagering — LIVE: deposit must still be in, and volume must clear (H3)', 
   assert.equal(await sc.withdrawableBalance(db, u), 0n, 'deposit-then-withdraw does NOT keep wagering met');
 });
 
-test('expiry — hard from grant; claws the residual back to CREDIT_BUDGET', async () => {
+test('expiry — dormancy: unused grants expire, an account still trading keeps the credit', async () => {
   await signupCreditConfig.enabled.set(db, true);
   await signupCreditConfig.grantUsd.set(db, 50);
   await signupCreditConfig.expiryDays.set(db, 7);
-  const u = await newUser();
-  await fundFee(usdc(50));
-  await sc.fundCreditBudget(db, usdc(50));
-  await sc.grantSignupCredit(db, u); // $50 grant, budget → $0
-  // not yet due → no claw
-  assert.deepEqual(await sc.expireSignupCredits(db), { swept: 0, clawedE6: 0n });
-  // backdate the grant past the hard window
-  await db.query(`UPDATE signup_credits SET granted_at = now() - interval '8 days' WHERE user_id = $1`, [u]);
+  // (A) unused account — grant older than the window, never traded → due to expire
+  const dormant = await newUser();
+  await fundFee(usdc(50)); await sc.fundCreditBudget(db, usdc(50));
+  await sc.grantSignupCredit(db, dormant);
+  assert.deepEqual(await sc.expireSignupCredits(db), { swept: 0, clawedE6: 0n }, 'fresh grant not yet due');
+  await db.query(`UPDATE signup_credits SET granted_at = now() - interval '8 days' WHERE user_id = $1`, [dormant]);
+  // (B) active account — same old grant, but a trade inside the window → must NOT expire
+  const active = await newUser();
+  await fundFee(usdc(50)); await sc.fundCreditBudget(db, usdc(50));
+  await sc.grantSignupCredit(db, active);
+  await db.query(`UPDATE signup_credits SET granted_at = now() - interval '8 days' WHERE user_id = $1`, [active]);
+  await addFill(active, 1); // traded yesterday → dormancy clock reset
+
   const budgetBefore = await sysBal('CREDIT_BUDGET'); // shared db accumulates across tests → assert the delta
   const r = await sc.expireSignupCredits(db);
-  assert.equal(r.swept, 1);
+  assert.equal(r.swept, 1, 'only the dormant account is swept');
   assert.equal(r.clawedE6, usdc(50));
-  assert.equal(await collBal(u), 0n, 'unspent grant clawed out of collateral');
-  assert.equal(await sysBal('CREDIT_BUDGET'), budgetBefore + usdc(50), 'residual returned to the budget');
+  assert.equal(await collBal(dormant), 0n, 'dormant grant clawed out of collateral');
+  assert.equal(await collBal(active), usdc(50), 'active trader keeps the credit');
+  assert.equal(await sysBal('CREDIT_BUDGET'), budgetBefore + usdc(50), 'only the dormant residual returned');
+  // (C) the active account goes quiet — backdate its trade past the window → now it expires too
+  await db.query(`UPDATE fills SET created_at = now() - interval '9 days' WHERE order_id IN (SELECT id FROM orders WHERE user_id = $1)`, [active]);
+  assert.equal((await sc.expireSignupCredits(db)).swept, 1, 'now-dormant account expires on a later sweep');
+  assert.equal(await collBal(active), 0n, 'residual clawed once dormant');
   // idempotent — already expired
   assert.deepEqual(await sc.expireSignupCredits(db), { swept: 0, clawedE6: 0n });
 });
@@ -172,4 +200,26 @@ test('integration — first deposit triggers the deposit-first grant; a second d
   await dep(usdc(50)); // second deposit — must NOT grant again (one per user)
   assert.equal(await collBal(u), usdc(275), '+$50 deposit, no second grant');
   assert.equal(await sc.withdrawableBalance(db, u), usdc(250), '$250 own capital withdrawable, $25 grant still locked');
+});
+
+test('velocity — >cap new accounts in 24h latches the grant-freeze until an admin unfreezes', async () => {
+  await signupCreditConfig.enabled.set(db, true);
+  await signupCreditConfig.grantUsd.set(db, 10);
+  await signupCreditConfig.frozen.set(db, false);
+  await fundFee(usdc(100));
+  await sc.fundCreditBudget(db, usdc(100));
+  // shared db accumulates users → set the cap just below the live 24h count so we're "over" it
+  const n = await sc.signupCount24h(db);
+  await signupCreditConfig.dailyAccountCap.set(db, Math.max(1, n - 1));
+  const v = await sc.enforceSignupVelocity(db);
+  assert.equal(v.frozen, true, 'over the daily cap → latched frozen');
+  assert.equal(signupCreditConfig.frozen.get(), true, 'freeze persisted to the knob');
+  const u = await newUser();
+  assert.equal(await sc.grantSignupCredit(db, u), 0n, 'frozen → grant issues nothing');
+  assert.equal(await sc.needsFirstWithdrawalReview(db, u), false, 'no grant row created while frozen');
+  // admin unfreezes AND raises the cap so the surge no longer trips → grants resume
+  await signupCreditConfig.frozen.set(db, false);
+  await signupCreditConfig.dailyAccountCap.set(db, 1_000_000);
+  assert.equal(await sc.grantSignupCredit(db, u), usdc(10), 'unfrozen + under cap → grant resumes');
+  assert.equal(signupCreditConfig.frozen.get(), false, 'stays unfrozen while under the cap');
 });
