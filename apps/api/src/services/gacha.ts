@@ -127,7 +127,10 @@ async function getOpenRow(db: Db, openId: string): Promise<OpenRow | null> {
 export async function openPack(db: Db, userId: string, opts: { machineCode: string; idempotencyKey: string; expectedPriceE6?: string; payWith?: 'usdc' | 'gold'; turbo?: boolean; claim?: boolean }, deps: GachaDeps): Promise<OpenResult> {
   if (!config.classicGachaEnabled) throw GACHA_OFF();
   const payWith = opts.payWith === 'gold' ? 'gold' : 'usdc';
-  const turbo = opts.turbo === true; // YOLO: CC auto-sells a Common for instant USDC instead of delivering the slab
+  // YOLO: CC auto-sells a Common for instant USDC instead of delivering the slab. A free-pack CLAIM is ALWAYS
+  // YOLO — forced server-side (not client-trusted), and it's also more stock-resilient (turbo tolerates empty
+  // Common inventory). This only sets the CC turbo flag / common-auto-sell branch; the gold payment is unchanged.
+  const turbo = opts.turbo === true || opts.claim === true;
   const cc = deps.cc ?? defaultCcClient;
   const { chain } = deps;
 

@@ -638,6 +638,20 @@ test('gold: a gold-bought open spends Gold, funds CC from the rewards budget, ea
   assert.equal((await rewardsBudget()) - budgetBefore, -PRICE); // the budget paid CC the real USDC
 });
 
+test('gold: a free-pack CLAIM is server-forced to YOLO/turbo (even when the client omits turbo)', async () => {
+  const user = await newUser();
+  await db.tx(async (q) => earnGold(q, user, 25_000n, 'SEED', {})); // fund a $25 free-pack claim (25,000 Gold)
+  const cc = fakeCc();
+  cc.price = 25; // a $25 machine = 25,000 Gold = FREE_PACK_GOLD (the only claimable pack)
+  let genTurbo: boolean | undefined;
+  cc.generatePack = async (p: unknown) => { genTurbo = (p as { turbo?: boolean }).turbo; return { memo: `m-${randomUUID().slice(0, 8)}`, transaction: 'unsigned' }; };
+  // claim=true, turbo NOT passed (defaults false) → the server must force turbo=true (a free pack is always YOLO)
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'claim-yolo', payWith: 'gold', claim: true }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(genTurbo, true, 'a claim forces CC generatePack turbo=true');
+  assert.equal(r.status, 'opened'); // the default keptReveal is a delivered (non-Common) card
+  assert.equal(await goldBal(user), 0n); // spent exactly the 25,000 Gold; money path unchanged by turbo
+});
+
 test('gold: a gold open with too few Gold is rejected (no pack, no charge)', async () => {
   const user = await newUser();
   await setGachaConfig(db, { payWithGoldEnabled: true });

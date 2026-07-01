@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../../lib/api.js';
 import { useAuth } from '../../auth/AuthContext.jsx';
 import { GoldBar } from './GoldBar.jsx';
-import { GachaReveal } from './GachaReveal.jsx';
+import { useGachaReveal } from './useGachaReveal.jsx';
 import { pollGachaOpen } from './gacha-util.js';
 
 const FREE_PACK_GOLD = 25000;          // a free $25 pack (1,000 Gold/$)
@@ -23,11 +23,14 @@ export function GoldVault({ refreshKey = 0 }) {
   const [shown, setShown] = useState(0);           // count-up display
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  const [revealOpen, setRevealOpen] = useState(false);
-  const [revealResult, setRevealResult] = useState(null);
   const [instantCutBps, setInstantCutBps] = useState(1000);
   const raf = useRef(0);
   const { user } = useAuth(); // re-loads on sign-in, clears on sign-out (no page refresh needed)
+
+  // The free pack opens through the SAME shared reveal flow as a paid pack — just in YOLO mode (common →
+  // auto-sold ⚡ panel, uncommon → summary, rare/epic → full reveal, all with Keep/Sell). No onTradeMarket →
+  // Keep/Sell only (no Trade button). The Gold payment (rewards-budget ledger) is unchanged upstream.
+  const gacha = useGachaReveal({ instantCutBps, onError: setErr });
 
   const load = useCallback(() => { if (!user) { setGold(null); return; } api.getGoldBalance().then(setGold).catch(() => {}); }, [user]);
   useEffect(() => { load(); }, [load, refreshKey]); // user change (login/logout) or a pack open → reload
@@ -85,12 +88,14 @@ export function GoldVault({ refreshKey = 0 }) {
   const claim = async () => {
     if (!ready || busy) return;
     setErr(null); setBusy(true);
+    gacha.startCharging('0'); // free → $0 spent (paid in Gold); the charging screen covers the open+poll
     try {
       const key = crypto.randomUUID();
-      const r = await api.openGachaPack(machine25.code, key, machine25.priceE6, 'gold', false, true);
-      setRevealResult(null); setRevealOpen(true); // the charge succeeded → open the reveal (charging covers the poll); a sync 403 above never flashes it
-      setRevealResult(await pollGachaOpen(r));
-    } catch (e) { setRevealOpen(false); setErr(e?.status === 401 ? 'Sign in to claim.' : e.message); }
+      // turbo=true (YOLO), claim=true (free-pack Gold spend). Server also force-YOLOs a claim; passing it here
+      // lets the client route the reveal as YOLO (common → ⚡, uncommon → summary, rare/epic → full reveal).
+      const r = await api.openGachaPack(machine25.code, key, machine25.priceE6, 'gold', true, true);
+      gacha.route([await pollGachaOpen(r)], { yolo: true });
+    } catch (e) { gacha.close(); setErr(e?.status === 401 ? 'Sign in to claim.' : e.message); }
     finally { setBusy(false); load(); }
   };
 
@@ -128,6 +133,7 @@ export function GoldVault({ refreshKey = 0 }) {
             <div className="gv-howpop-title">How to earn Gold</div>
             <div className="gv-earn"><span className="gv-earn-e" aria-hidden="true">🎴</span><span>Open a pack with <b>USDC</b> → earn <b>Gold</b> back (~2.5%)</span></div>
             <div className="gv-earn"><span className="gv-earn-e" aria-hidden="true">🏆</span><span><b>25,000 Gold</b> = a free <b>$25 pack</b></span></div>
+            <div className="gv-earn"><span className="gv-earn-e" aria-hidden="true">🎁</span><span>Free pack is <b>YOLO</b> — commons auto-sold for USDC; rarer cards are yours to keep or sell.</span></div>
             <div className="gv-earn"><span className="gv-earn-e" aria-hidden="true">💡</span><span><b>1,000 Gold ≈ $1</b> of pack value</span></div>
             <div className="gv-howpop-fine">Gold pulls earn none · not withdrawable — it pays you back in free packs.</div>
             <a className="gv-howpop-more" href="/docs#gold-rewards">Learn more →</a>
@@ -143,13 +149,7 @@ export function GoldVault({ refreshKey = 0 }) {
           </div>
         )}
       </div>
-      {revealOpen && (
-        <GachaReveal
-          result={revealResult} spentE6="0" canSell={false} canTrade={false}
-          onSellNow={() => {}} onTrade={() => {}}
-          onClose={() => { setRevealOpen(false); setRevealResult(null); }} instantCutBps={instantCutBps}
-        />
-      )}
+      {gacha.overlay}
     </>
   );
 }

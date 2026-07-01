@@ -97,7 +97,7 @@ export function useGachaReveal({ instantCutBps = 1000, onTradeMarket, onError, o
       spentE6={spentE6}
       instantCutBps={instantCutBps}
       canSell={!!revealItem || previewSellable}
-      canTrade={!!revealCard?.marketId}
+      canTrade={!!onTradeMarket && !!revealCard?.marketId}
       onSellNow={async () => {
         if (previewSellable) return true;
         if (revealItem) return await sellPrize(revealItem.id);
