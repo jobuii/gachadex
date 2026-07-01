@@ -12,7 +12,7 @@ import { lastMarkE6 } from './marks.ts';
 import { gachaConfig, gachaMarkupE6 } from './gacha-config.ts';
 import type { GachaChain } from './custody/gacha-chain.ts';
 import { defaultCcClient, ccVerifyUrl, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
-import { getAssetTransferInfo } from './das.ts';
+import { getAssetTransferInfo, getAssetImage } from './das.ts';
 import { settleSoldPrize, accrueGachaAffiliateShare, type SellBackResult } from './gacha-settle.ts';
 import { emitPackPullEvent, type PackPullInput } from './chat.ts';
 export type { SellBackResult } from './gacha-settle.ts';
@@ -47,6 +47,7 @@ export interface GachaDeps {
   sleepMs?: (ms: number) => Promise<void>;
   now?: () => number; // injectable clock for the reconcile grace window (tests)
   getAssetInfo?: typeof getAssetTransferInfo; // injectable DAS owner lookup (tests); used to gate sell-back/withdraw reverts
+  getAssetImage?: typeof getAssetImage; // injectable DAS image lookup (tests); recovers a reveal image when CC returns a null links.image
 }
 
 export interface GachaCard { mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; rarity: string | null; marketId: string | null; year: string | null }
@@ -275,7 +276,7 @@ async function deliverOpen(db: Db, openId: string, deps: GachaDeps): Promise<Ope
         console.error('[gacha] reveal mint already actively held — phantom delivery, refunding open', openId, reveal.nft_address);
         return await settleRefund(db, openId, 'failed');
       }
-      return await recordReveal(db, openId, reveal); // delivered slab (normal mode + turbo non-Common)
+      return await recordReveal(db, openId, reveal, deps); // delivered slab (normal mode + turbo non-Common)
     }
     if (reveal.code === 'WAITING_FOR_WEBHOOK') {
       if (attempt < MAX_REVEAL_ATTEMPTS - 1) { await sleepFn(REVEAL_RETRY_MS); continue; }
@@ -370,8 +371,13 @@ export async function remediateMisrecordedTurboCommon(
 /** A Rare or Epic pull is worth a gold "BIG PACK PULL!" chat bar (case-insensitive vs CC's 'Rare'/'Epic'). */
 const isBigPullRarity = (r: string | null): boolean => r != null && ['rare', 'epic'].includes(r.toLowerCase());
 
-async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promise<OpenResult> {
+async function recordReveal(db: Db, openId: string, reveal: CcOpenResult, deps: GachaDeps): Promise<OpenResult> {
   const card = extractCard(reveal);
+  // CC's openPack sometimes returns a null content.links.image even though the on-chain asset has art (their
+  // response is trimmed / their indexer lagged), which would leave the reveal showing a placeholder. Recover
+  // the real image by asking our own DAS (Helius getAsset) for it by mint — best-effort (never blocks or
+  // fails the delivery), done OUTSIDE the tx so no network I/O holds a row lock. Persisted below with the card.
+  if (!card.imageUrl && card.mint) card.imageUrl = await (deps.getAssetImage ?? getAssetImage)(card.mint);
   const out = await db.tx<{ result: OpenResult; pull: PackPullInput | null }>(async (q) => {
     const cur = (await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE id = $1 FOR UPDATE`, [openId])).rows[0];
     if (!cur) throw new HttpError(404, 'open not found');

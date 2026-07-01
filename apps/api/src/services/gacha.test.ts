@@ -132,6 +132,38 @@ test('open: debits the price, records the held NFT, funds + pays CC', async () =
   assert.equal(inv.status, 'held');
 });
 
+test('open: recovers a null CC reveal image from DAS by mint (persisted to the open + inventory)', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  // CC delivered the slab but with a null links.image (trimmed response / indexer lag) — the reveal would
+  // otherwise show a placeholder even though the on-chain asset has art.
+  cc.reveals.push({
+    success: true, nft_address: 'MintNoImg', rarity: 'rare',
+    nftWon: { content: { metadata: { name: 'Charizard PSA 10', attributes: [{ trait_type: 'insured value', value: 4475 }] }, links: { image: null } } },
+  });
+  let askedMint: string | null = null;
+  const getAssetImage = async (mint: string) => { askedMint = mint; return 'https://das/recovered.png'; };
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'noimg' }, { chain: fakeChain(), cc, getAssetImage, ...noWait });
+  assert.equal(r.status, 'opened');
+  assert.equal(askedMint, 'MintNoImg'); // DAS was consulted by the won mint
+  assert.equal(r.card!.imageUrl, 'https://das/recovered.png'); // recovered image on the reveal result
+  const row = (await db.query<{ nft_image: string | null; image_url: string | null }>(
+    `SELECT o.nft_image, i.image_url FROM gacha_pack_opens o JOIN gacha_nft_inventory i ON i.open_id = o.id WHERE o.user_id = $1`, [user],
+  )).rows[0];
+  assert.equal(row.nft_image, 'https://das/recovered.png'); // persisted to the open
+  assert.equal(row.image_url, 'https://das/recovered.png'); // persisted to inventory
+});
+
+test('open: does NOT hit DAS when CC already returned a reveal image', async () => {
+  const user = await newUser();
+  const cc = fakeCc(); // default keptReveal carries links.image = 'https://cc/x.png'
+  let called = false;
+  const getAssetImage = async () => { called = true; return 'https://das/should-not-be-used.png'; };
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'hasimg' }, { chain: fakeChain(), cc, getAssetImage, ...noWait });
+  assert.equal(r.card!.imageUrl, 'https://cc/x.png');
+  assert.equal(called, false); // the CC image was present → no fallback lookup
+});
+
 test('open: insufficient balance is rejected before any charge', async () => {
   const user = await newUser(10); // $10 < $50 pack
   await assert.rejects(openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'k1' }, { chain: fakeChain(), cc: fakeCc(), ...noWait }), /insufficient/i);
