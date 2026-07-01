@@ -190,10 +190,10 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   // fees, funding, realized/unrealized P/L, deposits/withdrawals). Paginated + sortable; `sort` is
   // whitelisted inside listCustomers.
   app.get('/admin/customers', rl(config.routeRateLimits.admin), async (req) => {
-    const q = req.query as { limit?: string; offset?: string; sort?: string };
+    const q = req.query as { limit?: string; offset?: string; sort?: string; search?: string };
     const limit = Math.min(200, Math.max(1, Math.floor(Number(q.limit)) || 50));
     const offset = Math.max(0, Math.floor(Number(q.offset)) || 0);
-    return listCustomers(await getDb(), { limit, offset, sort: q.sort ?? 'volume' });
+    return listCustomers(await getDb(), { limit, offset, sort: q.sort ?? 'volume', search: q.search });
   });
 
   // One customer's open positions per market (the expand-row drill-down). Reuses the engine's view.
