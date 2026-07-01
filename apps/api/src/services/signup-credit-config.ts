@@ -3,9 +3,9 @@ import { liveKnob } from './live-knob.ts';
 
 /**
  * Live-tunable knobs for the free signup-credit program (docs/signup-credit-spec.md). Same settings-backed
- * `liveKnob` mechanism as the fee + chat thresholds. v1 enforces exactly these five; the spec's other knobs
- * (max-cashout cap, bonus-active leverage/position caps, velocity alarm) belong to later phases and are added
- * when those features ship — no dead knobs here.
+ * `liveKnob` mechanism as the fee + chat thresholds. v1 enforces these seven (grant + wagering + dormancy
+ * expiry + the velocity-freeze pair); the spec's remaining knobs (max-cashout cap, bonus-active
+ * leverage/position caps) belong to later phases and are added when those features ship — no dead knobs here.
  *
  * DARK by default: `signup_credit_enabled` is false, so nothing is granted until an operator flips it on.
  */
@@ -21,18 +21,25 @@ const posInt = (label: string) => (v: unknown): number => {
   if (!Number.isInteger(n) || n <= 0 || n > 3650) throw new Error(`${label} must be a positive integer <= 3650`); // <= ~10y
   return n;
 };
+const posCount = (label: string) => (v: unknown): number => {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n <= 0 || n > 1_000_000) throw new Error(`${label} must be a positive integer <= 1000000`);
+  return n;
+};
 
 const enabled = liveKnob('signup_credit_enabled', false, bool);                                   // master switch (dark by default)
 const grantUsd = liveKnob('signup_credit_usd', 25, nonNegUsd('signup_credit_usd'));               // grant amount per user (whole USD)
 const wagerDepositUsd = liveKnob('signup_credit_wager_deposit_usd', 50, nonNegUsd('signup_credit_wager_deposit_usd'));
 const wagerVolumeUsd = liveKnob('signup_credit_wager_volume_usd', 1000, nonNegUsd('signup_credit_wager_volume_usd'));
-const expiryDays = liveKnob('signup_credit_expiry_days', 7, posInt('signup_credit_expiry_days')); // HARD expiry from grant
+const expiryDays = liveKnob('signup_credit_expiry_days', 7, posInt('signup_credit_expiry_days')); // dormancy window: expire if unused (no trades) this many days
+const dailyAccountCap = liveKnob('signup_credit_daily_account_cap', 50, posCount('signup_credit_daily_account_cap')); // velocity alarm: >this many new accounts/24h auto-freezes grants
+const frozen = liveKnob('signup_credit_frozen', false, bool);                                     // velocity latch: grants paused (auto-set on cap breach; cleared only by an admin)
 
-export const signupCreditConfig = { enabled, grantUsd, wagerDepositUsd, wagerVolumeUsd, expiryDays };
+export const signupCreditConfig = { enabled, grantUsd, wagerDepositUsd, wagerVolumeUsd, expiryDays, dailyAccountCap, frozen };
 
 /** Load all knobs from `settings` (call once on boot, like the other config modules). */
 export async function loadSignupCreditConfig(db: Db): Promise<void> {
-  await Promise.all([enabled.load(db), grantUsd.load(db), wagerDepositUsd.load(db), wagerVolumeUsd.load(db), expiryDays.load(db)]);
+  await Promise.all([enabled.load(db), grantUsd.load(db), wagerDepositUsd.load(db), wagerVolumeUsd.load(db), expiryDays.load(db), dailyAccountCap.load(db), frozen.load(db)]);
 }
 
 export interface SignupCreditConfigView {
@@ -41,6 +48,8 @@ export interface SignupCreditConfigView {
   wagerDepositUsd: number;
   wagerVolumeUsd: number;
   expiryDays: number;
+  dailyAccountCap: number;
+  frozen: boolean;
 }
 
 export function signupCreditConfigView(): SignupCreditConfigView {
@@ -50,15 +59,20 @@ export function signupCreditConfigView(): SignupCreditConfigView {
     wagerDepositUsd: wagerDepositUsd.get(),
     wagerVolumeUsd: wagerVolumeUsd.get(),
     expiryDays: expiryDays.get(),
+    dailyAccountCap: dailyAccountCap.get(),
+    frozen: frozen.get(),
   };
 }
 
-/** Operator update (admin Perks page). Only provided fields change; each value is validated by its knob. */
+/** Operator update (admin Perks page). Only provided fields change; each value is validated by its knob.
+ *  `frozen` is included so the admin can UNFREEZE (or manually pause) grants after a velocity breach. */
 export async function setSignupCreditConfig(db: Db, patch: Record<string, unknown>): Promise<SignupCreditConfigView> {
   if (patch.enabled !== undefined) await enabled.set(db, patch.enabled);
   if (patch.grantUsd !== undefined) await grantUsd.set(db, patch.grantUsd);
   if (patch.wagerDepositUsd !== undefined) await wagerDepositUsd.set(db, patch.wagerDepositUsd);
   if (patch.wagerVolumeUsd !== undefined) await wagerVolumeUsd.set(db, patch.wagerVolumeUsd);
   if (patch.expiryDays !== undefined) await expiryDays.set(db, patch.expiryDays);
+  if (patch.dailyAccountCap !== undefined) await dailyAccountCap.set(db, patch.dailyAccountCap);
+  if (patch.frozen !== undefined) await frozen.set(db, patch.frozen);
   return signupCreditConfigView();
 }

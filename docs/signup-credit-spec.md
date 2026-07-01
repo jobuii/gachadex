@@ -69,15 +69,19 @@ withdrawable = wageringMet
 
 > **Calibration (research):** turnover = `multiple × bonus`; $1,000 on $50 = 20× — conservative (industry ~20–50×, avg ~35×, >40× predatory); a knob. **Caveat (QA H2): on a *leveraged* perp, $1,000 of volume is one round-trip for a few dollars of fees — turnover alone is weak friction.** If abuse appears, turn ON the §2.7 leverage cap during the bonus phase and/or switch wagering to fees-paid or realized-loss-based. (Do NOT cite per-type bands; see Appendix A.)
 
-> **"Bonus volume doesn't count" (definitional):** collateral is one fungible pool — can't tag a trade as bonus-vs-real. Buildable interpretation: count only volume **after the $50 deposit has cleared**.
+> **"Bonus volume doesn't count" (definitional — and this is what's BUILT):** collateral is one fungible pool, so once credit and deposits mix you cannot attribute a given trade's volume to bonus-vs-real dollars. The literal ask ("bonus-funded volume must not count") is therefore not implementable per-dollar. The built proxy enforces the *intent*: require the real deposit first, then count only fills with `created_at ≥ the first DEPOSIT` (`creditState`, `signup-credit.ts`). Pre-deposit bonus-only churn earns **zero** wagering credit; post-deposit trading counts regardless of which dollars fund it.
 
 ### 2.4 Notes on the rule (the earlier separate formula was wrong)
 - §2.2 is the **single authority.** The earlier `ownNetDeposits + bonusWinnings` formula was **removed** — it ignored trading losses and **leaked the grant** on any deposit-then-lose path (QA C1).
 - **Do NOT reuse this helper in `treasury.ts` PoR liability math (QA M7).** Non-withdrawable credit is *still a real liability* (it sits in USER_COLLATERAL, is tradeable, and its winnings become cashable). PoR must keep counting the full `|TREASURY_USDC|`; subtracting the floor would understate liabilities and break the solvency check.
 - **`G = 0` must be byte-identical to today (QA L2):** a normal (non-credit) user's `withdrawableBalance` = `max(0, C − 0) = C` = the current raw balance read. Test this equivalence so the chokepoint change can't regress normal withdrawals.
 
-### 2.5 Expiry — HARD from grant (QA M1)
-Credit expires at **`min(7 days after grant, 7 days after last trade)`** — i.e. a **hard 7-day cap from grant** (the research precedents are hard-from-receipt: DraftKings 24h, FanDuel 7d). A pure "7 days after last trade" sliding window is wrong: a dust trade every 6 days keeps the free option alive forever. On expiry, claw the still-present credit back:
+### 2.5 Expiry — DORMANCY (unused → reclaimed; DECIDED — supersedes the earlier hard-from-grant)
+**DECIDED (operator, 2026-07-01):** credit expires only when the account goes **dormant** — **no fills for `expiryDays` days (default 7) AND the grant is at least that old** (the grant is the start-of-clock, so a never-traded account expires `expiryDays` after the grant). **An account that has traded within the window keeps its credit.** This is the "expires if unused; keep trading and the credit stays" rule the operator asked for — it *replaces* the earlier hard-7-day-from-grant design.
+
+> **Accepted trade-off (the original §2.5 objection, now overridden):** a sliding window means a dust trade every `expiryDays−1` days keeps the free option alive indefinitely. The operator has accepted this because the downside is small: the credit is **non-withdrawable** (the floor), winnings are gated behind the **wagering** requirement, the **CREDIT_BUDGET** balance hard-caps principal, and the **velocity freeze (§3.1)** bounds mass abuse — a kept-alive-but-uncashable credit costs the house almost nothing. If dust-trade keepalive ever bites, add a hard-cap overlay later without a redeploy.
+
+**Built:** the sweep's due-set is `expired_at IS NULL AND granted_at < now() − expiryDays AND NOT EXISTS (a fill by this user within expiryDays)` (`expireSignupCredits`, `signup-credit.ts`), run every ~10 min by the maintenance loop. On expiry, claw the still-present credit back:
 ```
 reason: 'SIGNUP_CREDIT_EXPIRE'
 − USER_COLLATERAL  clawAmount
@@ -98,7 +102,7 @@ Casinos cap **max bet per round ($5–$10)** while a bonus is in play, to stop s
 
 ## 3. Anti-sybil stack (the hard part — see §5 for why it's necessary)
 
-> **BUILD STATUS: NOT YET. None of §3 ships in Phase 1.** This whole section is design documentation, deferred to **Phase 2+** (see §10). Phase 1 only lays the money plumbing + the *manual-review hold* hook (§3d, which reuses existing withdrawal approval). The automated gates — captcha/SMS, on-chain clustering, velocity caps — are documented here so the design is complete, but are explicitly out of scope until the program is actually turned on. The plain-English walkthrough of how the clustering works is in **§3.2**.
+> **BUILD STATUS (updated 2026-07-01): §3.1 (velocity freeze) and §3d (manual-review hold) SHIP in Phase 1; the rest of §3 does not.** Phase 1 now includes the money plumbing, the *manual-review hold* on the first credit-origin withdrawal (§3d), **and the velocity auto-freeze (§3.1)**. Still deferred to **Phase 2+** (see §10): captcha/SMS at grant time (§3a), on-chain funding-source clustering (§3b/§3.2), and device/IP fingerprint caps (§3c). Those remain design documentation so the picture is complete, but are out of scope until the program is turned on. The plain-English walkthrough of how the clustering works is in **§3.2**.
 
 Layered, strongest → weakest. **The plan's saving grace is the manual-review hold (#d) — but it only works if the reviewer has signal, which comes from clustering (#b).**
 
@@ -118,12 +122,18 @@ Layered, strongest → weakest. **The plan's saving grace is the manual-review h
   - **Low leverage + position-size cap on bonus money** — smaller winners, less to chase.
   - **Anomaly detection** on the signature: signup → bonus → high-lev trade → deposit-exactly-$50 → churn-exactly-$1k → withdraw. (Precedent: referral bonuses already pay only the "first N" referrers — an anti-farming cap.)
 
-### 3.1 Velocity alarm (mechanism #5 — freeze the GRANT, never signups)
-**Trigger:** more than **N new accounts/day** (knob `signup_credit_daily_account_alert`, default **50**). **Action:** raise a flag on the admin **Perks page** + **auto-freeze new bonus grants** — existing accounts and *signups continue normally*; only the free-money issuance pauses. **The admin can unfreeze** from the Perks page.
+### 3.1 Velocity alarm (mechanism #5 — freeze the GRANT, never signups) — **BUILT (Phase 1)**
+**Trigger:** more than **N new accounts in the last 24h** (knob `signup_credit_daily_account_cap`, default **50**). **Action:** raise a flag on the admin **Perks page** (a red "Grants FROZEN" banner + a live "Signups (24h): n / cap" card) **and auto-freeze new bonus grants** — existing accounts and *signups continue normally*; only the free-money issuance pauses. **The admin unfreezes** from the Perks page.
 
 > **The one change from the original ask:** the original #5 said "freeze account creation". Don't — that's a self-inflicted DoS: anyone could spin up 51 throwaway wallets to halt signup for *all* real users, and it wouldn't even stop the bot (its accounts already exist). Freezing only the **grant** is safe and achieves the same goal — an account with no free money is harmless.
 
-Optional refinements: also apply **per-signal** caps (per IP/subnet/fingerprint/funding-cluster) so one farm trips only its own limit rather than the global switch; the **`CREDIT_BUDGET` balance** remains the ultimate hard stop.
+**Built (2026-07-01):**
+- `enforceSignupVelocity(db)` (`signup-credit.ts`) counts `users` created in the last 24h; if `count > dailyAccountCap` it LATCHES `signup_credit_frozen = true` (a settings knob). It **only ever sets** the latch — never auto-clears it (an auto-unfreeze would re-open the flood the instant the 24h window rolls).
+- Enforced in **two places**: synchronously inside `grantSignupCredit` (a grant attempt while over the cap freezes + issues nothing), and proactively in the `startSignupCreditMaintenanceLoop` pass (~every 10 min, so the freeze + admin flag trip even before the next deposit).
+- **Unfreeze** = admin sets `frozen = false` from the Perks banner. NB: if signups are *still* over the cap, the next grant/loop re-freezes — so to resume during a legitimate surge the admin raises `dailyAccountCap`. This is deliberate fail-closed behaviour.
+- The **`CREDIT_BUDGET` balance** remains the ultimate hard stop regardless.
+
+Optional Phase-2 refinements: also apply **per-signal** caps (per IP/subnet/fingerprint/funding-cluster) so one farm trips only its own limit rather than the global switch.
 
 ### 3.2 How the on-chain clustering works — in depth, plain English (design only; NOT built in Phase 1)
 
@@ -149,7 +159,8 @@ Optional refinements: also apply **per-signal** caps (per IP/subnet/fingerprint/
 - **New "Perks" admin page** — the home for all bonus/perk controls:
   - `signup_credit_usd` **live knob** (like the chat/gacha config knobs) + **on/off flag** + **`CREDIT_BUDGET` balance readout** (set amount to 0 / off ⇒ dormant).
   - **"Fund budget" control** — transfer USDC from `FEE_REVENUE` → `CREDIT_BUDGET` (the program's funding source), showing both balances. This is how the operator tops up the program from earned fees.
-  - Wagering thresholds (deposit min, volume min ≈ turnover ×), **max-cashout cap** (§2.6), **bonus-active leverage + position caps** (§2.7), expiry window, velocity thresholds — all knobs.
+  - Wagering thresholds (deposit min, volume min ≈ turnover ×), dormancy **expiry window**, and the **daily-account-cap** velocity knob — all live knobs. *(max-cashout §2.6 + bonus-active caps §2.7 are Phase-2 knobs, not surfaced yet.)*
+  - **Velocity freeze surface (§3.1, BUILT):** a live **"Signups (24h): n / cap"** card + a red **"Grants FROZEN"** banner with an **Unfreeze** button when the cap is breached.
   - **Manual-review queue** for first credit-origin withdrawals, each row showing the cluster signal (funding source, destination, IP/fingerprint, how many sibling accounts).
   - Velocity/cluster alerts + the grant-pause toggle.
 
@@ -181,8 +192,8 @@ Reason-list updates required: `EXTERNAL_CAPITAL_REASONS` (`leaderboard.ts`) and 
 ## 7. Schema / config
 
 - **New system account type** `CREDIT_BUDGET` — add to BOTH the `AccountType` TS union (`ledger.ts:13-29`) **and** the `SYSTEM_ACCOUNT_TYPES` array (or it won't type-check). Funded from `FEE_REVENUE` via an admin transfer on the Perks page (DECIDED, §9.2).
-- **`signup_credits`** table (or reason-derived): `user_id`, `granted_e6`, `granted_at` (hard-expiry anchor), `first_deposit_at` (anchors post-deposit wagering volume), `last_trade_at`, `expired_at`, `cluster_id`/funding-source (Phase 2), `first_withdrawal_reviewed`. Wagering is evaluated **LIVE** from the ledger + fills (net deposits ≥ $50 now + post-`first_deposit_at` volume ≥ $1k) — **no sticky `wagering_met_at`** (QA H3). `bonus_cashout_paid_e6` only if a finite §2.6 cap is later turned on.
-- **Knobs (liveKnob pattern):** `signup_credit_enabled` (bool), `signup_credit_usd` (grant amount; each grant clamped to the live `CREDIT_BUDGET` balance, which is the hard cap), `signup_credit_wager_deposit_usd` (50), `signup_credit_wager_volume_usd` (1000 ≈ 20× turnover; defensible up to ~40×), `signup_credit_expiry_days` (7, hard-from-grant), `signup_credit_max_cashout_usd` (§2.6 — **default unlimited / OFF in v1**; range $0 → unlimited), `signup_credit_max_leverage` + `signup_credit_max_position_usd` (§2.7 — **default unlimited / no restriction**), `signup_credit_daily_account_alert` (§3.1, default 50 — flag + auto-freeze grants, admin unfreeze).
+- **`signup_credits`** table (BUILT): `user_id`, `granted_e6`, `granted_at` (dormancy start-of-clock), `expired_at`, `first_withdrawal_reviewed`. `first_deposit_at`/`last_trade_at` are **derived live** from the ledger + fills (not stored): wagering = net deposits ≥ $50 now + post-first-deposit volume ≥ $1k, and dormancy = no fill within the window — **no sticky `wagering_met_at`** (QA H3). `cluster_id`/funding-source is Phase 2; `bonus_cashout_paid_e6` only if a finite §2.6 cap is later turned on.
+- **Knobs (liveKnob pattern) — the seven BUILT:** `signup_credit_enabled` (bool), `signup_credit_usd` (grant amount; each grant clamped to the live `CREDIT_BUDGET` balance, which is the hard cap), `signup_credit_wager_deposit_usd` (50), `signup_credit_wager_volume_usd` (1000 ≈ 20× turnover; defensible up to ~40×), `signup_credit_expiry_days` (7, **dormancy window** §2.5), `signup_credit_daily_account_cap` (§3.1, default 50 — flag + auto-freeze grants), `signup_credit_frozen` (bool — the velocity latch; auto-set on breach, cleared only by an admin). *Phase-2 knobs not yet built:* `signup_credit_max_cashout_usd` (§2.6), `signup_credit_max_leverage` + `signup_credit_max_position_usd` (§2.7).
 - **Solvency:** grants debit `CREDIT_BUDGET`, funded from `FEE_REVENUE` (real, already-collected fee USDC), so they create **no unbacked liability** (unlike the faucet) — PoR stays intact. Invariant: a grant can't exceed the `CREDIT_BUDGET` balance (clamp; never drive it negative) — the funded balance is the cap. (Distinct from the faucet's `db/init.ts` ban, which exists precisely because faucet credit is *un*backed.)
 
 ---
@@ -214,9 +225,9 @@ Plus: credit-origin accounts skip auto-approval (route to manual) for the first 
 
 ## 10. Phasing
 
-- **Phase 1 (dark, flag-gated `signup_credit_enabled=false`):** ledger plumbing (new `CREDIT_BUDGET` account + the `FEE_REVENUE`→`CREDIT_BUDGET` transfer control; `SIGNUP_CREDIT` grant from `CREDIT_BUDGET`, clamped to its balance; reason-list updates), the `withdrawableBalance()` floor + wagering at the chokepoint, the two customers columns, the `signup_credit_usd` knob + `CREDIT_BUDGET` balance readout, the Perks page skeleton with the manual-review queue, and credit-origin first-withdrawal → manual. Grant trigger is config (deposit-gated vs at-signup). No real grants until flipped on.
-- **Phase 2:** the sybil gates — Turnstile/SMS at grant, on-chain clustering in the review queue, per-signal grant velocity caps + auto-pause. **Plus turnover-gate hardening (QA H2):** bonus-phase leverage cap, or switch wagering from raw volume to fees-paid / realized-loss.
-- **Phase 3:** anomaly detection, expiry sweep tuning, analytics on program EV (cost vs retained-deposit value).
+- **Phase 1 (dark, flag-gated `signup_credit_enabled=false`) — BUILT:** ledger plumbing (new `CREDIT_BUDGET` account + the `FEE_REVENUE`→`CREDIT_BUDGET` transfer control; `SIGNUP_CREDIT` grant from `CREDIT_BUDGET`, clamped to its balance; reason-list updates), the `withdrawableBalance()` floor + wagering at the chokepoint, **dormancy expiry (§2.5) swept by `startSignupCreditMaintenanceLoop`**, the two customers columns, the `signup_credit_usd` knob + `CREDIT_BUDGET` balance readout, the Perks page with the manual-review queue, credit-origin first-withdrawal → manual, **and the §3.1 velocity auto-freeze (`dailyAccountCap` + `frozen` + admin banner/unfreeze)**. Grant trigger fires on first deposit (at-signup mode parked). No real grants until flipped on.
+- **Phase 2:** the remaining sybil gates — Turnstile/SMS at grant, on-chain clustering in the review queue, per-signal (IP/subnet/fingerprint/cluster) grant caps. **Plus turnover-gate hardening (QA H2):** bonus-phase leverage cap, or switch wagering from raw volume to fees-paid / realized-loss.
+- **Phase 3:** anomaly detection, expiry-window tuning, analytics on program EV (cost vs retained-deposit value).
 
 ---
 
@@ -225,9 +236,9 @@ Plus: credit-origin accounts skip auto-approval (route to manual) for the first 
 - Withdrawable rule (§2.2): no-deposit grant, win → withdrawable **$0 until wagering met** (then = winnings); lose → $0; **principal never withdrawable**. Deposit+grant, lose past the deposit → withdrawable = surviving cash, **grant never leaks** (the C1 regression). Deposit+grant, win + wagering met → deposit + winnings, grant locked. **`G=0` (normal user) → withdrawable == raw balance (L2 equivalence).**
 - Wagering (§2.3): LIVE check — `D ≥ $50` at withdrawal time (deposit-then-withdraw must NOT keep it met); post-deposit volume ≥ $1,000; not-met blocks winnings, met releases.
 - Max-cashout (§2.6): OFF in v1 (unlimited) — no test needed for v1 (if a finite cap is later set: deposit-first attribution, lifts at net deposits ≥ grant).
-- Expiry (§2.5): **hard 7d from grant** (a late trade does NOT extend past the hard cap); claw counts margin-parked credit; `G` reduced only by what's clawed; no un-lock when a position later closes.
+- Expiry (§2.5): **dormancy** — an unused grant older than the window is swept; **an account that traded inside the window keeps its credit**; once it goes quiet past the window it too expires. Claw counts margin-parked credit; `G` reduced only by what's clawed; no un-lock when a position later closes. *(covered by the `expiry — dormancy` test.)*
 - Budget: grant clamped/blocked when `CREDIT_BUDGET` is insufficient; budget debit **locked `FOR UPDATE`** so concurrent grants can't overdraw (M3); never creates unbacked liability.
-- Sybil: a credit-origin first-withdrawal does NOT auto-approve even with `withdrawal_auto_process` on; velocity spike pauses grants (not signups).
+- Sybil / velocity: a credit-origin first-withdrawal does NOT auto-approve even with `withdrawal_auto_process` on; **>`dailyAccountCap` signups/24h latches `frozen` so grants issue nothing until an admin unfreezes** (signups themselves never blocked), and the latch never auto-clears. *(covered by the `velocity` test.)*
 - Solvency/PoR: `withdrawableBalance` is **NOT** used in `treasury.ts` PoR liability — PoR still counts the full `|TREASURY_USDC|` incl. the credit (M7); `db/init.ts` invariant holds.
 
 ---

@@ -22,7 +22,7 @@ import { loadDropConfig } from './services/drop-config.ts';
 import { loadGameConfig } from './services/game-config.ts';
 import { loadGachaConfig } from './services/gacha-config.ts';
 import { loadSignupCreditConfig } from './services/signup-credit-config.ts';
-import { expireSignupCredits } from './services/signup-credit.ts';
+import { expireSignupCredits, enforceSignupVelocity } from './services/signup-credit.ts';
 import { settleExpiredDuels } from './services/games-duel.ts';
 import { settleExpiredLeagues } from './services/games-fantasy.ts';
 import { settleExpiredArenas } from './services/games-arena.ts';
@@ -164,20 +164,25 @@ function startGachaStockLoop(db: Db, log: FastifyBaseLogger) {
   setInterval(() => void run(), config.gachaStockPollMs);
 }
 
-/** Signup credit: claw expired grants back to CREDIT_BUDGET. Expiry is a hard timer from granted_at (default
- *  7 days), so the cadence only bounds the lag — a 10-min pass is ample. Runs always: a no-op when no grants
- *  exist, and old grants must still expire even after the program is switched off. Lease-guarded so only one
- *  instance sweeps per pass; the sweep itself is idempotent + margin-safe regardless. */
-function startSignupCreditExpiryLoop(db: Db, log: FastifyBaseLogger) {
+/** Signup-credit housekeeping (spec §2.5 + §3.1) — two passes, both no-ops while dark:
+ *   · dormancy expiry — claw grants that have gone unused (no trades) past the expiry window back to the budget.
+ *   · velocity guard — if more than dailyAccountCap accounts were created in the last 24h, latch the grant-freeze
+ *     so the admin is flagged and no more free money issues until they unfreeze (signups themselves never stop).
+ *  Runs always (old grants must still expire after the program is switched off, and the freeze must keep
+ *  watching). Expiry/dormancy is day-granular so a 10-min cadence only bounds the lag. Lease-guarded so one
+ *  instance runs per pass; both passes are idempotent + margin-safe regardless. */
+function startSignupCreditMaintenanceLoop(db: Db, log: FastifyBaseLogger) {
   const run = async () => {
-    if (!(await tryAcquireLease(db, 'signup-credit-expiry', INSTANCE_ID, 60_000))) return;
+    if (!(await tryAcquireLease(db, 'signup-credit-maintenance', INSTANCE_ID, 60_000))) return;
     try {
       const r = await expireSignupCredits(db);
       if (r.swept) log.info({ swept: r.swept, clawedE6: r.clawedE6.toString() }, 'signup-credit expiry: dormant grants clawed back to CREDIT_BUDGET');
+      const v = await enforceSignupVelocity(db);
+      if (v.frozen && v.count > v.cap) log.warn({ signups24h: v.count, cap: v.cap }, 'signup-credit: daily account cap exceeded — grants FROZEN until an admin unfreezes');
     } catch (e) {
-      log.warn(e, 'signup-credit expiry pass failed');
+      log.warn(e, 'signup-credit maintenance pass failed');
     } finally {
-      await releaseLease(db, 'signup-credit-expiry', INSTANCE_ID).catch(() => {});
+      await releaseLease(db, 'signup-credit-maintenance', INSTANCE_ID).catch(() => {});
     }
   };
   setTimeout(() => void run(), 15_000);
@@ -350,7 +355,7 @@ async function main() {
     if (config.classicGachaEnabled) startGachaStockLoop(db, app.log);
     if (config.classicGachaEnabled) startGachaOpenReconcileLoop(db, app.log);
     startRestingOrderLoop(db, app.log); // dark unless RESTING_ORDERS_ENABLED=true
-    startSignupCreditExpiryLoop(db, app.log); // claws expired signup-credit grants back to budget; no-op while dark
+    startSignupCreditMaintenanceLoop(db, app.log); // dormancy-expiry + velocity-freeze for signup credit; no-op while dark
     // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
     // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.
     const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadLpTradingPct(d), loadLpFundingPct(d), loadLpLiquidationPct(d), loadPlatformCashbackBps(d), loadPlatformFeeDiscountBps(d), loadPlatformGameRevenueBps(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadGachaConfig(d), loadSignupCreditConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
