@@ -42,6 +42,16 @@ export function ProfileBanner({ balance }) {
       setPickerOpen(false);
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };
+  // Chat color is a secondary attribute — apply it in place and keep the picker open (they may also pick a
+  // sprite). New chat messages + the composer pick it up immediately (profile:changed re-reads the profile).
+  const pickColor = async (c) => {
+    setBusy(true); setErr(null);
+    try {
+      await api.setColor(c);
+      setProfile((p) => ({ ...p, color: c }));
+      window.dispatchEvent(new Event('profile:changed'));
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
   const saveName = async () => {
     const name = nameDraft.trim();
     if (!name || name === profile?.username) { setEditName(false); return; }
@@ -114,7 +124,7 @@ export function ProfileBanner({ balance }) {
       </div>
 
       {pickerOpen && (
-        <AvatarPicker current={profile?.avatar} onPick={pickAvatar} onClose={() => setPickerOpen(false)} busy={busy} />
+        <AvatarPicker current={profile?.avatar} color={profile?.color} onPick={pickAvatar} onPickColor={pickColor} onClose={() => setPickerOpen(false)} busy={busy} />
       )}
     </div>
   );

@@ -9,7 +9,8 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
-const { postChat, listChat, getProfile, setUsername, setAvatar, listChatUsers } = await import('./chat.ts');
+const { postChat, listChat, getProfile, setUsername, setAvatar, setColor, listChatUsers } = await import('./chat.ts');
+const { CHAT_COLORS } = await import('@pokex/shared-types');
 const { onMessage } = await import('./bus.ts');
 
 await initDb();
@@ -77,6 +78,34 @@ test('avatar: set (validated), surfaced in profile + every message; bad values r
   await assert.rejects(setAvatar(db, u, 'evil/1.png'), /invalid avatar/);
   await assert.rejects(setAvatar(db, u, 'default/9999.png'), /invalid avatar/); // no sprite #9999 shipped
   await assert.rejects(setAvatar(db, u, 'default/0.png'), /invalid avatar/); // out of the #1–649 range
+});
+
+test('color: set (validated to CHAT_COLORS), surfaced in profile + every message; bad values rejected', async () => {
+  const u = await newUser();
+  // unset → null everywhere (the client derives a stable color from the handle)
+  let prof = await getProfile(db, u);
+  assert.equal(prof.color, null);
+  await postChat(db, u, 'before color');
+  let msgs = await listChat(db, { limit: 10 });
+  assert.equal(msgs.find((m) => m.body === 'before color')?.color, null);
+
+  // set a valid palette color
+  const pick = CHAT_COLORS[2];
+  assert.equal((await setColor(db, u, pick)).color, pick);
+  prof = await getProfile(db, u);
+  assert.equal(prof.color, pick);
+
+  // surfaces on a NEW post AND back-fills the existing one (listChat joins live users.chat_color)
+  const posted = await postChat(db, u, 'after color');
+  assert.equal(posted.color, pick);
+  msgs = await listChat(db, { limit: 10 });
+  assert.equal(msgs.find((m) => m.body === 'before color')?.color, pick);
+  assert.equal(msgs.find((m) => m.body === 'after color')?.color, pick);
+
+  // only palette colors are allowed — arbitrary hex / names / empty are rejected
+  await assert.rejects(setColor(db, u, '#123456'), /invalid color/);
+  await assert.rejects(setColor(db, u, 'red'), /invalid color/);
+  await assert.rejects(setColor(db, u, ''), /invalid color/);
 });
 
 test('chat: a user can set a unique username; the handle uses it; dupes/bad formats rejected', async () => {

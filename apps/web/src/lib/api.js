@@ -165,6 +165,7 @@ export const postChat = (body, replyTo) =>
 export const getProfile = () => req('/me/profile', { auth: true });
 export const setUsername = (username) => req('/me/username', { method: 'POST', auth: true, body: { username } });
 export const setAvatar = (avatar) => req('/me/avatar', { method: 'POST', auth: true, body: { avatar } });
+export const setColor = (color) => req('/me/color', { method: 'POST', auth: true, body: { color } });
 
 // Moderator actions (require a mod account; 403 otherwise).
 export const chatDelete = (id) => req(`/chat/messages/${id}/delete`, { method: 'POST', auth: true });

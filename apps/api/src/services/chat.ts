@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { formatUsd } from '@pokex/pricing';
+import { CHAT_COLORS } from '@pokex/shared-types';
 import { HttpError } from '../errors.ts';
 import type { Db } from '../db/client.ts';
 import { publish } from './bus.ts';
@@ -18,6 +19,7 @@ export interface ChatMessage {
   userId: string;
   handle: string;
   avatar: string | null; // profile sprite path under /avatars/ (null → client derives one from userId)
+  color: string | null; // chosen chat identity color (null → client derives one from the handle)
   body: string;
   createdAt: string;
   replyTo: ReplyContext | null;
@@ -34,12 +36,12 @@ export interface ChatMessage {
 export async function listChat(db: Db, opts: { limit?: number; viewerUserId?: string } = {}): Promise<ChatMessage[]> {
   const n = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const r = await db.query<{
-    id: string; user_id: string; body: string; created_at: string; dn: string | null; pk: string; av: string | null; author_mod: boolean;
+    id: string; user_id: string; body: string; created_at: string; dn: string | null; pk: string; av: string | null; color: string | null; author_mod: boolean;
     author_mu: string | null; author_banned: boolean;
     kind: string; meta: Record<string, unknown> | null;
     reply_to: string | null; p_body: string | null; p_dn: string | null; p_pk: string | null;
   }>(
-    `SELECT c.id, c.user_id, c.body, c.created_at, c.kind, c.meta, u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av,
+    `SELECT c.id, c.user_id, c.body, c.created_at, c.kind, c.meta, u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av, u.chat_color AS color,
             u.is_mod AS author_mod, u.chat_muted_until AS author_mu, u.chat_banned AS author_banned,
             c.reply_to, p.body AS p_body, pu.display_name AS p_dn, pu.solana_pubkey AS p_pk
      FROM chat_messages c
@@ -73,6 +75,7 @@ export async function listChat(db: Db, opts: { limit?: number; viewerUserId?: st
     userId: m.user_id,
     handle: handleFor(m.dn, m.pk),
     avatar: m.av,
+    color: m.color,
     body: m.body,
     createdAt: m.created_at,
     // a soft-deleted parent is excluded by the join (p_pk null) -> drop the quote rather than leak its body
@@ -116,12 +119,12 @@ export async function postChat(db: Db, userId: string, rawBody: string, replyToI
   let ins;
   try {
     // Insert and fetch the poster's display name/pubkey in one round-trip (RETURNING joined to users).
-    ins = await db.query<{ created_at: string; dn: string | null; pk: string; av: string | null; is_mod: boolean }>(
+    ins = await db.query<{ created_at: string; dn: string | null; pk: string; av: string | null; color: string | null; is_mod: boolean }>(
       `WITH new_msg AS (
          INSERT INTO chat_messages(id, user_id, body, reply_to) VALUES($1, $2, $3, $4)
          RETURNING created_at, user_id
        )
-       SELECT m.created_at, u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av, u.is_mod
+       SELECT m.created_at, u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av, u.chat_color AS color, u.is_mod
        FROM new_msg m JOIN users u ON u.id = m.user_id`,
       [id, userId, body, replyToId ?? null],
     );
@@ -136,6 +139,7 @@ export async function postChat(db: Db, userId: string, rawBody: string, replyToI
     userId,
     handle: handleFor(ins.rows[0].dn, ins.rows[0].pk),
     avatar: ins.rows[0].av,
+    color: ins.rows[0].color,
     body,
     createdAt: ins.rows[0].created_at,
     replyTo,
@@ -175,8 +179,8 @@ function eventBody(handle: string, marketName: string, evt: ChatEventInput): str
  * the engine swallow its errors. The bar persists (kind='event') so it shows in chat history too.
  */
 export async function emitChatEvent(db: Db, evt: ChatEventInput): Promise<void> {
-  const r = await db.query<{ dn: string | null; pk: string; av: string | null; mkt: string; is_mod: boolean }>(
-    `SELECT u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av, u.is_mod, m.display_name AS mkt
+  const r = await db.query<{ dn: string | null; pk: string; av: string | null; color: string | null; mkt: string; is_mod: boolean }>(
+    `SELECT u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av, u.chat_color AS color, u.is_mod, m.display_name AS mkt
      FROM users u JOIN markets m ON m.id = $2 WHERE u.id = $1`,
     [evt.userId, evt.marketId],
   );
@@ -201,7 +205,7 @@ export async function emitChatEvent(db: Db, evt: ChatEventInput): Promise<void> 
     [id, evt.userId, body, JSON.stringify(meta)],
   );
   publish('chat', 'event', {
-    id, userId: evt.userId, handle, avatar: r.rows[0].av, body, createdAt: ins.rows[0].created_at, replyTo: null, kind: 'event', meta, isMod: r.rows[0].is_mod,
+    id, userId: evt.userId, handle, avatar: r.rows[0].av, color: r.rows[0].color, body, createdAt: ins.rows[0].created_at, replyTo: null, kind: 'event', meta, isMod: r.rows[0].is_mod,
   } satisfies ChatMessage);
 }
 
@@ -214,8 +218,8 @@ export async function emitGameWinEvent(
   db: Db,
   evt: { userId: string; marketId: string; payoutE6: bigint; game: string },
 ): Promise<void> {
-  const r = await db.query<{ dn: string | null; pk: string; av: string | null; is_mod: boolean; mkt: string }>(
-    `SELECT u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av, u.is_mod, m.display_name AS mkt
+  const r = await db.query<{ dn: string | null; pk: string; av: string | null; color: string | null; is_mod: boolean; mkt: string }>(
+    `SELECT u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av, u.chat_color AS color, u.is_mod, m.display_name AS mkt
      FROM users u JOIN markets m ON m.id = $2 WHERE u.id = $1`,
     [evt.userId, evt.marketId],
   );
@@ -237,7 +241,7 @@ export async function emitGameWinEvent(
     [id, evt.userId, body, JSON.stringify(meta)],
   );
   publish('chat', 'event', {
-    id, userId: evt.userId, handle, avatar: r.rows[0].av, body, createdAt: ins.rows[0].created_at, replyTo: null, kind: 'event', meta, isMod: r.rows[0].is_mod,
+    id, userId: evt.userId, handle, avatar: r.rows[0].av, color: r.rows[0].color, body, createdAt: ins.rows[0].created_at, replyTo: null, kind: 'event', meta, isMod: r.rows[0].is_mod,
   } satisfies ChatMessage);
 }
 
@@ -257,8 +261,8 @@ export interface PackPullInput {
  * errors so a chat hiccup can never roll back a delivery.
  */
 export async function emitPackPullEvent(db: Db, evt: PackPullInput): Promise<void> {
-  const r = await db.query<{ dn: string | null; pk: string; av: string | null; is_mod: boolean }>(
-    `SELECT u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av, u.is_mod FROM users u WHERE u.id = $1`,
+  const r = await db.query<{ dn: string | null; pk: string; av: string | null; color: string | null; is_mod: boolean }>(
+    `SELECT u.display_name AS dn, u.solana_pubkey AS pk, u.avatar AS av, u.chat_color AS color, u.is_mod FROM users u WHERE u.id = $1`,
     [evt.userId],
   );
   if (!r.rows[0]) return; // user vanished between commit and emit — nothing to announce
@@ -280,7 +284,7 @@ export async function emitPackPullEvent(db: Db, evt: PackPullInput): Promise<voi
     [id, evt.userId, body, JSON.stringify(meta)],
   );
   publish('chat', 'event', {
-    id, userId: evt.userId, handle, avatar: r.rows[0].av, body, createdAt: ins.rows[0].created_at, replyTo: null, kind: 'event', meta, isMod: r.rows[0].is_mod,
+    id, userId: evt.userId, handle, avatar: r.rows[0].av, color: r.rows[0].color, body, createdAt: ins.rows[0].created_at, replyTo: null, kind: 'event', meta, isMod: r.rows[0].is_mod,
   } satisfies ChatMessage);
 }
 
@@ -289,6 +293,7 @@ export interface Profile {
   username: string | null; // the chosen display name (null if unset)
   handle: string; // what shows in chat (username or truncated pubkey)
   avatar: string | null; // chosen profile sprite path under /avatars/ (null → client derives one from userId)
+  color: string | null; // chosen chat identity color (null → client derives one from the handle)
   isMod: boolean; // viewer is a moderator (drives whether mod controls render)
   mutedUntil: string | null; // viewer's mute expiry (drives the disabled-input "you're muted" state)
   banned: boolean; // viewer is banned (drives the disabled-input "you're banned" state)
@@ -302,8 +307,8 @@ export interface Profile {
 }
 
 export async function getProfile(db: Db, userId: string): Promise<Profile> {
-  const r = await db.query<{ dn: string | null; pk: string; av: string | null; is_mod: boolean; mu: string | null; banned: boolean }>(
-    `SELECT display_name AS dn, solana_pubkey AS pk, avatar AS av, is_mod, chat_muted_until AS mu, chat_banned AS banned FROM users WHERE id = $1`,
+  const r = await db.query<{ dn: string | null; pk: string; av: string | null; color: string | null; is_mod: boolean; mu: string | null; banned: boolean }>(
+    `SELECT display_name AS dn, solana_pubkey AS pk, avatar AS av, chat_color AS color, is_mod, chat_muted_until AS mu, chat_banned AS banned FROM users WHERE id = $1`,
     [userId],
   );
   if (!r.rows[0]) throw new HttpError(404, 'user not found');
@@ -313,6 +318,7 @@ export async function getProfile(db: Db, userId: string): Promise<Profile> {
     username: r.rows[0].dn,
     handle: handleFor(r.rows[0].dn, r.rows[0].pk),
     avatar: r.rows[0].av,
+    color: r.rows[0].color,
     isMod: r.rows[0].is_mod,
     mutedUntil: r.rows[0].mu,
     banned: r.rows[0].banned,
@@ -406,6 +412,16 @@ export async function setAvatar(db: Db, userId: string, rawAvatar: string): Prom
   const r = await db.query<{ id: string }>(`UPDATE users SET avatar = $1 WHERE id = $2 RETURNING id`, [avatar, userId]);
   if (!r.rows[0]) throw new HttpError(404, 'user not found');
   return { avatar };
+}
+
+/** Set the caller's chat identity color (avatar box + username). Must be one of CHAT_COLORS — the route
+ *  validates too (ColorRequest), but re-check here so the service is safe to call directly. */
+export async function setColor(db: Db, userId: string, rawColor: string): Promise<{ color: string }> {
+  const color = rawColor.trim();
+  if (!CHAT_COLORS.includes(color)) throw new HttpError(400, 'invalid color');
+  const r = await db.query<{ id: string }>(`UPDATE users SET chat_color = $1 WHERE id = $2 RETURNING id`, [color, userId]);
+  if (!r.rows[0]) throw new HttpError(404, 'user not found');
+  return { color };
 }
 
 export interface ChatUserRow {

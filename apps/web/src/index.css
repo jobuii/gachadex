@@ -1976,6 +1976,14 @@ td.addr:hover { text-decoration: underline; }
 .avatar-modal-head h3 { margin: 0; font-size: 0.95rem; }
 .avatar-modal-close { background: none; border: none; color: var(--text-muted); font-size: 1rem; cursor: pointer; }
 .avatar-modal-close:hover { color: var(--text); }
+/* chat identity color swatches (avatar box + username color in chat) */
+.avatar-color-row { display: flex; align-items: center; gap: 0.7rem; padding: 0.7rem 1rem 0; flex-wrap: wrap; }
+.avatar-color-label { font-size: 0.6rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+.avatar-swatches { display: inline-flex; gap: 0.45rem; flex-wrap: wrap; }
+.avatar-swatch { width: 26px; height: 26px; border-radius: 999px; background: var(--sw); border: 2px solid transparent; cursor: pointer; padding: 0; transition: transform .12s ease; }
+.avatar-swatch:hover { transform: scale(1.12); }
+.avatar-swatch.sel { border-color: var(--text); box-shadow: 0 0 0 2px var(--bg-2), 0 0 0 3px var(--sw); }
+.avatar-swatch:disabled { cursor: default; opacity: 0.6; }
 .avatar-modal-controls { display: flex; align-items: center; gap: 0.6rem; padding: 0.7rem 1rem; flex-wrap: wrap; }
 .avatar-variant-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .avatar-variant-toggle button { background: var(--bg-3); border: none; color: var(--text-muted); padding: 0.35rem 0.7rem; font-size: 0.72rem; font-weight: 700; cursor: pointer; }

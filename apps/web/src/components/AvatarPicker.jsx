@@ -1,9 +1,11 @@
 import { useState, useMemo } from 'react';
 import { AVATAR_DEX_MAX } from '../lib/avatar.js';
+import { CHAT_COLORS } from '@pokex/shared-types';
 
 // Modal grid of the bundled gen 1–5 sprites. Default / shiny toggle + search by Pokédex number. Picking
-// one calls onPick(path) where path is 'default/<n>.png' | 'shiny/<n>.png'.
-export function AvatarPicker({ current, onPick, onClose, busy }) {
+// one calls onPick(path) where path is 'default/<n>.png' | 'shiny/<n>.png'. When onPickColor is provided it
+// also offers the CHAT_COLORS swatch row (your chat avatar-box + username color) → onPickColor(hex).
+export function AvatarPicker({ current, color, onPick, onPickColor, onClose, busy }) {
   const [variant, setVariant] = useState(current?.startsWith('shiny/') ? 'shiny' : 'default');
   const [q, setQ] = useState('');
 
@@ -19,6 +21,25 @@ export function AvatarPicker({ current, onPick, onClose, busy }) {
           <h3>Choose your avatar</h3>
           <button className="avatar-modal-close" onClick={onClose} aria-label="Close">✕</button>
         </div>
+        {onPickColor && (
+          <div className="avatar-color-row">
+            <span className="avatar-color-label">Chat color</span>
+            <div className="avatar-swatches">
+              {CHAT_COLORS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={`avatar-swatch ${color === c ? 'sel' : ''}`}
+                  style={{ '--sw': c }}
+                  disabled={busy}
+                  aria-label={`Chat color ${c}`}
+                  aria-pressed={color === c}
+                  onClick={() => onPickColor(c)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
         <div className="avatar-modal-controls">
           <div className="avatar-variant-toggle">
             <button type="button" className={variant === 'default' ? 'on' : ''} onClick={() => setVariant('default')}>Default</button>
