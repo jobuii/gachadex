@@ -23,15 +23,14 @@ export function useGachaReveal({ instantCutBps = 1000, onTradeMarket, onError, o
   const [summaryResults, setSummaryResults] = useState(null); // → GachaSummary
   const [queue, setQueue] = useState(null); // normal-mode multi-open: reveal each in turn
   const [queueIndex, setQueueIndex] = useState(0);
-  const [previewSell, setPreviewSell] = useState(false); // dev: stub the summary's onSell so a mock shows "Sold ✓"
-  const [previewSellable, setPreviewSellable] = useState(false); // dev: force the single-reveal Sell button on
+  const [previewSell, setPreviewSell] = useState(false); // dev-only: make the mock's Sell resolve (summary onSell + single-reveal Sell button)
   const [inventory, setInventory] = useState([]); // held rows — resolves the sellable prize behind a reveal
 
   // reload the held-inventory (for prize resolution) + notify the host (e.g. its separate inventory panel)
   const reload = () => { onAfterChange?.(); if (!api.hasSession()) return; api.getGachaInventory().then((r) => setInventory(r.inventory ?? [])).catch(() => {}); };
   useEffect(() => { reload(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const reset = () => { setResult(null); setSummaryResults(null); setQueue(null); setQueueIndex(0); setPreviewSell(false); setPreviewSellable(false); };
+  const reset = () => { setResult(null); setSummaryResults(null); setQueue(null); setQueueIndex(0); setPreviewSell(false); };
   const close = () => { setOpen(false); reset(); };
 
   // Open the overlay in its charging state (the open+poll latency is the suspense).
@@ -54,8 +53,8 @@ export function useGachaReveal({ instantCutBps = 1000, onTradeMarket, onError, o
   };
 
   // dev-only: drop the overlay straight into a given state (drives the ClassicGacha preview buttons)
-  const preview = ({ spentE6: s = '0', result: r = null, summaryResults: sr = null, queue: q = null, previewSell: ps = false, previewSellable: psa = false }) => {
-    setSpentE6(String(s)); setResult(r); setSummaryResults(sr); setQueue(q); setQueueIndex(0); setPreviewSell(ps); setPreviewSellable(psa); setOpen(true);
+  const preview = ({ spentE6: s = '0', result: r = null, summaryResults: sr = null, queue: q = null, previewSell: ps = false }) => {
+    setSpentE6(String(s)); setResult(r); setSummaryResults(sr); setQueue(q); setQueueIndex(0); setPreviewSell(ps); setOpen(true);
   };
 
   // multi-open sequence: advance to the next card; after the last (or Skip-all) hand off to the summary.
@@ -96,10 +95,10 @@ export function useGachaReveal({ instantCutBps = 1000, onTradeMarket, onError, o
       result={result}
       spentE6={spentE6}
       instantCutBps={instantCutBps}
-      canSell={!!revealItem || previewSellable}
+      canSell={!!revealItem || previewSell}
       canTrade={!!onTradeMarket && !!revealCard?.marketId}
       onSellNow={async () => {
-        if (previewSellable) return true;
+        if (previewSell) return true;
         if (revealItem) return await sellPrize(revealItem.id);
         return false;
       }}

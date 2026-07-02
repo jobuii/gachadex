@@ -33,25 +33,20 @@ export function ProfileBanner({ balance }) {
   const handle = profile?.username || profile?.handle || shortenPubkey(pk);
   const realized = profile ? BigInt(profile.realizedE6) : null;
 
-  const pickAvatar = async (path) => {
+  // Optimistic profile edit: call the API, merge the patch, fire `profile:changed` so chat re-reads the
+  // composer avatar/color immediately. Avatar closes the picker (the primary action); color keeps it open —
+  // it's a secondary attribute, so they can also pick a sprite.
+  const applyProfile = async (patch, call, { close = false } = {}) => {
     setBusy(true); setErr(null);
     try {
-      await api.setAvatar(path);
-      setProfile((p) => ({ ...p, avatar: path }));
-      window.dispatchEvent(new Event('profile:changed')); // let chat update the composer avatar immediately
-      setPickerOpen(false);
-    } catch (e) { setErr(e.message); } finally { setBusy(false); }
-  };
-  // Chat color is a secondary attribute — apply it in place and keep the picker open (they may also pick a
-  // sprite). New chat messages + the composer pick it up immediately (profile:changed re-reads the profile).
-  const pickColor = async (c) => {
-    setBusy(true); setErr(null);
-    try {
-      await api.setColor(c);
-      setProfile((p) => ({ ...p, color: c }));
+      await call();
+      setProfile((p) => ({ ...p, ...patch }));
       window.dispatchEvent(new Event('profile:changed'));
+      if (close) setPickerOpen(false);
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };
+  const pickAvatar = (path) => applyProfile({ avatar: path }, () => api.setAvatar(path), { close: true });
+  const pickColor = (c) => applyProfile({ color: c }, () => api.setColor(c));
   const saveName = async () => {
     const name = nameDraft.trim();
     if (!name || name === profile?.username) { setEditName(false); return; }

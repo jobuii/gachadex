@@ -128,7 +128,7 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
     gacha.preview({
       spentE6: '50000000',
       result: { openId: 'preview', status: 'opened', verifyUrl: null, card: { mint: 'preview', name: c?.name ?? 'Charizard VMAX', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? PREVIEW_IMG, valueE6: valueByTier[rarity] ?? '12000000', rarity, marketId: null, year: '2000' } },
-      previewSellable: true, // mock: show the Sell-back button (no real held row behind a preview)
+      previewSell: true, // mock: show the Sell-back button (no real held row behind a preview)
     });
   };
   const previewYolo = () => gacha.preview({ spentE6: '50000000', result: { openId: 'preview', status: 'turbo_sold', card: null, verifyUrl: null, turboRefundE6: '27000000' } });

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { formatUsd } from '@pokex/pricing';
 import { useAuth } from '../auth/AuthContext';
 import { GoldBar } from './games/GoldBar.jsx';
+import { useStickyState } from '../lib/useStickyState';
 import * as api from '../lib/api.js';
 
 const MASK_KEY = 'gachadex_balance_masked';
@@ -31,7 +32,7 @@ export function NavBalance({ onManageFunds }) {
   const [gold, setGold] = useState(null);      // { balance, … }
   const [goldOn, setGoldOn] = useState(false);
   const [open, setOpen] = useState(false);
-  const [masked, setMasked] = useState(() => { try { return localStorage.getItem(MASK_KEY) === '1'; } catch { return false; } });
+  const [masked, setMasked] = useStickyState(MASK_KEY, false); // hide-balances toggle, persisted across refresh
   const chipRef = useRef(null);
   const popRef = useRef(null);
 
@@ -68,14 +69,7 @@ export function NavBalance({ onManageFunds }) {
     return () => { document.removeEventListener('pointerdown', onDown); document.removeEventListener('keydown', onKey); };
   }, [open]);
 
-  const toggleMask = (e) => {
-    e?.stopPropagation();
-    setMasked((m) => {
-      const next = !m;
-      try { localStorage.setItem(MASK_KEY, next ? '1' : '0'); } catch { /* private mode */ }
-      return next;
-    });
-  };
+  const toggleMask = (e) => { e?.stopPropagation(); setMasked((m) => !m); }; // useStickyState persists it
   // Only toggle on keys aimed at the chip itself — ignore Enter/Space bubbling up from the in-chip eye button.
   const onChipKey = (e) => {
     if (e.target !== e.currentTarget) return;
