@@ -159,6 +159,7 @@ export function GachaAdminView({ adminKey }) {
             <Stat label="Sell-back cut revenue" value={mon.sellBackCutE6} />
             <Stat label="Markup revenue" value={mon.markupE6} />
             <Stat label="Rebate cost (Gold)" value={mon.rebateCostE6} />
+            <Stat label="Referral cost (paid to referrers)" value={mon.referralCostE6} />
             <PnlStat label="Net" value={mon.netE6} />
           </div>
           <div className="admin-stats">
@@ -200,12 +201,13 @@ export function GachaAdminView({ adminKey }) {
             <>
               <h4 style={{ margin: '1.2rem 0 0.4rem' }}>Per machine</h4>
               <table className="hist-table">
-                <thead><tr><th>Machine</th><th>Opens (24h)</th><th>Net</th><th>Prize value</th><th>Realized odds — all-time (24h)</th></tr></thead>
+                <thead><tr><th>Machine</th><th>Opens (24h)</th><th>Referral</th><th>Net</th><th>Prize value</th><th>Realized odds — all-time (24h)</th></tr></thead>
                 <tbody>
                   {mon.machines.map((m) => (
                     <tr key={m.code}>
                       <td>{nameOf(m.code)}</td>
                       <td>{m.opens} ({m.opens24h})</td>
+                      <td>{formatUsd(BigInt(m.referralE6 ?? '0'))}</td>
                       <td>{formatUsd(BigInt(m.netE6))}</td>
                       <td>{formatUsd(BigInt(m.prizeValueE6))}</td>
                       <td className="muted" style={{ fontSize: '0.74rem' }}>{oddsStr(m.rarity, m.opens)} <span style={{ opacity: 0.65 }}>({oddsStr(m.rarity24h, m.opens24h)})</span></td>

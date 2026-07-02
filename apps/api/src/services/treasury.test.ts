@@ -292,13 +292,50 @@ test('PoR grace: a SUSTAINED recovery (clearPasses consecutive solvent passes) r
   assert.equal(await withdrawalsFrozen(db), null);
 });
 
-test('PoR grace: a MATERIAL breach (> 5% of liabilities) freezes IMMEDIATELY, no grace', async () => {
+test('PoR grace: a MATERIAL breach (> 5% of customer-owed) freezes IMMEDIATELY, no grace', async () => {
   await unfreezeWithdrawals(db);
   await clearStreak();
   const L = await liability();
   const chain = fakeTreasury({ hot: L - (L * 6n) / 100n - (await unsweptNow()), cold: 0n }); // 6% deficit
   await treasuryPass(db, chain, undefined, () => 4_000_000); // FIRST pass
   assert.match((await withdrawalsFrozen(db)) ?? '', /proof-of-reserves breach/);
+});
+
+// ── the freeze gates on CUSTOMER-owed funds, not total claims: the house buffer (fees/insurance/gacha budget)
+//    absorbs a shortfall before any customer, so a buffer-only gap is flagged red but must NOT freeze ──
+test('a shortfall the house buffer absorbs is flagged (breached) but does NOT freeze withdrawals', async () => {
+  await unfreezeWithdrawals(db);
+  await clearStreak();
+  // add $500 of house buffer (FEE_REVENUE) — raises TOTAL liabilities AND the buffer equally, so userOwed is unchanged
+  await db.tx(async (q) => {
+    const rev = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
+    const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
+    await postTxn(q, { reason: 'OPEN_FEE', entries: [{ accountId: treasury, amount: -usdc(500) }, { accountId: rev, amount: usdc(500) }] });
+  });
+  const probe = await treasuryState(db, fakeTreasury({ hot: 0n }));
+  assert.ok(probe.bufferE6 >= usdc(500), 'buffer includes the fee revenue we just added');
+  assert.ok(probe.userOwedE6 < probe.liabilityE6, 'total claims exceed customer-owed — there IS a buffer');
+  // on-chain custody $50 short of TOTAL claims, but still ~$450 ABOVE what we owe customers
+  const chain = fakeTreasury({ hot: probe.liabilityE6 - usdc(50) - (await unsweptNow()), cold: 0n });
+  const report = await treasuryPass(db, chain, undefined, () => 5_000_000);
+  assert.equal(report.userReservesBreached, false, 'customer-owed funds are covered → no user breach');
+  assert.equal(report.breached, true, 'but on-chain is below TOTAL claims → the red flag is set');
+  assert.equal(await withdrawalsFrozen(db), null, 'and withdrawals are NOT frozen — the buffer absorbs the gap');
+});
+
+test('a shortfall in CUSTOMER-owed funds still freezes (a material user breach is immediate)', async () => {
+  await unfreezeWithdrawals(db);
+  await clearStreak();
+  const probe = await treasuryState(db, fakeTreasury({ hot: 0n }));
+  assert.ok(probe.userOwedE6 > 0n, 'there are customer obligations to under-reserve');
+  // on-chain custody at half of what we owe customers → a ~50% deficit, far over the 5% material line → freeze now
+  const unswept = await unsweptNow();
+  const half = probe.userOwedE6 / 2n;
+  const chain = fakeTreasury({ hot: half > unswept ? half - unswept : 0n, cold: 0n });
+  const report = await treasuryPass(db, chain, undefined, () => 9_000_000);
+  assert.equal(report.userReservesBreached, true);
+  assert.match((await withdrawalsFrozen(db)) ?? '', /customer-owed/);
+  await unfreezeWithdrawals(db); // leave withdrawals open for any later run
 });
 
 after(async () => {

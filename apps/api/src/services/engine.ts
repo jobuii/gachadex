@@ -901,14 +901,16 @@ export interface PositionView {
   liqPriceE6: string;
   markE6: string;
   unrealizedPnlUusdc: string;
+  accruedFundingUusdc: string; // accrued-but-unsettled funding, CUSTOMER perspective: − = owes, + = receives
   status: string;
   openedAt: string;
 }
 
 export async function getUserPositions(db: Db, userId: string): Promise<PositionView[]> {
-  const r = await db.query<PositionRow & { symbol: string; display_name: string; mark: string | null; opened_at: string }>(
+  const r = await db.query<PositionRow & { symbol: string; display_name: string; mark: string | null; cum: string | null; opened_at: string }>(
     `SELECT ${POS_COLS}, p.opened_at, m.symbol, m.display_name,
-            (SELECT mark_price_e6::text FROM marks k WHERE k.market_id=p.market_id ORDER BY computed_at DESC LIMIT 1) AS mark
+            (SELECT mark_price_e6::text FROM marks k WHERE k.market_id=p.market_id ORDER BY computed_at DESC LIMIT 1) AS mark,
+            (SELECT cumulative_index_e6::text FROM funding_rates fr WHERE fr.market_id=p.market_id ORDER BY interval_end DESC LIMIT 1) AS cum
      FROM positions p JOIN markets m ON m.id = p.market_id
      WHERE p.user_id=$1 AND p.status='open' ORDER BY p.opened_at DESC`,
     [userId],
@@ -916,6 +918,12 @@ export async function getUserPositions(db: Db, userId: string): Promise<Position
   return r.rows.map((row) => {
     const markE6 = row.mark ? BigInt(row.mark) : BigInt(row.avg_entry_e6);
     const uPnl = unrealizedPnl(row.side, BigInt(row.qty_e6), BigInt(row.avg_entry_e6), markE6);
+    // Accrued-but-unsettled funding = exactly what the next settlePositionFunding (funding.ts) would post:
+    // notional × the move in the market's cumulative funding index since this position's snapshot. `signed` is
+    // the ledger amount (+ = customer pays); negate for the CUSTOMER view (− = owes / + = receives).
+    const fundingDelta = (row.cum ? BigInt(row.cum) : 0n) - BigInt(row.funding_index_snapshot_e6 ?? '0');
+    const fundingBase = (notional(BigInt(row.qty_e6), BigInt(row.avg_entry_e6)) * fundingDelta) / 1_000_000n;
+    const fundingSigned = row.side === 'long' ? fundingBase : -fundingBase;
     return {
       id: row.id,
       marketId: row.market_id,
@@ -929,6 +937,7 @@ export async function getUserPositions(db: Db, userId: string): Promise<Position
       liqPriceE6: row.liq_price_e6,
       markE6: markE6.toString(),
       unrealizedPnlUusdc: uPnl.toString(),
+      accruedFundingUusdc: (-fundingSigned).toString(),
       status: row.status,
       openedAt: row.opened_at,
     };

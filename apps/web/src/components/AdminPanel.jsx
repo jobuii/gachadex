@@ -501,6 +501,21 @@ export function AdminPanel({ onGoToMarket } = {}) {
       setBusy(null);
     }
   };
+  // Re-run proof-of-reserves live (the server re-reads the ledger + on-chain custody balances) so an operator
+  // can confirm whether a shortfall still exists — e.g. before deciding to unfreeze.
+  const refreshTreasury = async () => {
+    setErr(null);
+    setMsg(null);
+    setBusy('treasury-refresh');
+    try {
+      setTreasury(await api.adminGetTreasury(adminKey.trim()));
+      setMsg('Reserves re-checked live from the ledger + on-chain custody.');
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
   const freeze = async () => {
     setErr(null);
     setMsg(null);
@@ -669,24 +684,54 @@ export function AdminPanel({ onGoToMarket } = {}) {
 
       {/* Withdrawal-freeze status + toggle (real-funds only; treasury is null in play-money). A PoR breach
           auto-freezes and stays frozen until an operator unfreezes — surface it loudly on every tab. */}
-      {treasury &&
-        (treasury.frozen ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', background: 'rgba(220,38,38,0.14)', border: '1px solid #dc2626', borderRadius: 8, padding: '0.7rem 1rem', margin: '0.6rem 0' }}>
-            <span style={{ color: '#fca5a5', fontSize: '0.84rem' }}>
-              <strong style={{ color: '#fecaca' }}>⚠️ Withdrawals are FROZEN.</strong> {treasury.frozen}
-            </span>
-            <button className="btn-primary sm" disabled={busy === 'freeze'} onClick={unfreeze} style={{ whiteSpace: 'nowrap' }}>
-              {busy === 'freeze' ? '…' : 'Unfreeze withdrawals'}
-            </button>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', background: 'rgba(16,185,129,0.07)', border: '1px solid #1f6f54', borderRadius: 8, padding: '0.45rem 0.9rem', margin: '0.6rem 0' }}>
-            <span style={{ color: '#6ee7b7', fontSize: '0.8rem' }}>✓ Withdrawals are open.</span>
-            <button className="btn-ghost sm" disabled={busy === 'freeze'} onClick={freeze}>
-              {busy === 'freeze' ? '…' : 'Freeze'}
-            </button>
-          </div>
-        ))}
+      {treasury && (
+        <>
+          {treasury.frozen ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', background: 'rgba(220,38,38,0.14)', border: '1px solid #dc2626', borderRadius: 8, padding: '0.7rem 1rem', margin: '0.6rem 0' }}>
+              <span style={{ color: '#fca5a5', fontSize: '0.84rem' }}>
+                <strong style={{ color: '#fecaca' }}>⚠️ Withdrawals are FROZEN.</strong> {treasury.frozen}
+              </span>
+              <div style={{ display: 'flex', gap: '0.5rem', whiteSpace: 'nowrap' }}>
+                <button className="btn-ghost sm" disabled={busy === 'treasury-refresh'} onClick={refreshTreasury} title="Re-check reserves live (ledger + on-chain)">
+                  {busy === 'treasury-refresh' ? '…' : '↻ Refresh'}
+                </button>
+                <button className="btn-primary sm" disabled={busy === 'freeze'} onClick={unfreeze}>
+                  {busy === 'freeze' ? '…' : 'Unfreeze withdrawals'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', background: 'rgba(16,185,129,0.07)', border: '1px solid #1f6f54', borderRadius: 8, padding: '0.45rem 0.9rem', margin: '0.6rem 0' }}>
+              <span style={{ color: '#6ee7b7', fontSize: '0.8rem' }}>✓ Withdrawals are open.</span>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button className="btn-ghost sm" disabled={busy === 'treasury-refresh'} onClick={refreshTreasury} title="Re-check reserves live (ledger + on-chain)">
+                  {busy === 'treasury-refresh' ? '…' : '↻ Refresh'}
+                </button>
+                <button className="btn-ghost sm" disabled={busy === 'freeze'} onClick={freeze}>
+                  {busy === 'freeze' ? '…' : 'Freeze'}
+                </button>
+              </div>
+            </div>
+          )}
+          {/* Total-reserves shortfall: on-chain custody < TOTAL claims, but customer-owed funds are still fully
+              covered by the house buffer (fees + insurance + gacha budget) → flagged RED, but withdrawals stay
+              open (only a CUSTOMER-owed shortfall freezes). */}
+          {/* `=== false` (not `!`) so a stale API without the field hides this instead of hitting BigInt(undefined);
+              `!frozen` so it never contradicts the FROZEN banner (e.g. after a manual freeze or a topped-up-but-
+              still-<total state). userOwed is clamped ≥ 0 (it can go negative if users net-owe the house). */}
+          {!treasury.frozen && treasury.breached && treasury.userReservesBreached === false && (
+            <div style={{ background: 'rgba(220,38,38,0.10)', border: '1px solid #b91c1c', borderRadius: 8, padding: '0.55rem 1rem', margin: '0.6rem 0' }}>
+              <span style={{ color: '#fca5a5', fontSize: '0.82rem' }}>
+                <strong style={{ color: '#fecaca' }}>⚠ Reserves below total claims.</strong>{' '}
+                On-chain custody {formatUsd(BigInt(treasury.onchainE6))} &lt; total claims {formatUsd(BigInt(treasury.liabilityE6))}
+                {' '}(short {formatUsd(BigInt(treasury.liabilityE6) - BigInt(treasury.onchainE6))}). Customer-owed funds{' '}
+                {formatUsd(BigInt(treasury.userOwedE6) > 0n ? BigInt(treasury.userOwedE6) : 0n)} are fully covered by the house buffer{' '}
+                {formatUsd(BigInt(treasury.bufferE6))}, so <strong>withdrawals stay open</strong>.
+              </span>
+            </div>
+          )}
+        </>
+      )}
 
       <div className="admin-tabs">
         <button className={`admin-tab ${tab === 'main' ? 'active' : ''}`} onClick={() => setTab('main')}>Main</button>
@@ -732,6 +777,8 @@ export function AdminPanel({ onGoToMarket } = {}) {
           <Stat label="Funding collected (into LP pool)" value={economics.fundingCollectedE6} />
           <Stat label="Funding — LP's share" value={economics.fundingLpE6} />
           <Stat label="Funding — house cut" value={economics.fundingHouseE6} />
+          <PnlStat label="Gacha net (house)" value={economics.gachaNetE6 ?? '0'} />
+          <Stat label="Referral fees paid" value={economics.referralFeesPaidE6} />
           <Stat label="Customer LP in pool" value={economics.customerLpE6} />
           {/* custody cash-flow group: deposits, withdrawals, then pending (flashing red when >0) immediately left of P/L */}
           {treasury && <Stat label="Total deposits" value={economics.totalDepositsE6} />}
