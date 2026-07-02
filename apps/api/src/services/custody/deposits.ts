@@ -5,6 +5,7 @@ import type { Db } from '../../db/client.ts';
 import { getOrCreateSystemAccount, getOrCreateUserAccount, postTxn } from '../ledger.ts';
 import { usdc } from '../../money.ts';
 import { deriveDepositKeypair } from './wallet.ts';
+import { grantDepositBonus } from '../bonus.ts';
 
 /**
  * Deposit pipeline (custody P1 + P1.5):
@@ -100,7 +101,7 @@ const SOL_FEE_RESERVE_LAMPORTS = 5_000_000n;
 
 /** Credit a finalized USDC deposit to the user's collateral — full amount, never clamped. Idempotent. */
 export async function creditDeposit(db: Db, depositId: string): Promise<string | null> {
-  return db.tx(async (q) => {
+  const out = await db.tx(async (q) => {
     const r = await q.query<{ user_id: string; amt: string; status: string; asset: string }>(
       `SELECT user_id, amount_in_raw::text AS amt, status, asset FROM deposits WHERE id = $1 FOR UPDATE`,
       [depositId],
@@ -125,8 +126,15 @@ export async function creditDeposit(db: Db, depositId: string): Promise<string |
       `UPDATE deposits SET status = 'credited', usdc_credited_e6 = $2, txn_id = $3, credited_at = now() WHERE id = $1`,
       [depositId, amount.toString(), txnId],
     );
-    return txnId;
+    return { txnId, userId: d.user_id, amount };
   });
+  if (!out) return null;
+  // Deposit bonus (docs/bonus-credits-spec.md §2.2): a % of the deposit, granted AFTER the deposit commits,
+  // best-effort. grantDepositBonus is a no-op when the source is off/paused and idempotent (first deposit only),
+  // so a bonus hiccup can never affect the deposit (the .catch swallows it) and re-credits don't re-grant.
+  // Awaited (a small local tx) so the bonus lands with the deposit rather than racing it.
+  await grantDepositBonus(db, out.userId, out.amount, depositId).catch(() => {});
+  return out.txnId;
 }
 
 /** Persist an address+asset scan high-water mark. Written AFTER the pass's deposits rows so a

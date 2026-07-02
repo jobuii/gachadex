@@ -44,7 +44,7 @@ export async function walletRoutes(app: FastifyInstance): Promise<void> {
     });
     // Tell the client whether the worker will auto-process this one (toggle on + under cap + not frozen),
     // so it shows "approved, on its way" vs "follows approval".
-    const autoApprove = await willAutoApprove(db, w.amountE6);
+    const autoApprove = await willAutoApprove(db, w.amountE6, req.userId!);
     return { id: w.id, status: w.status, amountE6: w.amountE6.toString(), dest: w.dest, duplicate: w.duplicate ?? false, autoApprove };
   });
 

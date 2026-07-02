@@ -21,6 +21,8 @@ import { loadChatConfig } from './services/chat-config.ts';
 import { loadDropConfig } from './services/drop-config.ts';
 import { loadGameConfig } from './services/game-config.ts';
 import { loadGachaConfig } from './services/gacha-config.ts';
+import { loadBonusConfig } from './services/bonus-config.ts';
+import { expireBonuses, enforceBonusVelocity } from './services/bonus.ts';
 import { settleExpiredDuels } from './services/games-duel.ts';
 import { settleExpiredLeagues } from './services/games-fantasy.ts';
 import { settleExpiredArenas } from './services/games-arena.ts';
@@ -160,6 +162,31 @@ function startGachaStockLoop(db: Db, log: FastifyBaseLogger) {
   };
   setTimeout(() => void run(), 5_000);
   setInterval(() => void run(), config.gachaStockPollMs);
+}
+
+/** Bonus-credit housekeeping (docs/bonus-credits-spec.md §3.3 + §4) — two passes, both no-ops while dark:
+ *   · dormancy expiry — claw grants that have gone unused (no trades) past the expiry window back to the budget.
+ *   · velocity guard — if more than dailyAccountCap accounts were created in the last 24h, pause both sources
+ *     (toggles off) + flag the admin; issuance resumes only when the admin re-enables the toggles.
+ *  Runs always (old grants must still expire after the program is switched off, and the guard must keep
+ *  watching). Expiry/dormancy is day-granular so a 10-min cadence only bounds the lag. Lease-guarded so one
+ *  instance runs per pass; both passes are idempotent + margin-safe regardless. */
+function startBonusMaintenanceLoop(db: Db, log: FastifyBaseLogger) {
+  const run = async () => {
+    if (!(await tryAcquireLease(db, 'bonus-maintenance', INSTANCE_ID, 60_000))) return;
+    try {
+      const r = await expireBonuses(db);
+      if (r.swept) log.info({ swept: r.swept, clawedE6: r.clawedE6.toString() }, 'bonus expiry: dormant grants clawed back to CREDIT_BUDGET');
+      const v = await enforceBonusVelocity(db);
+      if (v.tripped && v.count > v.cap) log.warn({ signups24h: v.count, cap: v.cap }, 'bonus: daily account cap exceeded — both sources PAUSED until an admin re-enables the toggles');
+    } catch (e) {
+      log.warn(e, 'bonus maintenance pass failed');
+    } finally {
+      await releaseLease(db, 'bonus-maintenance', INSTANCE_ID).catch(() => {});
+    }
+  };
+  setTimeout(() => void run(), 15_000);
+  setInterval(() => void run(), 10 * 60_000);
 }
 
 /** Unattended backstop for stranded pack-opens: a hard crash between fund-custody and the CC submit leaves a buy
@@ -328,9 +355,10 @@ async function main() {
     if (config.classicGachaEnabled) startGachaStockLoop(db, app.log);
     if (config.classicGachaEnabled) startGachaOpenReconcileLoop(db, app.log);
     startRestingOrderLoop(db, app.log); // dark unless RESTING_ORDERS_ENABLED=true
+    startBonusMaintenanceLoop(db, app.log); // dormancy-expiry + velocity-pause for bonus credits; no-op while dark
     // Live engine knobs — trading fee, liquidation penalty, funding factor, chat action-bar thresholds,
     // DROP config. Loaded on boot, then refreshed for multi-instance convergence + admin edits within ~30s.
-    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadLpTradingPct(d), loadLpFundingPct(d), loadLpLiquidationPct(d), loadPlatformCashbackBps(d), loadPlatformFeeDiscountBps(d), loadPlatformGameRevenueBps(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadGachaConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
+    const loadLiveKnobs = (d: Db) => Promise.all([loadFee(d), loadLiqFee(d), loadFundingFactor(d), loadLpTradingPct(d), loadLpFundingPct(d), loadLpLiquidationPct(d), loadPlatformCashbackBps(d), loadPlatformFeeDiscountBps(d), loadPlatformGameRevenueBps(d), loadChatConfig(d), loadDropConfig(d), loadGameConfig(d), loadGachaConfig(d), loadBonusConfig(d), loadMarkClampBps(d), loadWithdrawalAutoProcess(d)]);
     await loadLiveKnobs(db);
     setInterval(() => void loadLiveKnobs(db).catch((e) => app.log.warn(e, 'live-knob refresh failed')), 30_000);
     if (config.realFunds) {

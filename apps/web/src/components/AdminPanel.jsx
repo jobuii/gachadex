@@ -6,6 +6,7 @@ import { ChatAdminView } from './ChatAdminView.jsx';
 import { GamesAdminView } from './GamesAdminView.jsx';
 import { GachaAdminView } from './GachaAdminView.jsx';
 import { AffiliatesView } from './AffiliatesView.jsx';
+import { BonusView } from './BonusView.jsx';
 import { Stat, PnlStat } from './adminStats.jsx';
 
 /**
@@ -694,6 +695,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
         <button className={`admin-tab ${tab === 'games' ? 'active' : ''}`} onClick={() => setTab('games')}>Games</button>
         <button className={`admin-tab ${tab === 'gacha' ? 'active' : ''}`} onClick={() => setTab('gacha')}>Gacha</button>
         <button className={`admin-tab ${tab === 'affiliates' ? 'active' : ''}`} onClick={() => setTab('affiliates')}>Affiliates</button>
+        <button className={`admin-tab ${tab === 'perks' ? 'active' : ''}`} onClick={() => setTab('perks')}>Perks</button>
       </div>
 
       {tab === 'customers' && <CustomersView adminKey={adminKey} onGoToMarket={onGoToMarket} />}
@@ -705,6 +707,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
       {tab === 'gacha' && <GachaAdminView adminKey={adminKey} />}
 
       {tab === 'affiliates' && <AffiliatesView adminKey={adminKey} />}
+      {tab === 'perks' && <BonusView adminKey={adminKey} />}
 
       {tab === 'main' && (
         <>

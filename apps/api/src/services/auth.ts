@@ -8,6 +8,7 @@ import { HttpError } from '../errors.ts';
 import type { Db, Queryer } from '../db/client.ts';
 import { fmtUusdc } from '../money.ts';
 import { assignReferralCode } from './referral.ts';
+import { grantSignupBonus } from './bonus.ts';
 
 /**
  * Sign-In-With-Solana. The wallet signs a server-issued, single-use challenge; we
@@ -267,15 +268,15 @@ async function createSession(
 
 // Takes a Queryer (not just Db) so it can run inside a larger transaction (e.g. affiliate setup) or
 // standalone (login passes the Db, which is a Queryer).
-export async function upsertUser(q: Queryer, pubkey: string): Promise<string> {
-  const id = randomUUID();
+export async function upsertUser(q: Queryer, pubkey: string): Promise<{ id: string; isNew: boolean }> {
+  const newId = randomUUID();
   const ins = await q.query<{ id: string }>(
     `INSERT INTO users(id, solana_pubkey) VALUES($1, $2) ON CONFLICT(solana_pubkey) DO NOTHING RETURNING id`,
-    [id, pubkey],
+    [newId, pubkey],
   );
   if (ins.rows[0]) await assignReferralCode(q, ins.rows[0].id); // give each new account a referral code
   const r = await q.query<{ id: string }>(`SELECT id FROM users WHERE solana_pubkey = $1`, [pubkey]);
-  return r.rows[0].id;
+  return { id: r.rows[0].id, isNew: !!ins.rows[0] }; // isNew ⇒ a genuine new account was just inserted (drives the signup bonus)
 }
 
 // ===========================================================================
@@ -439,9 +440,12 @@ export async function verifyAndLogin(
     scope = 'trade';
     act = pubkey;
   } else {
-    userId = await upsertUser(db, pubkey);
+    const acct = await upsertUser(db, pubkey);
+    userId = acct.id;
     accountPubkey = pubkey;
     scope = 'full';
+    // Signup bonus (docs/bonus-credits-spec.md §2.1) — NEW accounts only; best-effort, no-op while dark/paused.
+    if (acct.isNew) await grantSignupBonus(db, userId).catch(() => {});
   }
   const { sid, refreshToken } = await createSession(db, userId, { scope, delegatePubkey: act ?? null });
   const accessToken = await mintAccessToken(userId, accountPubkey, sid, scope, act);

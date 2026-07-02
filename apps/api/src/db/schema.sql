@@ -904,3 +904,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_resting_user_idem ON resting_orders(user_id
 CREATE UNIQUE INDEX IF NOT EXISTS uq_resting_pos_kind ON resting_orders(position_id, kind) WHERE status='active' AND reduce_only;
 -- the trigger sweep range-scans active orders per market
 CREATE INDEX IF NOT EXISTS idx_resting_active ON resting_orders(market_id, kind, trigger_price_e6) WHERE status='active';
+
+-- Bonus-credit grants (docs/bonus-credits-spec.md). Two sources — 'signup' (flat $ at account creation) and
+-- 'deposit' (% of the first deposit) — on one shared protection layer. One row per (user, type); the grant
+-- MONEY is a SIGNUP_BONUS / DEPOSIT_BONUS ledger entry into USER_COLLATERAL (and BONUS_EXPIRE on claw-back) —
+-- those ledger sums are the authority for the outstanding bonus principal G. This row tracks per-grant
+-- lifecycle: the dormancy anchor (granted_at), how much has been clawed (clawed_e6), and the expiry marker.
+-- Dark until the per-source *_enabled toggles. "credit-origin account" = a row exists here for the user.
+CREATE TABLE IF NOT EXISTS bonus_grants (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id),
+  type          TEXT NOT NULL,                             -- 'signup' | 'deposit'
+  granted_e6    BIGINT NOT NULL,                           -- the original grant (admin "Free Credit" column)
+  clawed_e6     BIGINT NOT NULL DEFAULT 0,                 -- Σ dormancy claw-backs against THIS grant (remaining = granted − clawed)
+  granted_at    TIMESTAMPTZ NOT NULL DEFAULT now(),        -- dormancy age anchor for this grant
+  ref_deposit   TEXT,                                      -- triggering deposit id (deposit-type only; audit)
+  expired_at    TIMESTAMPTZ                                -- set once this grant's residual is fully clawed
+);
+-- one signup bonus AND one (first-deposit) deposit bonus per account; also makes each grant idempotent
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bonus_grant_user_type ON bonus_grants(user_id, type);
+
+-- Per-account bonus flags (the first-withdrawal manual-review hold is per account, not per grant).
+CREATE TABLE IF NOT EXISTS bonus_accounts (
+  user_id                   TEXT PRIMARY KEY REFERENCES users(id),
+  first_withdrawal_reviewed BOOLEAN NOT NULL DEFAULT false            -- operator cleared the first credit-origin withdrawal
+);
+
+-- v1 signup-credit was merged to local master but NEVER enabled (zero rows) — superseded by bonus_grants.
+-- Safe to drop: IF EXISTS is a no-op on prod (never deployed) and on fresh DBs.
+DROP TABLE IF EXISTS signup_credits;

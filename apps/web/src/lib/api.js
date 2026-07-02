@@ -279,6 +279,12 @@ export const adminSetAffiliateDefaults = (body, adminKey) => adminReq('/admin/af
 export const adminGetMods = (adminKey) => adminGet('/admin/chat/mods', adminKey);
 export const adminSetMod = (userId, action, adminKey) => adminReq(`/admin/chat/mods/${userId}`, adminKey, { action });
 export const adminGetChatUsers = (adminKey) => adminGet('/admin/chat/users', adminKey); // { users: [{handle, pubkey, messages, lastAt, isMod}] }
+
+// Perks: bonus credits (docs/bonus-credits-spec.md). { config, budgetE6, feeRevenueE6, totalIssuedE6, signupIssuedE6, depositIssuedE6, activeGrants, signups24h, reviewQueue }
+export const adminGetBonuses = (adminKey) => adminGet('/admin/perks/bonuses', adminKey);
+export const adminSetBonusConfig = (body, adminKey) => adminReq('/admin/perks/bonuses/config', adminKey, body);
+export const adminFundCreditBudget = (amountUsd, adminKey) => adminReq('/admin/perks/bonuses/fund', adminKey, { amountUsd });
+export const adminClearBonusReview = (userId, adminKey) => adminReq(`/admin/perks/bonuses/review/${userId}`, adminKey);
 // Chat admin view: live action-bar thresholds + DROP config/pot bucket.
 export const adminGetChatThresholds = (adminKey) => adminGet('/admin/chat/thresholds', adminKey);
 export const adminSetChatThresholds = (body, adminKey) => adminReq('/admin/chat/thresholds', adminKey, body);

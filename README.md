@@ -45,6 +45,15 @@ chat & social layer** (reactions, rank badges, presence, moderation, and a **DRO
   redeeming pays both sides a play-USDC bonus. Operators can give KOL/affiliate codes a **cashback %**
   (a cut of their referees' trading fees, paid as real USDC) + a **fee-discount %** on their own trades —
   per code, or as a **platform-wide default** applied to every code.
+- **Free signup credit** *(operator-configurable; **dark by default**)* — an operator-set amount of free,
+  **tradeable but non-withdrawable** USDC granted on a new customer's **first deposit**. The principal is
+  locked forever (a floor at the one withdrawal chokepoint); only *winnings* cash out, and only after the
+  customer deposits ≥ a wager minimum and trades ≥ a wager volume. Loss-prevention: non-withdrawable
+  principal · wagering gate · **dormancy expiry** (unused credit is clawed back after N days; active traders
+  keep it) · **manual review** on the first credit-origin withdrawal · **velocity auto-freeze** (grants pause
+  + the admin is flagged if new accounts spike past a daily cap). Funded from a dedicated `CREDIT_BUDGET`
+  topped up from earned fees; the budget balance is the hard cap. Runs entirely off the custodial ledger.
+  See [`docs/signup-credit-spec.md`](docs/signup-credit-spec.md); enabled by `signup_credit_enabled`.
 - **Chat & socialize** — a live chat rail with emoji reactions, leaderboard **rank badges**, an
   online-presence count, and **BIG BET / BIG WIN** action bars that broadcast notable trades; moderated
   (mods + operator can delete / mute / ban).
@@ -591,7 +600,7 @@ applied on boot (`db/migrate.ts`).
 | `GET /lp/pool` · `GET /lp/position` · `POST /lp/deposit` · `POST /lp/withdraw` | mixed | LP pool state + provide/withdraw liquidity |
 | `GET /leaderboard` · `GET /referral/me` · `POST /referral/redeem` | mixed | Leaderboard (public, optional viewer); referral code + redeem |
 | `GET /wallet/deposit-address` · `POST /wallet/withdraw/nonce` · `POST /wallet/withdraw` · `GET /wallet/transactions` | yes | Real-funds custody: deposit address, withdraw (wallet step-up), wallet history |
-| `/admin/markets/:id/price` · `/admin/treasury` · `/admin/insurance/*` · `/admin/custody-limits` · `/admin/withdrawals/*` · `/admin/freeze` · `/admin/customers` · `/admin/customers/:id/{positions,history}` · `/admin/chat/*` · `GET/POST /admin/affiliates` · live knobs `/admin/{fee,liq-fee,funding-factor,mark-clamp,withdrawal-auto-process}` · `/admin/{restrictions,mark-guards}` | admin key | Operator ops (manual pricing always; custody ops under real funds) + Customers / CHAT / Affiliates views, the live-tunable engine knobs, and the price-confidence / mark-guard panels — see [docs/ops-runbook.md](docs/ops-runbook.md) |
+| `/admin/markets/:id/price` · `/admin/treasury` · `/admin/insurance/*` · `/admin/custody-limits` · `/admin/withdrawals/*` · `/admin/freeze` · `/admin/customers` · `/admin/customers/:id/{positions,history}` · `/admin/chat/*` · `GET/POST /admin/affiliates` · `/admin/perks/signup-credit{,/config,/fund,/review/:userId}` · live knobs `/admin/{fee,liq-fee,funding-factor,mark-clamp,withdrawal-auto-process}` · `/admin/{restrictions,mark-guards}` | admin key | Operator ops (manual pricing always; custody ops under real funds) + Customers / CHAT / Affiliates / **Perks** (free signup credit) views, the live-tunable engine knobs, and the price-confidence / mark-guard panels — see [docs/ops-runbook.md](docs/ops-runbook.md) |
 | `GET /chat` · `POST /chat` · `/chat/messages/:id/react` · `/chat/ranks` · `/chat/profile/:id` · `GET /chat/drop/pot` · `POST /chat/drop/tip` · mod routes | mixed | Live chat: read/post, reactions, rank map, profile card, DROP pot tips (real USDC), mod actions |
 | `POST /webhooks/scrydex` | HMAC | Scrydex push re-pricing (Stripe-style `t=,v1=` signature over the raw body); active only under `ORACLE_PRIMARY=scrydex` |
 | `GET /health` | public | Health check |
@@ -717,7 +726,7 @@ test file: `cd apps/api && npx tsx --test src/services/<name>.test.ts`.
 - **A live-tunable operator knob** uses `liveKnob(settingKey, default, validate)` (`services/live-knob.ts`):
   the config value is the default, an operator override in the `settings` table overlays it, and it's
   cached for synchronous hot-path reads (boot-loaded + refreshed ~30s in `index.ts`). Surface it in the
-  admin panel. Examples: `services/fees.ts`, `chat-config.ts`, `drop-config.ts`.
+  admin panel. Examples: `services/fees.ts`, `chat-config.ts`, `drop-config.ts`, `signup-credit-config.ts`.
 - **Pushing to the client over WebSocket** is `publish(channel, type, data)` (`services/bus.ts`); the WS
   hub (`plugins/ws.ts`) forwards to subscribers. Public channels are `mark|stats|oi|funding:{marketId}`
   and `chat`; private channels `positions|orders|balance|liquidations|lp:{userId}` require an authed

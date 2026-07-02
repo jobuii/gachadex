@@ -16,6 +16,8 @@ export interface CustomerRow {
   depositAddress: string | null;
   nftCustodyAddress: string | null; // per-user Classic-Gacha NFT custody wallet (derived; holds CC NFTs + buyback USDC)
   goldBalance: string; // live spendable Gold balance (the gold_balances cache; whole Gold)
+  freeCreditE6: string; // total bonus credit received across both sources (docs/bonus-credits-spec.md; 0 if none)
+  creditRemainingE6: string; // still-locked credit = min(outstanding grant, free collateral)
   freeE6: string; // available collateral (USER_COLLATERAL)
   lpE6: string; // current value of their LP-pool stake (shares marked to pool NAV)
   lockedE6: string; // margin locked in open positions (USER_POSITION_MARGIN)
@@ -85,6 +87,8 @@ export async function listCustomers(
     open_positions: number;
     gold_balance: string;
     referrals: number;
+    free_credit_e6: string;
+    credit_remaining_e6: string;
   }>(
     // qty/price are 1e6 fixed-point, so notional (uUSDC) = Σ(qty*price)/1e6; numeric avoids bigint overflow.
     `WITH vol AS (
@@ -139,6 +143,17 @@ export async function listCustomers(
      -- how many users each customer referred (referred_by points at the referrer; indexed by idx_users_referred_by)
      ref AS (
        SELECT referred_by, COUNT(*)::int AS referrals FROM users WHERE referred_by IS NOT NULL GROUP BY referred_by
+     ),
+     -- bonus credits (docs/bonus-credits-spec.md): total received across both sources (Σ granted_e6), + the
+     -- still-outstanding bonus (Σ SIGNUP_BONUS + DEPOSIT_BONUS − BONUS_EXPIRE on collateral); "Remaining"
+     -- clamps that to free collateral
+     credit AS (
+       SELECT bg.user_id, SUM(bg.granted_e6) AS free_credit,
+              COALESCE((SELECT SUM(le.amount_uusdc) FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
+                        WHERE a.user_id = bg.user_id AND a.type = 'USER_COLLATERAL'
+                          AND le.reason IN ('SIGNUP_BONUS','DEPOSIT_BONUS','BONUS_EXPIRE')), 0) AS outstanding_g
+       FROM bonus_grants bg
+       GROUP BY bg.user_id
      )
      SELECT u.id, u.solana_pubkey, u.display_name, u.status,
             u.created_at::text AS joined_at,
@@ -158,7 +173,9 @@ export async function listCustomers(
             COALESCE(wd.pending_e6, 0)::text AS pending_e6,
             COALESCE(op.open_positions, 0)::int AS open_positions,
             COALESCE(gold.gold_balance, 0)::text AS gold_balance,
-            COALESCE(ref.referrals, 0)::int AS referrals
+            COALESCE(ref.referrals, 0)::int AS referrals,
+            COALESCE(credit.free_credit, 0)::text AS free_credit_e6,
+            LEAST(GREATEST(COALESCE(credit.outstanding_g, 0), 0), GREATEST(COALESCE(coll.amount_uusdc, 0), 0))::text AS credit_remaining_e6
      FROM users u
      LEFT JOIN deposit_addresses da ON da.user_id = u.id
      LEFT JOIN accounts ca ON ca.user_id = u.id AND ca.type = 'USER_COLLATERAL'
@@ -174,6 +191,7 @@ export async function listCustomers(
      LEFT JOIN lp ON lp.user_id = u.id
      LEFT JOIN gold ON gold.user_id = u.id
      LEFT JOIN ref ON ref.referred_by = u.id
+     LEFT JOIN credit ON credit.user_id = u.id
      WHERE ($3::text IS NULL OR u.solana_pubkey ILIKE '%' || $3 || '%')
      ORDER BY ${orderBy} DESC NULLS LAST, u.created_at DESC
      LIMIT $1 OFFSET $2`,
@@ -197,6 +215,8 @@ export async function listCustomers(
       depositAddress: x.deposit_address,
       nftCustodyAddress: nftCustodyAddr(x.derivation_index),
       goldBalance: x.gold_balance,
+      freeCreditE6: x.free_credit_e6,
+      creditRemainingE6: x.credit_remaining_e6,
       freeE6: x.free_e6,
       lpE6: lpShareValue(BigInt(x.lp_shares), lpNav, lpTotalShares).toString(),
       lockedE6: x.locked_e6,

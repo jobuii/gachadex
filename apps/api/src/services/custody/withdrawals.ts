@@ -8,6 +8,7 @@ import { usdc } from '../../money.ts';
 import type { CustodyLog } from './deposits.ts';
 import { withdrawalsFrozen } from './treasury.ts';
 import { getWithdrawalAutoProcess } from '../withdrawal-config.ts';
+import { bonusState, floorWithdrawable, needsFirstWithdrawalReview } from '../bonus.ts';
 
 /**
  * Withdrawal pipeline (custody P2). Lifecycle: requested -> signed -> broadcast -> confirmed,
@@ -168,7 +169,11 @@ export async function requestWithdrawal(
       `SELECT amount_uusdc FROM balances WHERE account_id = $1 FOR UPDATE`,
       [coll],
     );
-    const available = lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n;
+    const lockedBalance = lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n;
+    // Bonus-credit floor (docs/bonus-credits-spec.md §3): for a normal account this == lockedBalance; for a
+    // bonus account it excludes the non-withdrawable grant principal (and winnings, pre-wagering). The single
+    // withdrawal cap; the locked balance read above keeps the check-then-debit atomic.
+    const available = floorWithdrawable(lockedBalance, await bonusState(q, userId));
     if (available < input.amountE6) throw new HttpError(400, 'insufficient balance');
 
     const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
@@ -245,7 +250,10 @@ export async function processWithdrawal(db: Db, chain: WithdrawChain, id: string
 /** Whether a freshly-requested withdrawal of `amountE6` will be auto-processed by the worker: the admin
  *  toggle is ON, it's within the auto-approve cap, and withdrawals aren't frozen (a PoR breach pauses even
  *  auto-approval). Drives the client's request-confirmation message. */
-export async function willAutoApprove(db: Db, amountE6: bigint): Promise<boolean> {
+export async function willAutoApprove(db: Db, amountE6: bigint, userId?: string): Promise<boolean> {
+  // A bonus-origin first withdrawal is held for manual review (bonus-credits §3d) — mirror processAllRequested's
+  // skip here so the client is told "follows approval", not "on its way".
+  if (userId && (await needsFirstWithdrawalReview(db, userId))) return false;
   return (
     getWithdrawalAutoProcess() &&
     amountE6 <= usdc(getLimits().withdrawalAutoApproveMaxUsd) &&
@@ -259,12 +267,14 @@ export async function processAllRequested(
   log?: CustodyLog,
 ): Promise<{ confirmed: number }> {
   if (await withdrawalsFrozen(db)) return { confirmed: 0 };
-  const r = await db.query<{ id: string }>(
-    `SELECT id FROM withdrawals WHERE status = 'requested' AND amount_e6 <= $1 ORDER BY requested_at`,
+  const r = await db.query<{ id: string; user_id: string }>(
+    `SELECT id, user_id FROM withdrawals WHERE status = 'requested' AND amount_e6 <= $1 ORDER BY requested_at`,
     [usdc(getLimits().withdrawalAutoApproveMaxUsd).toString()],
   );
   let confirmed = 0;
-  for (const { id } of r.rows) {
+  for (const { id, user_id } of r.rows) {
+    // Hold a bonus-origin account's FIRST withdrawal for manual review (bonus-credits spec §3d) — never auto-pay it.
+    if (await needsFirstWithdrawalReview(db, user_id)) continue;
     try {
       await processWithdrawal(db, chain, id);
       confirmed++;
