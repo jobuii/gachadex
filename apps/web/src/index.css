@@ -1005,6 +1005,8 @@ button { border-radius: var(--pill); }
 /* PnL share card modal */
 .modal-content.pnl-share { max-width: min(720px, 94vw); padding: 1rem; }
 .pnl-share-canvas { width: 100%; height: auto; display: block; border-radius: 8px; }
+.pnl-share-toggle { display: flex; align-items: center; gap: 0.45rem; justify-content: center; margin-top: 0.7rem; font-size: 0.78rem; color: var(--muted); cursor: pointer; user-select: none; }
+.pnl-share-toggle input { cursor: pointer; }
 .pnl-share-actions { display: flex; gap: 0.6rem; justify-content: center; margin-top: 0.9rem; }
 /* the Copy / Download / Close buttons were the tiny .sm size — make them readable */
 .pnl-share-actions .btn-secondary.sm,

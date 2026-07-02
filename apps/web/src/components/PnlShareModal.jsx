@@ -78,7 +78,9 @@ function drawTrendChart(ctx, x, y, w, h, gain) {
   stroke(4, 1, 0);     // sharp line on top
 }
 
-function drawCard(canvas, d, bgImg) {
+// hideAmounts = "percent-only" share mode (option B): drop the INVESTED / POSITION / PNL panels entirely so the
+// card exposes no wager size or $ profit — just the name, side·leverage, the return %, and the trend.
+function drawCard(canvas, d, bgImg, hideAmounts = false) {
   const ctx = canvas.getContext('2d');
   const pos = d.side === 'long';
   const gain = d.roePct;
@@ -126,7 +128,7 @@ function drawCard(canvas, d, bgImg) {
   const sx = PAD;
   const sy = 108;
   const sw = W - PAD * 2;
-  const sh = 480;
+  const sh = hideAmounts ? 578 : 480; // percent-only mode has no bottom panels → extend the screen to fill the space
   roundRect(ctx, sx, sy, sw, sh, 6);
   ctx.fillStyle = 'rgba(8,8,16,0.34)'; // semi-transparent so the full-bleed card art shows through
   ctx.fill();
@@ -154,30 +156,38 @@ function drawCard(canvas, d, bgImg) {
   ctx.font = "700 92px 'Space Grotesk', sans-serif";
   ctx.fillStyle = accent;
   ctx.fillText(formatPct(gain, 0), tx - 4, sy + 150);
+  if (hideAmounts) {
+    // no PNL panel in percent-only mode → label the hero number so the bare % reads clearly
+    ctx.font = "600 20px 'Space Grotesk', sans-serif";
+    ctx.fillStyle = C.muted;
+    ctx.fillText('RETURN', tx, sy + 215);
+  }
 
   // stylized trend chart in the lower screen (matches the hero terminal line)
   drawTrendChart(ctx, tx, sy + 250, sw - 72, sh - 300, gain);
 
-  // ---- bottom panels ----
-  const py = sy + sh + 20;
-  const ph = 78;
-  const gap = 16;
-  const pw = (sw - gap * 2) / 3;
-  const panel = (i, label, value, valColor, bg, fg) => {
-    const px = sx + i * (pw + gap);
-    roundRect(ctx, px, py, pw, ph, 6);
-    ctx.fillStyle = bg;
-    ctx.fill();
-    ctx.font = "600 16px 'Space Grotesk', sans-serif";
-    ctx.fillStyle = fg === C.cream ? 'rgba(243,237,224,0.6)' : 'rgba(21,16,10,0.6)';
-    ctx.fillText(label, px + 18, py + 27);
-    ctx.font = "700 26px 'Space Grotesk', sans-serif";
-    ctx.fillStyle = valColor || fg;
-    ctx.fillText(value, px + 18, py + 57);
-  };
-  panel(0, 'INVESTED', d.invested, C.dark, C.gold, C.dark);
-  panel(1, 'POSITION', d.position, C.dark, C.cream, C.dark);
-  panel(2, 'PNL', d.pnl, gain >= 0 ? '#0a6b2e' : '#9a1414', C.gold, C.dark);
+  // ---- bottom panels (INVESTED / POSITION / PNL) — omitted entirely in percent-only mode ----
+  if (!hideAmounts) {
+    const py = sy + sh + 20;
+    const ph = 78;
+    const gap = 16;
+    const pw = (sw - gap * 2) / 3;
+    const panel = (i, label, value, valColor, bg, fg) => {
+      const px = sx + i * (pw + gap);
+      roundRect(ctx, px, py, pw, ph, 6);
+      ctx.fillStyle = bg;
+      ctx.fill();
+      ctx.font = "600 16px 'Space Grotesk', sans-serif";
+      ctx.fillStyle = fg === C.cream ? 'rgba(243,237,224,0.6)' : 'rgba(21,16,10,0.6)';
+      ctx.fillText(label, px + 18, py + 27);
+      ctx.font = "700 26px 'Space Grotesk', sans-serif";
+      ctx.fillStyle = valColor || fg;
+      ctx.fillText(value, px + 18, py + 57);
+    };
+    panel(0, 'INVESTED', d.invested, C.dark, C.gold, C.dark);
+    panel(1, 'POSITION', d.position, C.dark, C.cream, C.dark);
+    panel(2, 'PNL', d.pnl, gain >= 0 ? '#0a6b2e' : '#9a1414', C.gold, C.dark);
+  }
 
   // ---- footer ----
   ctx.font = "600 17px 'Space Grotesk', sans-serif";
@@ -205,6 +215,8 @@ export function PnlShareModal({ position, onClose }) {
   const canvasRef = useRef(null);
   const [status, setStatus] = useState(''); // '', 'copied', 'copyfail'
   const [ready, setReady] = useState(false);
+  const [hideAmounts, setHideAmounts] = useState(false); // "percent-only" share mode (option B)
+  const [card, setCard] = useState(null); // { data, bgImg } — loaded once; redrawn on the hide toggle without refetch
 
   useEffect(() => {
     let alive = true;
@@ -247,14 +259,20 @@ export function PnlShareModal({ position, onClose }) {
         document.fonts.load("600 16px 'Space Grotesk'"),
         document.fonts.load("16px 'Space Grotesk'"),
       ]).catch(() => {});
-      if (!alive || !canvasRef.current) return;
-      drawCard(canvasRef.current, data, bgImg);
-      setReady(true);
+      if (!alive) return;
+      setCard({ data, bgImg }); // drawing happens in the redraw effect below (so the hide toggle needn't refetch)
     })();
     return () => {
       alive = false;
     };
   }, [position]);
+
+  // (Re)draw whenever the loaded card or the hide-$ toggle changes — toggling never refetches.
+  useEffect(() => {
+    if (!card || !canvasRef.current) return;
+    drawCard(canvasRef.current, card.data, card.bgImg, hideAmounts);
+    setReady(true);
+  }, [card, hideAmounts]);
 
   const toBlob = () => new Promise((res) => canvasRef.current.toBlob(res, 'image/png'));
 
@@ -283,6 +301,10 @@ export function PnlShareModal({ position, onClose }) {
     <div className="modal" onClick={onClose}>
       <div className="modal-content pnl-share" onClick={(e) => e.stopPropagation()}>
         <canvas ref={canvasRef} width={W} height={H} className="pnl-share-canvas" />
+        <label className="pnl-share-toggle">
+          <input type="checkbox" checked={hideAmounts} onChange={(e) => setHideAmounts(e.target.checked)} />
+          Hide $ amounts — share the % only
+        </label>
         <div className="pnl-share-actions">
           <button className="btn-secondary sm" disabled={!ready} onClick={onCopy}>
             {status === 'copied' ? 'Copied!' : status === 'copyfail' ? 'Copy failed — Download' : 'Copy image'}
