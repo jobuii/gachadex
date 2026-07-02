@@ -101,15 +101,15 @@ const feeRev = async (): Promise<bigint> =>
 const noWait = { sleepMs: async () => {} };
 const PRICE = usdc(50);
 
-test('extractCard: grade number falls back to "The Grade" when GradeNum is absent (PSA 10 / CGC 8.5, not bare "PSA")', () => {
+test('extractCard: the reveal shows the FULL grade — "<company> <The Grade>" verbatim (not shortened)', () => {
   const reveal = (attrs: Array<{ trait_type: string; value: string }>) =>
     ({ success: true, nft_address: 'M1', rarity: 'rare', nftWon: { content: { metadata: { name: 'Card', attributes: attrs }, links: { image: 'x' } } } }) as never;
-  // GradeNum present → used directly (unchanged behaviour)
+  // 'The Grade' present → show the WHOLE descriptor (e.g. "PSA GEM MINT 10"), NOT the short "PSA 10" (that's
+  // the Top-cards grid's job, via toLobbyCard). The reveal + "Your pulls" want the full grade.
+  assert.equal(extractCard(reveal([{ trait_type: 'Grading Company', value: 'PSA' }, { trait_type: 'The Grade', value: 'GEM MINT 10' }])).grade, 'PSA GEM MINT 10');
+  assert.equal(extractCard(reveal([{ trait_type: 'Grading Company', value: 'CGC' }, { trait_type: 'The Grade', value: 'GEM MINT 8.5' }])).grade, 'CGC GEM MINT 8.5');
+  // no full descriptor → fall back to "<company> <number>" from GradeNum, so it's never blank
   assert.equal(extractCard(reveal([{ trait_type: 'Grading Company', value: 'PSA' }, { trait_type: 'GradeNum', value: '10' }])).grade, 'PSA 10');
-  // only 'The Grade' (e.g. CC's "GEM-MT 10") → parse the number → "PSA 10" (was a bare "PSA" before the fix)
-  assert.equal(extractCard(reveal([{ trait_type: 'Grading Company', value: 'PSA' }, { trait_type: 'The Grade', value: 'GEM-MT 10' }])).grade, 'PSA 10');
-  // decimal grade out of 'The Grade'
-  assert.equal(extractCard(reveal([{ trait_type: 'Grading Company', value: 'CGC' }, { trait_type: 'The Grade', value: 'GEM MINT 8.5' }])).grade, 'CGC 8.5');
   // no grade attributes at all → null (no crash)
   assert.equal(extractCard(reveal([])).grade, null);
 });

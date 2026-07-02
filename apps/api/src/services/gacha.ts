@@ -11,7 +11,7 @@ import { openPosition } from './engine.ts';
 import { lastMarkE6 } from './marks.ts';
 import { gachaConfig, gachaMarkupE6 } from './gacha-config.ts';
 import type { GachaChain } from './custody/gacha-chain.ts';
-import { defaultCcClient, ccVerifyUrl, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
+import { defaultCcClient, ccVerifyUrl, attrByTrait, gradeFull, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
 import { getAssetTransferInfo, getAssetImage } from './das.ts';
 import { settleSoldPrize, accrueGachaAffiliateShare, type SellBackResult } from './gacha-settle.ts';
 import { emitPackPullEvent, type PackPullInput } from './chat.ts';
@@ -91,28 +91,21 @@ async function matchMarket(q: Queryer, cardName: string | null): Promise<string 
 }
 
 // ── reveal-metadata extraction (the won card's name/grade/value come from CC's openPack response) ──
-function attr(reveal: CcOpenResult, key: string): string | null {
-  const hit = (reveal.nftWon?.content?.metadata?.attributes ?? []).find((x) => (x.trait_type ?? '').toLowerCase() === key.toLowerCase());
-  return hit && hit.value != null ? String(hit.value) : null;
-}
 export function extractCard(reveal: CcOpenResult): {
   mint: string; name: string | null; grade: string | null; imageUrl: string | null; insuredValueE6: string; year: string | null; setName: string | null; rarity: string | null;
 } {
-  const company = attr(reveal, 'Grading Company');
-  // The grade number is on 'GradeNum' for some cards, but many CC cards only carry 'The Grade' (e.g.
-  // "GEM-MT 10", "GEM MINT 10", "GEM-MT 8.5") — pull the numeric grade out of that as a fallback so we
-  // don't drop it and render a bare "PSA" instead of "PSA 10".
-  const num = attr(reveal, 'GradeNum') ?? attr(reveal, 'Grade') ?? attr(reveal, 'The Grade')?.match(/\d+(\.\d+)?/)?.[0] ?? null;
-  const grade = company ? `${company} ${num ?? ''}`.trim() : num;
-  const insured = Number(attr(reveal, 'insured value') ?? attr(reveal, 'Insured Value') ?? 0);
+  const attrs = reveal.nftWon?.content?.metadata?.attributes;
+  const insured = Number(attrByTrait(attrs, 'insured value') ?? attrByTrait(attrs, 'Insured Value') ?? 0);
   return {
     mint: reveal.nft_address ?? '',
     name: reveal.nftWon?.content?.metadata?.name ?? null,
-    grade: grade || null,
+    // FULL grade (e.g. "PSA GEM MINT 10") — the reveal + the owned card in "Your pulls" show the whole thing;
+    // only the compact Top-cards grid uses the short "PSA 10". Shared grade helpers keep both paths in step.
+    grade: gradeFull(attrs),
     imageUrl: reveal.nftWon?.content?.links?.image ?? null,
     insuredValueE6: usdc(Number.isFinite(insured) ? insured : 0).toString(),
-    year: attr(reveal, 'Year'),
-    setName: attr(reveal, 'Set'),
+    year: attrByTrait(attrs, 'Year'),
+    setName: attrByTrait(attrs, 'Set'),
     rarity: reveal.rarity ?? null,
   };
 }
