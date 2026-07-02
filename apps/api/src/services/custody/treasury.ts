@@ -100,10 +100,15 @@ export interface TreasuryState {
   shortfallE6: bigint; // pending the hot wallet can't cover (operator: top up from cold)
   insuranceE6: bigint; // current insurance-buffer balance (a house claim, not user-owed)
   feeRevenueE6: bigint; // accumulated platform trading-fee earnings (the house's cut, net of insurance moves)
+  gachaBudgetE6: bigint; // GACHA_REWARDS_BUDGET — house money earmarked for gold-pack rewards (funded from fees)
+  bufferE6: bigint; // house cushion = feeRevenue + insurance + gachaBudget; absorbs a shortfall before any customer
+  userOwedE6: bigint; // what we actually owe customers = liabilities − bufferE6 (collateral + margin + LP + any user pool)
   fundingCollectedE6: bigint; // GROSS funding customers paid in to the house (inbound LP_POOL funding legs only)
   fundingRevenueE6: bigint; // NET funding the house kept (LP_POOL funding inflow − outflow); = collected − paid out
   surplusE6: bigint; // onchain − liabilities: unrecorded house funds the operator can allocate to insurance
-  breached: boolean; // proof of reserves failing RIGHT NOW (the frozen flag outlives a breach)
+  userSurplusE6: bigint; // onchain − userOwed: margin over what we owe customers (negative ⇒ withdrawals at risk)
+  breached: boolean; // onchain < TOTAL liabilities — DISPLAY ONLY (red readout); does NOT freeze on its own
+  userReservesBreached: boolean; // onchain < userOwed — the WITHDRAWAL-FREEZE trigger (customer funds under-reserved)
   frozen: string | null; // current freeze reason, if any
 }
 
@@ -114,7 +119,7 @@ export interface TreasuryReport extends TreasuryState {
 /** Gather the treasury/PoR numbers without acting on them. */
 export async function treasuryState(db: Db, chain: TreasuryChain): Promise<TreasuryState> {
   // The reads are mutually independent — gather them concurrently (the chain RPCs dominate).
-  const [ledgerBal, [hot, cold], unswept, pendingRes, frozen, insuranceE6, feeRevenueE6, funding] = await Promise.all([
+  const [ledgerBal, [hot, cold], unswept, pendingRes, frozen, insuranceE6, feeRevenueE6, gachaBudgetE6, funding] = await Promise.all([
     getOrCreateSystemAccount(db, 'TREASURY_USDC').then((acct) => getBalance(db, acct)),
     Promise.all([chain.hotBalance(), chain.coldBalance()]),
     // Credited-but-unswept deposits still sit on their (ours, HD-derived) deposit addresses —
@@ -131,6 +136,7 @@ export async function treasuryState(db: Db, chain: TreasuryChain): Promise<Treas
     withdrawalsFrozen(db),
     getOrCreateSystemAccount(db, 'INSURANCE_FUND').then((acct) => getBalance(db, acct)),
     getOrCreateSystemAccount(db, 'FEE_REVENUE').then((acct) => getBalance(db, acct)),
+    getOrCreateSystemAccount(db, 'GACHA_REWARDS_BUDGET').then((acct) => getBalance(db, acct)),
     // Funding from FUNDING ledger legs hitting LP_POOL (the funding counterparty): GROSS = inbound
     // (customers paying in, positive legs); NET = gross minus outbound (funding the house paid back out).
     getOrCreateSystemAccount(db, 'LP_POOL').then((acct) =>
@@ -149,6 +155,12 @@ export async function treasuryState(db: Db, chain: TreasuryChain): Promise<Treas
   const unsweptE6 = BigInt(unswept.rows[0].total);
   const onchainE6 = hot + cold + unsweptE6;
   const pendingE6 = BigInt(pendingRes.rows[0].total);
+  // House buffer = the platform's OWN claims — earned fees + insurance + the gacha-rewards budget. These absorb
+  // a shortfall before any customer is touched, so they are NOT part of what we owe customers.
+  const bufferE6 = feeRevenueE6 + insuranceE6 + gachaBudgetE6;
+  // What we actually owe customers = every claim minus that house buffer (collateral + open-trade margin + LP
+  // stake, and any future user-side pool). This is the figure the withdrawal freeze protects — not the total.
+  const userOwedE6 = liabilityE6 - bufferE6;
   return {
     liabilityE6,
     hotE6: hot,
@@ -159,10 +171,15 @@ export async function treasuryState(db: Db, chain: TreasuryChain): Promise<Treas
     shortfallE6: pendingE6 > hot ? pendingE6 - hot : 0n,
     insuranceE6,
     feeRevenueE6,
+    gachaBudgetE6,
+    bufferE6,
+    userOwedE6,
     fundingCollectedE6: funding.gross,
     fundingRevenueE6: funding.net,
     surplusE6: onchainE6 - liabilityE6,
+    userSurplusE6: onchainE6 - userOwedE6,
     breached: onchainE6 < liabilityE6,
+    userReservesBreached: onchainE6 < userOwedE6,
     frozen,
   };
 }
@@ -191,29 +208,39 @@ export async function treasuryPass(db: Db, chain: TreasuryChain, log?: CustodyLo
   const s = await treasuryState(db, chain);
 
   // --- proof of reserves -------------------------------------------------------------------
-  if (s.breached) {
+  // FREEZE only when on-chain custody can't cover what we OWE CUSTOMERS (collateral + margin + LP). The house
+  // buffer (fees + insurance + gacha budget) absorbs a shortfall before any customer is touched, so a gap that
+  // only eats into the buffer is flagged red in admin (s.breached) but must NOT freeze customer withdrawals.
+  if (s.userReservesBreached) {
     const reason =
       `proof-of-reserves breach: on-chain custody ${s.onchainE6} uUSDC ` +
-      `(hot ${s.hotE6} + cold ${s.coldE6} + unswept ${s.unsweptE6}) < liabilities ${s.liabilityE6} uUSDC`;
-    // A MATERIAL breach (deficit > treasuryBreachMaterialBps of liabilities) is a real shortfall → freeze NOW.
-    // A small breach is most likely a transient measurement blip (e.g. RPC lag at a deposit-sweep hand-off, where a
-    // just-swept deposit dropped out of `unswept` before the hot read caught up) → only freeze if it PERSISTS past
-    // the grace window, so a momentary blip that clears by the next pass never trips a global freeze.
-    const deficit = s.liabilityE6 - s.onchainE6; // > 0 here (breached)
-    const material = s.liabilityE6 > 0n && deficit * 10000n > s.liabilityE6 * BigInt(config.treasuryBreachMaterialBps);
+      `(hot ${s.hotE6} + cold ${s.coldE6} + unswept ${s.unsweptE6}) < customer-owed ${s.userOwedE6} uUSDC`;
+    // A MATERIAL breach (deficit > treasuryBreachMaterialBps of what we owe customers) is a real shortfall →
+    // freeze NOW. A small breach is most likely a transient measurement blip (e.g. RPC lag at a deposit-sweep
+    // hand-off) → only freeze if it PERSISTS past the grace window, so a momentary blip never trips a freeze.
+    const deficit = s.userOwedE6 - s.onchainE6; // > 0 here (customer funds under-reserved)
+    const material = s.userOwedE6 > 0n && deficit * 10000n > s.userOwedE6 * BigInt(config.treasuryBreachMaterialBps);
     const t = now();
     const marker = await getBreachMarker(db);
     const start = marker?.start ?? t;
     await setBreachMarker(db, { start, solventPasses: 0 }); // a breached pass zeroes the solvent counter — a brief solvent flicker can't reset the episode
     if (material || t - start >= config.treasuryBreachGraceMs) {
       await freezeWithdrawals(db, reason);
-      log?.error({ onchainE6: s.onchainE6.toString(), liabilityE6: s.liabilityE6.toString(), material }, reason);
+      log?.error({ onchainE6: s.onchainE6.toString(), userOwedE6: s.userOwedE6.toString(), material }, reason);
     } else {
       log?.error({ deficitE6: deficit.toString(), sinceMs: start }, `${reason} — within grace, not freezing yet`);
     }
   } else {
-    // solvent: end the breach episode only after enough CONSECUTIVE solvent passes, so a flickering sub-material
-    // breach can't dodge the freeze by intermittently reading solvent. (A set freeze flag still needs a MANUAL unfreeze.)
+    // Customer-owed funds ARE fully reserved. If TOTAL claims still exceed custody, the house buffer is
+    // covering the gap — surface it (s.breached drives the red admin readout) but never freeze on it.
+    if (s.breached) {
+      log?.error(
+        { onchainE6: s.onchainE6.toString(), liabilityE6: s.liabilityE6.toString(), userOwedE6: s.userOwedE6.toString(), bufferE6: s.bufferE6.toString() },
+        'reserves below TOTAL claims but customer-owed funds fully covered (house buffer absorbing the gap) — flagged, NOT freezing',
+      );
+    }
+    // solvent for customers: end the breach episode only after enough CONSECUTIVE solvent passes, so a flickering
+    // sub-material breach can't dodge the freeze by intermittently reading solvent. (A set freeze still needs a MANUAL unfreeze.)
     const marker = await getBreachMarker(db);
     if (marker) {
       const solventPasses = marker.solventPasses + 1;

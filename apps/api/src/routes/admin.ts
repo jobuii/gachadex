@@ -118,9 +118,14 @@ export function adminRoutes(chains: AdminChains) {
         fundingCollectedE6: s.fundingCollectedE6.toString(), // gross funding customers paid in
         fundingRevenueE6: s.fundingRevenueE6.toString(), // net funding the house kept
         surplusE6: s.surplusE6.toString(), // allocatable to insurance (onchain − liabilities)
+        gachaBudgetE6: s.gachaBudgetE6.toString(), // gacha-rewards budget (part of the house buffer)
+        bufferE6: s.bufferE6.toString(), // house cushion = feeRevenue + insurance + gachaBudget
+        userOwedE6: s.userOwedE6.toString(), // what we owe customers = liabilities − buffer (freeze gates on this)
+        userSurplusE6: s.userSurplusE6.toString(), // onchain − userOwed (negative ⇒ customer funds under-reserved)
         freeE6: cust.freeE6.toString(), // total customer free collateral
         lockedE6: cust.lockedE6.toString(), // total customer margin locked in open positions
-        breached: s.breached,
+        breached: s.breached, // onchain < TOTAL claims — red display flag (does NOT freeze on its own)
+        userReservesBreached: s.userReservesBreached, // onchain < userOwed — the actual freeze condition
         frozen: s.frozen,
       };
     });
