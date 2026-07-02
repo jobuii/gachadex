@@ -1275,3 +1275,25 @@ test('autoSweepCustodyLeftovers: OFF by default (no-op); ON sweeps the leftover 
     config.gachaAutoSweepEnabled = false;
   }
 });
+
+test('gachaMonitoring: a referred sale surfaces the referral cost + subtracts it from NET (overall + per-machine)', async () => {
+  await setGachaConfig(db, { markupBps: 1000 }); // +10% markup so the sale books both a cut share and a markup share
+  try {
+    const { buyer } = await referredBuyer(); // buyer is referred by a 10% game-revenue affiliate
+    const before = await gachaMonitoring(db);
+    const cc = fakeCc();
+    cc.reveals = [{ success: true, code: 'TURBO_MODE_BUYBACK', buybackAmount: 30_000_000 }]; // turbo auto-sell = a completed sale
+    await openPack(db, buyer, { machineCode: 'pokemon_50', idempotencyKey: 'mon-aff-turbo', turbo: true }, { chain: fakeChain(), cc, ...noWait });
+    const after = await gachaMonitoring(db);
+    const dRef = BigInt(after.referralCostE6) - BigInt(before.referralCostE6);
+    const dRev = BigInt(after.revenueE6) - BigInt(before.revenueE6);
+    const dReb = BigInt(after.rebateCostE6) - BigInt(before.rebateCostE6);
+    const dNet = BigInt(after.netE6) - BigInt(before.netE6);
+    assert.ok(dRef > 0n, 'referral cost rose by the affiliate share');
+    assert.equal(dNet, dRev - dReb - dRef, 'NET now subtracts the referral cost: revenue − rebate − referral');
+    const mach = after.machines.find((m) => m.code === 'pokemon_50');
+    assert.ok(mach && BigInt(mach.referralE6) > 0n, 'the referral is attributed to the machine (per-machine column)');
+  } finally {
+    await setGachaConfig(db, { markupBps: 0 });
+  }
+});

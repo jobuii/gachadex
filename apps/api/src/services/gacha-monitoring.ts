@@ -18,12 +18,12 @@ export interface GachaMachineStats {
   code: string;
   opens: number; opens24h: number;
   prizeValueE6: string;
-  revenueE6: string; rebateE6: string; netE6: string;
+  revenueE6: string; rebateE6: string; referralE6: string; netE6: string;
   rarity: RarityCounts; rarity24h: RarityCounts;
 }
 export interface GachaMonitoring {
   // economics
-  sellBackCutE6: string; markupE6: string; revenueE6: string; rebateCostE6: string; netE6: string; rewardsBudgetE6: string; feeRevenueE6: string;
+  sellBackCutE6: string; markupE6: string; revenueE6: string; rebateCostE6: string; referralCostE6: string; netE6: string; rewardsBudgetE6: string; feeRevenueE6: string;
   deliveredCards: number; soldBack: number; kept: number; sellBackRatePct: number;
   // activity
   packsOpened: number; packsOpened24h: number; volumeUsdcE6: string; goldPacks: number; prizeValueE6: string;
@@ -46,7 +46,7 @@ const num = (v: string | number | null | undefined): number => Number(v ?? 0) ||
 
 export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
   const OPENED = `status IN ('opened', 'turbo_sold')`;
-  const [fee, rebate, budget, feeBal, inv, activity, perMachine, machineNet] = await Promise.all([
+  const [fee, rebate, referral, budget, feeBal, inv, activity, perMachine, machineNet] = await Promise.all([
     // FEE_REVENUE credited per gacha reason (join to the unique system account to isolate the fee leg).
     db.query<{ reason: string; total: string }>(
       `SELECT le.reason, COALESCE(SUM(le.amount_uusdc::numeric), 0)::text AS total
@@ -62,6 +62,13 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
       `SELECT COALESCE(SUM(-le.amount_uusdc::numeric), 0)::text AS total
          FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
         WHERE a.user_id IS NULL AND a.type = 'GACHA_REWARDS_BUDGET' AND le.reason IN ('PACK_BUY_GOLD_FUND', 'GACHA_REFUND')`,
+    ),
+    // Referral cost = the gacha revenue share paid to referrers (GAME_REVENUE_SHARE debits FEE_REVENUE by −share),
+    // so SUM(−amount) is the positive amount paid out. This is gacha-only (perps cashback is a separate reason).
+    db.query<{ total: string }>(
+      `SELECT COALESCE(SUM(-le.amount_uusdc::numeric), 0)::text AS total
+         FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
+        WHERE a.user_id IS NULL AND a.type = 'FEE_REVENUE' AND le.reason = 'GAME_REVENUE_SHARE'`,
     ),
     db.query<{ amount_uusdc: string }>(
       `SELECT b.amount_uusdc FROM balances b JOIN accounts a ON a.id = b.account_id
@@ -103,21 +110,26 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
     ),
     // Per-machine operator net: FEE_REVENUE (cut + markup) − rewards-budget draw, attributed to the machine via
     // the ledger ref (gacha_open → the open; gacha_prize → the prize's open).
-    db.query<{ machine_code: string; revenue: string; rebate: string }>(
+    db.query<{ machine_code: string; revenue: string; rebate: string; referral: string }>(
       `WITH attrib AS (
          SELECT le.reason, a.type AS acct, le.amount_uusdc::numeric AS amt,
-                COALESCE(o.machine_code, oi.machine_code) AS machine_code
+                COALESCE(o.machine_code, oi.machine_code, o2.machine_code, oi2.machine_code) AS machine_code
            FROM ledger_entries le
            JOIN accounts a ON a.id = le.account_id AND a.user_id IS NULL
            LEFT JOIN gacha_pack_opens o ON le.ref_type = 'gacha_open' AND o.id = le.ref_id
            LEFT JOIN gacha_nft_inventory ginv ON le.ref_type = 'gacha_prize' AND ginv.id = le.ref_id
            LEFT JOIN gacha_pack_opens oi ON oi.id = ginv.open_id
-          WHERE (a.type = 'FEE_REVENUE' AND le.reason IN ('GACHA_SELLBACK', 'GACHA_TURBO_SELL', 'GACHA_PACK_BUY', 'GACHA_REFUND'))
+           -- referral (GAME_REVENUE_SHARE) uses ref_type='gacha' with ref_id = an open OR a prize id → resolve both
+           LEFT JOIN gacha_pack_opens o2 ON le.ref_type = 'gacha' AND o2.id = le.ref_id
+           LEFT JOIN gacha_nft_inventory ginv2 ON le.ref_type = 'gacha' AND ginv2.id = le.ref_id
+           LEFT JOIN gacha_pack_opens oi2 ON oi2.id = ginv2.open_id
+          WHERE (a.type = 'FEE_REVENUE' AND le.reason IN ('GACHA_SELLBACK', 'GACHA_TURBO_SELL', 'GACHA_PACK_BUY', 'GACHA_REFUND', 'GAME_REVENUE_SHARE'))
              OR (a.type = 'GACHA_REWARDS_BUDGET' AND le.reason IN ('PACK_BUY_GOLD_FUND', 'GACHA_REFUND'))
        )
        SELECT machine_code,
-              COALESCE(SUM(amt) FILTER (WHERE acct = 'FEE_REVENUE'), 0)::text AS revenue,
-              COALESCE(SUM(-amt) FILTER (WHERE acct = 'GACHA_REWARDS_BUDGET'), 0)::text AS rebate
+              COALESCE(SUM(amt) FILTER (WHERE acct = 'FEE_REVENUE' AND reason <> 'GAME_REVENUE_SHARE'), 0)::text AS revenue,
+              COALESCE(SUM(-amt) FILTER (WHERE acct = 'GACHA_REWARDS_BUDGET'), 0)::text AS rebate,
+              COALESCE(SUM(-amt) FILTER (WHERE reason = 'GAME_REVENUE_SHARE'), 0)::text AS referral
          FROM attrib WHERE machine_code IS NOT NULL GROUP BY machine_code`,
     ),
   ]);
@@ -130,6 +142,7 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
     else sellBackCut += intStr(r.total);
   }
   const rebateCost = intStr(rebate.rows[0]?.total);
+  const referralCost = intStr(referral.rows[0]?.total);
   const rewardsBudget = intStr(budget.rows[0]?.amount_uusdc);
   const totalInv = inv.rows.reduce((a, r) => a + num(r.n), 0);
   const sold = num(inv.rows.find((r) => r.status === 'sold')?.n);
@@ -145,12 +158,12 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
   const revenue = sellBackCut + markup;
 
   // per-machine pivot (also aggregates the overall rarity mix)
-  const netByMachine = new Map(machineNet.rows.map((r) => [r.machine_code, { revenue: intStr(r.revenue), rebate: intStr(r.rebate) }]));
+  const netByMachine = new Map(machineNet.rows.map((r) => [r.machine_code, { revenue: intStr(r.revenue), rebate: intStr(r.rebate), referral: intStr(r.referral) }]));
   const byCode = new Map<string, GachaMachineStats>();
   const rarityAll: RarityCounts = {};
   const rarity24hAll: RarityCounts = {};
   for (const r of perMachine.rows) {
-    const m = byCode.get(r.machine_code) ?? { code: r.machine_code, opens: 0, opens24h: 0, prizeValueE6: '0', revenueE6: '0', rebateE6: '0', netE6: '0', rarity: {}, rarity24h: {} };
+    const m = byCode.get(r.machine_code) ?? { code: r.machine_code, opens: 0, opens24h: 0, prizeValueE6: '0', revenueE6: '0', rebateE6: '0', referralE6: '0', netE6: '0', rarity: {}, rarity24h: {} };
     const n = num(r.n);
     const n24 = num(r.n_24h);
     m.opens += n;
@@ -164,7 +177,7 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
   }
   for (const m of byCode.values()) {
     const net = netByMachine.get(m.code);
-    if (net) { m.revenueE6 = net.revenue.toString(); m.rebateE6 = net.rebate.toString(); m.netE6 = (net.revenue - net.rebate).toString(); }
+    if (net) { m.revenueE6 = net.revenue.toString(); m.rebateE6 = net.rebate.toString(); m.referralE6 = net.referral.toString(); m.netE6 = (net.revenue - net.rebate - net.referral).toString(); }
   }
   const machines = [...byCode.values()].sort((x, y) => y.opens - x.opens);
 
@@ -173,7 +186,8 @@ export async function gachaMonitoring(db: Db): Promise<GachaMonitoring> {
     markupE6: markup.toString(),
     revenueE6: revenue.toString(),
     rebateCostE6: rebateCost.toString(),
-    netE6: (revenue - rebateCost).toString(),
+    referralCostE6: referralCost.toString(),
+    netE6: (revenue - rebateCost - referralCost).toString(),
     rewardsBudgetE6: rewardsBudget.toString(),
     feeRevenueE6: intStr(feeBal.rows[0]?.amount_uusdc).toString(),
     deliveredCards: delivered,

@@ -32,6 +32,7 @@ export interface CustomerRow {
   pendingWithdrawalsE6: string; // withdrawals in flight (requested/signed/broadcast)
   openPositions: number;
   referrals: number; // how many users this customer referred (users.referred_by = this user)
+  referralFeesE6: string; // fees EARNED as a referrer: perps cashback (REFERRAL_CASHBACK) + gacha share (GAME_REVENUE_SHARE)
 }
 
 // Sort key -> the numeric ORDER BY expression. The key comes from the client, so it MUST be whitelisted
@@ -44,6 +45,7 @@ const SORT_EXPR: Record<string, string> = {
   pnl: 'COALESCE(vol.pnl_e6, 0)',
   tips: 'COALESCE(tip.tipped_e6, 0)',
   referrals: 'COALESCE(ref.referrals, 0)',
+  referralFees: 'COALESCE(reffee.earned, 0)',
   joined: 'u.created_at',
 };
 
@@ -87,6 +89,7 @@ export async function listCustomers(
     open_positions: number;
     gold_balance: string;
     referrals: number;
+    referral_fees_e6: string;
     free_credit_e6: string;
     credit_remaining_e6: string;
   }>(
@@ -144,6 +147,14 @@ export async function listCustomers(
      ref AS (
        SELECT referred_by, COUNT(*)::int AS referrals FROM users WHERE referred_by IS NOT NULL GROUP BY referred_by
      ),
+     -- referral/affiliate fees this customer EARNED as a referrer: perps trading-fee cashback (REFERRAL_CASHBACK)
+     -- + gacha revenue share (GAME_REVENUE_SHARE), both paid FEE_REVENUE → their USER_COLLATERAL.
+     reffee AS (
+       SELECT a.user_id, SUM(le.amount_uusdc) AS earned
+         FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
+        WHERE a.type = 'USER_COLLATERAL' AND le.reason IN ('REFERRAL_CASHBACK', 'GAME_REVENUE_SHARE')
+        GROUP BY a.user_id
+     ),
      -- bonus credits (docs/bonus-credits-spec.md): total received across both sources (Σ granted_e6), + the
      -- still-outstanding bonus (Σ SIGNUP_BONUS + DEPOSIT_BONUS − BONUS_EXPIRE on collateral); "Remaining"
      -- clamps that to free collateral
@@ -174,6 +185,7 @@ export async function listCustomers(
             COALESCE(op.open_positions, 0)::int AS open_positions,
             COALESCE(gold.gold_balance, 0)::text AS gold_balance,
             COALESCE(ref.referrals, 0)::int AS referrals,
+            COALESCE(reffee.earned, 0)::text AS referral_fees_e6,
             COALESCE(credit.free_credit, 0)::text AS free_credit_e6,
             LEAST(GREATEST(COALESCE(credit.outstanding_g, 0), 0), GREATEST(COALESCE(coll.amount_uusdc, 0), 0))::text AS credit_remaining_e6
      FROM users u
@@ -191,6 +203,7 @@ export async function listCustomers(
      LEFT JOIN lp ON lp.user_id = u.id
      LEFT JOIN gold ON gold.user_id = u.id
      LEFT JOIN ref ON ref.referred_by = u.id
+     LEFT JOIN reffee ON reffee.user_id = u.id
      LEFT JOIN credit ON credit.user_id = u.id
      WHERE ($3::text IS NULL OR u.solana_pubkey ILIKE '%' || $3 || '%')
      ORDER BY ${orderBy} DESC NULLS LAST, u.created_at DESC
@@ -231,6 +244,7 @@ export async function listCustomers(
       pendingWithdrawalsE6: x.pending_e6,
       openPositions: x.open_positions,
       referrals: x.referrals,
+      referralFeesE6: x.referral_fees_e6,
     })),
     total: Number(totalR.rows[0].c),
   };

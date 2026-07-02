@@ -14,9 +14,10 @@ const SORTS = [
   ['pnl', 'Realized P/L'],
   ['tips', 'Tips'],
   ['referrals', 'Referrals'],
+  ['referralFees', 'Ref. fees'],
   ['joined', 'Joined'],
 ];
-const COLS = 22; // table width (for the expand-row + empty-state colSpan): base 19 + Referrals + Free Credit + Remaining
+const COLS = 23; // table width (expand-row + empty-state colSpan): base 19 + Referrals + Referral fees + Free Credit + Remaining
 const KILL_PHRASE = 'CLOSE ALL';
 
 const short = (a) => shortenPubkey(a) || '—';
@@ -256,6 +257,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
               <th>Deposit addr</th>
               <th>NFT custody</th>
               <th>Referrals</th>
+              <th>Referral fees</th>
               <th>Balance</th>
               <th>LP Pool</th>
               <th>In trades</th>
@@ -301,6 +303,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
                       {copied && copied === c.nftCustodyAddress ? 'copied!' : short(c.nftCustodyAddress)}
                     </td>
                     <td className="num">{c.referrals ?? 0}</td>
+                    <td className="num">{BigInt(c.referralFeesE6 ?? 0) > 0n ? usd(c.referralFeesE6) : '—'}</td>
                     <td className="num">{usd(c.freeE6)}</td>
                     <td className="num">{usd(c.lpE6)}</td>
                     <td className="num">{usd(c.lockedE6)}</td>
@@ -355,7 +358,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
                                   <thead>
                                     <tr>
                                       <th>Market</th><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th>
-                                      <th>uP/L</th><th>Margin</th><th>Liq</th><th>Opened</th><th />
+                                      <th>uP/L</th><th>Funding (accrued)</th><th>Margin</th><th>Liq</th><th>Opened</th><th />
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -375,6 +378,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
                                         <td className="num">{usd(p.avgEntryE6)}</td>
                                         <td className="num">{usd(p.markE6)}</td>
                                         <td className="num" style={signed(p.unrealizedPnlUusdc)}>{formatSignedUsd(p.unrealizedPnlUusdc)}</td>
+                                        <td className="num" style={signed(p.accruedFundingUusdc ?? 0)}>{formatSignedUsd(p.accruedFundingUusdc ?? 0)}</td>
                                         <td className="num">{usd(p.marginUusdc)}</td>
                                         <td className="num down">{usd(p.liqPriceE6)}</td>
                                         <td className="muted">{fmtWhen(p.openedAt)}</td>

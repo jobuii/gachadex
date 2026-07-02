@@ -172,3 +172,19 @@ test('listCustomers: wallet search filters (partial + case-insensitive) and tota
   const all = await listCustomers(db, { limit: 500, offset: 0, sort: 'joined', search: '   ' });
   assert.ok(all.total >= 2);
 });
+
+test('listCustomers: referral fees earned = perps cashback + gacha revenue share credited to the referrer', async () => {
+  const userId = await newUser('wallet-pk-reffee', 'deposit-addr-reffee', 91);
+  await db.tx(async (q) => {
+    const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
+    const fee = await getOrCreateSystemAccount(q, 'FEE_REVENUE');
+    await postTxn(q, { reason: 'REFERRAL_CASHBACK', refType: 'fee', refId: 'cf-1', entries: [{ accountId: fee, amount: -3_000_000n }, { accountId: coll, amount: 3_000_000n }] });
+    await postTxn(q, { reason: 'GAME_REVENUE_SHARE', refType: 'gacha', refId: 'cf-2', entries: [{ accountId: fee, amount: -2_000_000n }, { accountId: coll, amount: 2_000_000n }] });
+    // a NON-referral collateral credit (trading P/L) must NOT count toward referral fees
+    await postTxn(q, { reason: 'REALIZED_PNL', refType: 'position', refId: 'cf-3', entries: [{ accountId: fee, amount: -9_000_000n }, { accountId: coll, amount: 9_000_000n }] });
+  });
+  const { customers } = await listCustomers(db, { limit: 500, offset: 0, sort: 'referralFees' });
+  const me = customers.find((c) => c.userId === userId);
+  assert.ok(me, 'the referrer is in the list');
+  assert.equal(me.referralFeesE6, '5000000', 'referral fees = $3 cashback + $2 game share (excludes the $9 PnL)');
+});

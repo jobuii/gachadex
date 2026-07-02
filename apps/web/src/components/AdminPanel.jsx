@@ -732,6 +732,8 @@ export function AdminPanel({ onGoToMarket } = {}) {
           <Stat label="Funding collected (into LP pool)" value={economics.fundingCollectedE6} />
           <Stat label="Funding — LP's share" value={economics.fundingLpE6} />
           <Stat label="Funding — house cut" value={economics.fundingHouseE6} />
+          <PnlStat label="Gacha net (house)" value={economics.gachaNetE6 ?? '0'} />
+          <Stat label="Referral fees paid" value={economics.referralFeesPaidE6} />
           <Stat label="Customer LP in pool" value={economics.customerLpE6} />
           {/* custody cash-flow group: deposits, withdrawals, then pending (flashing red when >0) immediately left of P/L */}
           {treasury && <Stat label="Total deposits" value={economics.totalDepositsE6} />}
