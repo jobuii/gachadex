@@ -6,7 +6,7 @@ import { ChatAdminView } from './ChatAdminView.jsx';
 import { GamesAdminView } from './GamesAdminView.jsx';
 import { GachaAdminView } from './GachaAdminView.jsx';
 import { AffiliatesView } from './AffiliatesView.jsx';
-import { SignupCreditView } from './SignupCreditView.jsx';
+import { BonusView } from './BonusView.jsx';
 import { Stat, PnlStat } from './adminStats.jsx';
 
 /**
@@ -707,7 +707,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
       {tab === 'gacha' && <GachaAdminView adminKey={adminKey} />}
 
       {tab === 'affiliates' && <AffiliatesView adminKey={adminKey} />}
-      {tab === 'perks' && <SignupCreditView adminKey={adminKey} />}
+      {tab === 'perks' && <BonusView adminKey={adminKey} />}
 
       {tab === 'main' && (
         <>

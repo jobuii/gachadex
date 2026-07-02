@@ -16,7 +16,7 @@ export interface CustomerRow {
   depositAddress: string | null;
   nftCustodyAddress: string | null; // per-user Classic-Gacha NFT custody wallet (derived; holds CC NFTs + buyback USDC)
   goldBalance: string; // live spendable Gold balance (the gold_balances cache; whole Gold)
-  freeCreditE6: string; // signup-credit grant received (docs/signup-credit-spec.md; 0 if none)
+  freeCreditE6: string; // total bonus credit received across both sources (docs/bonus-credits-spec.md; 0 if none)
   creditRemainingE6: string; // still-locked credit = min(outstanding grant, free collateral)
   freeE6: string; // available collateral (USER_COLLATERAL)
   lpE6: string; // current value of their LP-pool stake (shares marked to pool NAV)
@@ -134,14 +134,16 @@ export async function listCustomers(
      gold AS (
        SELECT user_id, balance AS gold_balance FROM gold_balances
      ),
-     -- free signup credit (docs/signup-credit-spec.md): the grant received, + the still-outstanding grant
-     -- (Σ SIGNUP_CREDIT − Σ SIGNUP_CREDIT_EXPIRE on collateral); "Remaining" clamps that to free collateral
+     -- bonus credits (docs/bonus-credits-spec.md): total received across both sources (Σ granted_e6), + the
+     -- still-outstanding bonus (Σ SIGNUP_BONUS + DEPOSIT_BONUS − BONUS_EXPIRE on collateral); "Remaining"
+     -- clamps that to free collateral
      credit AS (
-       SELECT sc.user_id, sc.granted_e6 AS free_credit,
+       SELECT bg.user_id, SUM(bg.granted_e6) AS free_credit,
               COALESCE((SELECT SUM(le.amount_uusdc) FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
-                        WHERE a.user_id = sc.user_id AND a.type = 'USER_COLLATERAL'
-                          AND le.reason IN ('SIGNUP_CREDIT','SIGNUP_CREDIT_EXPIRE')), 0) AS outstanding_g
-       FROM signup_credits sc
+                        WHERE a.user_id = bg.user_id AND a.type = 'USER_COLLATERAL'
+                          AND le.reason IN ('SIGNUP_BONUS','DEPOSIT_BONUS','BONUS_EXPIRE')), 0) AS outstanding_g
+       FROM bonus_grants bg
+       GROUP BY bg.user_id
      )
      SELECT u.id, u.solana_pubkey, u.display_name, u.status,
             u.created_at::text AS joined_at,
