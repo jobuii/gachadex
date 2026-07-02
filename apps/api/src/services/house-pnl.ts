@@ -23,10 +23,10 @@ import { customerLpTotal } from './lp.ts';
 export interface HousePnlBreakdown {
   // House earnings — these five sum EXACTLY to surplusE6 (the FEE_REVENUE balance).
   feesTradingE6: string; // trading-fee house cut: OPEN_FEE + CLOSE_FEE + REFERRAL_CASHBACK (rebate) legs on FEE_REVENUE
-  feesGachaE6: string; // gacha house cut: GACHA_* + GAME_REVENUE_SHARE (rebate) legs on FEE_REVENUE
+  feesGachaE6: string; // gacha house NET = fee income (revenue − referral) − Gold ACTUALLY spent; excludes the reserve FUNDING (unused part → feesOther). = the "Gacha net (house)" box
   fundingHouseE6: string; // funding house cut: FUNDING legs on FEE_REVENUE
   liqHouseE6: string; // liquidation-penalty house cut: LIQUIDATION_FEE legs on FEE_REVENUE
-  feesOtherE6: string; // reconciling remainder on FEE_REVENUE (e.g. insurance moves) so the lines sum to surplus
+  feesOtherE6: string; // reconciling remainder: fees swept to/from reserves — insurance, bonus/credit budget, UNUSED gacha-rewards budget — + anything uncategorized
   surplusE6: string; // = FEE_REVENUE balance = the house's net earned surplus (the P/L box; excludes the LP pool)
 
   // LP side — owed to LP providers, NOT house P/L. These four reconcile to lpPoolE6.
@@ -47,7 +47,7 @@ export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
     getOrCreateSystemAccount(db, 'FEE_REVENUE'),
     getOrCreateSystemAccount(db, 'INSURANCE_FUND'),
   ]);
-  const [lpBal, feeBal, insBal, feeRows, lpRows, liqRows] = await Promise.all([
+  const [lpBal, feeBal, insBal, feeRows, lpRows, liqRows, goldRebateRow] = await Promise.all([
     getBalance(db, lp),
     getBalance(db, fee),
     getBalance(db, ins),
@@ -55,7 +55,7 @@ export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
     db.query<{ trading: string; gacha: string; funding: string; liq: string }>(
       `SELECT
          COALESCE(SUM(CASE WHEN reason IN ('OPEN_FEE','CLOSE_FEE','REFERRAL_CASHBACK') THEN amount_uusdc ELSE 0 END), 0)::text AS trading,
-         COALESCE(SUM(CASE WHEN reason LIKE 'GACHA%' OR reason = 'GAME_REVENUE_SHARE' THEN amount_uusdc ELSE 0 END), 0)::text AS gacha,
+         COALESCE(SUM(CASE WHEN (reason LIKE 'GACHA%' AND reason <> 'GACHA_REWARDS_FUND') OR reason = 'GAME_REVENUE_SHARE' THEN amount_uusdc ELSE 0 END), 0)::text AS gacha,
          COALESCE(SUM(CASE WHEN reason = 'FUNDING' THEN amount_uusdc ELSE 0 END), 0)::text AS funding,
          COALESCE(SUM(CASE WHEN reason = 'LIQUIDATION_FEE' THEN amount_uusdc ELSE 0 END), 0)::text AS liq
        FROM ledger_entries WHERE account_id = $1`,
@@ -78,11 +78,20 @@ export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
        FROM ledger_entries WHERE account_id IN ($1, $2)`,
       [lp, fee],
     ),
+    // Net USDC actually spent on Gold packs = drawn from the rewards budget minus refunds (PACK_BUY_GOLD_FUND +
+    // GACHA_REFUND on GACHA_REWARDS_BUDGET). Deducted from gacha earnings below; the UNUSED budget funding stays in feesOther.
+    db.query<{ t: string }>(
+      `SELECT COALESCE(SUM(-le.amount_uusdc), 0)::text AS t FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
+        WHERE a.user_id IS NULL AND a.type = 'GACHA_REWARDS_BUDGET' AND le.reason IN ('PACK_BUY_GOLD_FUND', 'GACHA_REFUND')`,
+    ),
   ]);
 
   // House earnings: FEE_REVENUE decomposed; feesOther is the remainder so the lines sum to the balance.
   const feesTrading = BigInt(feeRows.rows[0].trading);
-  const feesGacha = BigInt(feeRows.rows[0].gacha);
+  // Gacha house earnings = gacha fee income (revenue − referral) MINUS the Gold ACTUALLY spent on packs. The
+  // gacha-rewards budget FUNDING is excluded from the `gacha` sum above (it's a reserve, not a cut) → its UNUSED
+  // portion falls into feesOther, matching how the bonus/credit budget funding is treated. Equals the "Gacha net" box.
+  const feesGacha = BigInt(feeRows.rows[0].gacha) - BigInt(goldRebateRow.rows[0].t);
   const fundingHouse = BigInt(feeRows.rows[0].funding);
   const liqHouse = BigInt(feeRows.rows[0].liq);
   const feesOther = feeBal - feesTrading - feesGacha - fundingHouse - liqHouse;

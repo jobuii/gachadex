@@ -811,7 +811,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
                 <tr><td>Liquidation penalties — house cut</td><td className="num">{formatSignedUsd(bd.liqHouseE6)}</td></tr>
               )}
               {BigInt(bd.feesOtherE6) !== 0n && (
-                <tr><td>Other <span className="muted">(fees moved to / from insurance)</span></td><td className="num">{formatSignedUsd(bd.feesOtherE6)}</td></tr>
+                <tr><td>Other <span className="muted">(fees moved to / from insurance, bonus credit, gacha rewards)</span></td><td className="num">{formatSignedUsd(bd.feesOtherE6)}</td></tr>
               )}
               <tr className="pnl-breakdown-total"><td>Net surplus (fees earned)</td><td className="num">{formatSignedUsd(bd.surplusE6)}</td></tr>
             </tbody>

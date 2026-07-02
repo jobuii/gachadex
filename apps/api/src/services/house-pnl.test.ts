@@ -113,3 +113,24 @@ test('houseEconomics: gacha net (house) = narrow revenue − Gold rebate − gac
   // referral fees paid Δ = gacha $0.30 + perps $0.20 = $0.50
   assert.equal(BigInt(after.referralFeesPaidE6) - BigInt(before.referralFeesPaidE6), usdc(0.5), 'referral paid = perps + gacha payouts');
 });
+
+test('housePnlBreakdown: gacha earnings net the ACTUAL Gold spent; the UNUSED rewards-budget funding lands in Other', async () => {
+  const fee = await getOrCreateSystemAccount(db, 'FEE_REVENUE');
+  const budget = await getOrCreateSystemAccount(db, 'GACHA_REWARDS_BUDGET');
+  const cp = await getOrCreateSystemAccount(db, 'TREASURY_USDC'); // dummy counterparty
+  const before = await housePnlBreakdown(db);
+  await db.tx(async (q) => {
+    // $10 gacha sell-back cut → gacha fee income
+    await postTxn(q, { reason: 'GACHA_SELLBACK', refType: 'gacha', refId: 'hp-g1', entries: [{ accountId: cp, amount: -usdc(10) }, { accountId: fee, amount: usdc(10) }] });
+    // fund the rewards budget with $4 from fees (a reserve top-up — NOT a gacha cut)
+    await postTxn(q, { reason: 'GACHA_REWARDS_FUND', refType: 'admin', refId: 'hp-g2', entries: [{ accountId: fee, amount: -usdc(4) }, { accountId: budget, amount: usdc(4) }] });
+    // spend $3 of it on a Gold pack (the actual Gold cost); $1 stays UNUSED in the budget
+    await postTxn(q, { reason: 'PACK_BUY_GOLD_FUND', refType: 'gacha_open', refId: 'hp-g3', entries: [{ accountId: budget, amount: -usdc(3) }, { accountId: cp, amount: usdc(3) }] });
+  });
+  const after = await housePnlBreakdown(db);
+  const d = (k: keyof typeof after) => BigInt(after[k]) - BigInt(before[k]);
+  assert.equal(d('feesGachaE6'), usdc(7), 'gacha net = $10 fee income − $3 ACTUAL Gold spend (not the $4 funding)');
+  assert.equal(d('feesOtherE6'), -usdc(1), 'the $1 UNUSED rewards-budget funding falls into Other');
+  assert.equal(d('surplusE6'), usdc(6), 'surplus rose by fee income minus the budget top-up ($10 − $4)');
+  assert.equal(d('feesTradingE6') + d('feesGachaE6') + d('fundingHouseE6') + d('liqHouseE6') + d('feesOtherE6'), d('surplusE6'), 'lines still sum to surplus');
+});
