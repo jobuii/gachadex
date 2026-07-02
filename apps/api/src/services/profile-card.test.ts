@@ -70,7 +70,7 @@ test('userStanding + getProfileCard expose rank, level and identity', async () =
   assert.equal(sa.level, 2, '~$2.3k volume -> L2');
 
   const sIdle = await userStanding(db, idle);
-  assert.equal(sIdle.rank, 4, 'no-PnL user ranks last');
+  assert.equal(sIdle.rank, null, 'a $0-PnL / never-traded wallet is unranked (hidden from the board)');
   assert.equal(sIdle.level, 1, 'no volume -> L1');
 
   const card = await getProfileCard(db, a);
@@ -78,7 +78,7 @@ test('userStanding + getProfileCard expose rank, level and identity', async () =
   assert.equal(card.level, 2);
   assert.equal(card.isMod, false);
   assert.ok(card.handle, 'handle present');
-  assert.equal(card.total, 4);
+  assert.equal(card.total, 3); // only the 3 real traders rank; the idle $0 wallet is excluded
 
   await assert.rejects(getProfileCard(db, randomUUID()), /user not found/);
 });

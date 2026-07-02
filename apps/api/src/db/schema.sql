@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS users (
   referred_at   TIMESTAMPTZ,
   display_name  TEXT,                           -- chat username (unique); falls back to a truncated pubkey
   avatar        TEXT,                            -- profile sprite path under /avatars/, e.g. 'default/151.png' (null = derived from id)
+  chat_color    TEXT,                            -- chosen chat identity color (one of CHAT_COLORS); null = derived from the handle
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 -- referral columns added in-place for DBs created before the feature (no-op on a fresh DB)
@@ -77,6 +78,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT REFERENCES users(id)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_color TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_users_referral_code ON users(referral_code);
 -- usernames are unique case-insensitively (no "Ash" vs "ash" impersonation)
 DROP INDEX IF EXISTS uq_users_display_name;

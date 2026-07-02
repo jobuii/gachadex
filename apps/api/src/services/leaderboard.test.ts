@@ -42,14 +42,16 @@ async function standingFor(userId: string): Promise<{ realized: string; equity: 
 
 test('a real USDC deposit is NOT counted as realized PnL (the reported bug)', async () => {
   const u = await newUser();
-  await flow(u, 'DEPOSIT', 'TREASURY_USDC', usdc(5000)); // deposits $5k, never trades
+  await flow(u, 'DEPOSIT', 'TREASURY_USDC', usdc(5000)); // deposits $5k
+  await flow(u, 'REALIZED_PNL', 'LP_POOL', usdc(10)); // + a real $10 trading gain (so the wallet ranks; $0-PnL wallets are hidden)
   const { realized, equity } = await standingFor(u);
-  assert.equal(realized, '0'); // before the fix this was the full 5,000,000 (deposit shown as profit)
-  assert.equal(equity, usdc(5000).toString()); // the deposit IS equity — it's just not PnL
+  assert.equal(realized, usdc(10).toString()); // ONLY the $10 gain — the $5k deposit adds $0 to PnL (before the fix this was $5,010)
+  assert.equal(equity, usdc(5010).toString()); // the deposit IS equity — it's just not PnL
 });
 
 test('leaderboard surfaces lifetime Gold earned (PACK_OPEN_EARN minus reversals; spends excluded)', async () => {
   const u = await newUser();
+  await flow(u, 'REALIZED_PNL', 'LP_POOL', usdc(10)); // a real gain so the wallet ranks (non-zero PnL)
   const gl = (delta: string, reason: string) =>
     db.query(`INSERT INTO gold_ledger(id, user_id, delta, reason) VALUES($1,$2,$3,$4)`, [randomUUID(), u, delta, reason]);
   await gl('25000', 'PACK_OPEN_EARN');
@@ -62,6 +64,7 @@ test('leaderboard surfaces lifetime Gold earned (PACK_OPEN_EARN minus reversals;
 
   // a user who never earned Gold shows 0, not null
   const u2 = await newUser();
+  await flow(u2, 'REALIZED_PNL', 'LP_POOL', usdc(5)); // a real gain so u2 ranks
   const { you: you2 } = await getLeaderboard(db, { viewerUserId: u2 });
   assert.equal(you2!.goldEarned, '0', 'no gold_ledger rows -> 0');
 });
@@ -81,6 +84,18 @@ test('faucet + referral credits still net out (play-money regression)', async ()
   const u = await newUser();
   await flow(u, 'FAUCET', 'FAUCET_SOURCE', usdc(1000));
   await flow(u, 'REFERRAL_BONUS', 'FAUCET_SOURCE', usdc(500));
+  await flow(u, 'REALIZED_PNL', 'LP_POOL', usdc(25)); // a real $25 gain so the wallet ranks
   const { realized } = await standingFor(u);
-  assert.equal(realized, '0'); // play-money grants are not PnL, same as before
+  assert.equal(realized, usdc(25).toString()); // ONLY the $25 gain — faucet/referral grants add $0 to PnL
+});
+
+test('leaderboard hides $0-PnL / never-traded wallets (only real results rank)', async () => {
+  const idle = await newUser();
+  await flow(idle, 'DEPOSIT', 'TREASURY_USDC', usdc(3000)); // deposited but never traded → realized nets to $0
+  const trader = await newUser();
+  await flow(trader, 'REALIZED_PNL', 'LP_POOL', usdc(40)); // a real $40 result
+  const { rows, you } = await getLeaderboard(db, { viewerUserId: idle });
+  assert.ok(rows.some((r) => r.userId === trader), 'a wallet with a real result IS ranked');
+  assert.ok(!rows.some((r) => r.userId === idle), 'a $0-PnL / never-traded wallet is hidden');
+  assert.equal(you, null, 'and it has no leaderboard row of its own (rank → —)');
 });

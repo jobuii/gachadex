@@ -13,9 +13,10 @@ const SORTS = [
   ['locked', 'In trades'],
   ['pnl', 'Realized P/L'],
   ['tips', 'Tips'],
+  ['referrals', 'Referrals'],
   ['joined', 'Joined'],
 ];
-const COLS = 21; // table width (for the expand-row + empty-state colSpan)
+const COLS = 22; // table width (for the expand-row + empty-state colSpan): base 19 + Referrals + Free Credit + Remaining
 const KILL_PHRASE = 'CLOSE ALL';
 
 const short = (a) => shortenPubkey(a) || '—';
@@ -33,6 +34,8 @@ export function CustomersView({ adminKey, onGoToMarket }) {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [sort, setSort] = useState('volume');
+  const [search, setSearch] = useState(''); // the wallet-search input
+  const [debouncedSearch, setDebouncedSearch] = useState(''); // debounced → drives the fetch
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
   const [copied, setCopied] = useState(null);
@@ -46,11 +49,12 @@ export function CustomersView({ adminKey, onGoToMarket }) {
   const [killText, setKillText] = useState('');
 
   const reqSeq = useRef(0); // ignore a slow response that resolves after a newer fetch (rapid sort/page)
+  const searchTimer = useRef(null); // debounce the wallet search (managed in the input handler)
   const loadCustomers = useCallback(() => {
     const seq = ++reqSeq.current;
     setLoading(true);
     return api
-      .adminGetCustomers({ limit: PAGE, offset, sort }, adminKey)
+      .adminGetCustomers({ limit: PAGE, offset, sort, search: debouncedSearch }, adminKey)
       .then((r) => {
         if (seq !== reqSeq.current) return;
         setRows(r.customers || []);
@@ -59,11 +63,21 @@ export function CustomersView({ adminKey, onGoToMarket }) {
       })
       .catch((e) => seq === reqSeq.current && setErr(e.message))
       .finally(() => seq === reqSeq.current && setLoading(false));
-  }, [adminKey, offset, sort]);
+  }, [adminKey, offset, sort, debouncedSearch]);
 
   useEffect(() => {
     loadCustomers();
   }, [loadCustomers]);
+
+  // clear any pending search debounce on unmount (the debounce itself lives in the input handler below)
+  useEffect(() => () => clearTimeout(searchTimer.current), []);
+
+  // debounce the wallet search so typing a long address doesn't fire a request per keystroke; reset to page 1
+  const onSearchChange = (v) => {
+    setSearch(v);
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => { setDebouncedSearch(v.trim()); setOffset(0); }, 250);
+  };
 
   const copy = (text) => {
     if (!text) return;
@@ -204,6 +218,19 @@ export function CustomersView({ adminKey, onGoToMarket }) {
       {err && <div className="order-error">{err}</div>}
       {note && <div className="ref-blurb" style={{ color: 'var(--text)' }}>{note}</div>}
 
+      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', margin: '0.5rem 0' }}>
+        <input
+          className="wallet-input"
+          type="text"
+          placeholder="Search wallet (full or partial)…"
+          value={search}
+          onChange={(e) => onSearchChange(e.target.value)}
+          style={{ maxWidth: 340, flex: '1 1 260px' }}
+        />
+        {search && <button className="btn-ghost sm" onClick={() => onSearchChange('')}>Clear</button>}
+        {debouncedSearch && !loading && <span className="muted" style={{ fontSize: '0.72rem' }}>{total} match{total === 1 ? '' : 'es'}</span>}
+      </div>
+
       <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', margin: '0.5rem 0' }}>
         {SORTS.map(([k, label]) => (
           <button
@@ -228,6 +255,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
               <th>Wallet</th>
               <th>Deposit addr</th>
               <th>NFT custody</th>
+              <th>Referrals</th>
               <th>Balance</th>
               <th>LP Pool</th>
               <th>In trades</th>
@@ -272,6 +300,7 @@ export function CustomersView({ adminKey, onGoToMarket }) {
                     <td className="addr" title={c.nftCustodyAddress || ''} onClick={() => copy(c.nftCustodyAddress)}>
                       {copied && copied === c.nftCustodyAddress ? 'copied!' : short(c.nftCustodyAddress)}
                     </td>
+                    <td className="num">{c.referrals ?? 0}</td>
                     <td className="num">{usd(c.freeE6)}</td>
                     <td className="num">{usd(c.lpE6)}</td>
                     <td className="num">{usd(c.lockedE6)}</td>

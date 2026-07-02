@@ -13,6 +13,7 @@ import { Leaderboard } from '../components/Leaderboard';
 import { AdminPanel } from '../components/AdminPanel';
 import { ChatSidebar } from '../components/ChatSidebar';
 import { MarketThumb } from '../components/MarketThumb';
+import { MarketTicker } from '../components/MarketTicker';
 import { Toasts } from '../components/Toasts';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { initialChatOpen, persistChatOpen } from '../store/chat';
@@ -129,6 +130,8 @@ export function Exchange() {
       <div className={`app-container ${chatOpen ? 'chat-open' : ''}`}>
       <ChatSidebar open={chatOpen} onToggle={toggleChat} />
       <Navbar activeView={activeView} setActiveView={selectView} chatOpen={chatOpen} onToggleChat={toggleChat} gamesVisible={gamesVisible || classicGachaVisible} />
+
+      {activeView === 'trade' && <MarketTicker markets={markets} onTrade={handleTradeMarket} />}
 
       {activeView === 'trade' && !isMobile && (
         <div className={`main-grid ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>

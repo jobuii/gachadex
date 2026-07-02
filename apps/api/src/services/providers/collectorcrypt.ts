@@ -69,7 +69,7 @@ export type CcMachine = {
   videoHevc?: string; // HEVC/mp4 fallback for Safari
   public?: boolean;
 };
-export type CcPackNft = { id?: string; nft_address: string; name: string; description?: string; rarity: string; image: string; insured_value: number };
+export type CcPackNft = { id?: string; nft_address: string; name: string; description?: string | null; rarity: string; image: string; insured_value: number; attributes?: { trait_type?: string; value?: unknown }[] };
 export type CcWinner = {
   winner: string;
   nft_address: string;
@@ -154,6 +154,30 @@ const ccAbs = (p: string | null | undefined): string | null => (!p ? null : /^ht
 /** Pull a "PSA 10" / "CGC 9.5" style grade out of a CC card's text (the pool feed has no grade field).
  *  Prefer `description` — the `name` is truncated to 32 chars, which drops the grade for ~half the pool. */
 const GRADE_RE = /\b(PSA|CGC|BGS|SGC|TAG|Beckett|CGA)\b[^\d]{0,14}(\d+(?:\.5)?)/i;
+const GRADE_NUM_RE = /\d+(?:\.\d+)?/;
+// The grade attributes come the SAME way on both CC paths — getNfts pool cards (CcPackNft.attributes) and the
+// openPack reveal (nftWon.content.metadata.attributes) — so both grade builders below share these primitives
+// (one canonical attribute reader + number extractor), which keeps the lobby and reveal grades from drifting.
+type CcAttr = { trait_type?: string; value?: unknown };
+/** Read a CC card attribute by trait_type (case-insensitive, trimmed); null if absent/empty. */
+export const attrByTrait = (attrs: CcAttr[] | undefined, key: string): string | null => {
+  const hit = (attrs ?? []).find((a) => (a?.trait_type ?? '').toLowerCase() === key.toLowerCase());
+  const v = hit && hit.value != null ? String(hit.value).trim() : '';
+  return v || null;
+};
+/** The numeric grade pulled from the CC grade traits (GradeNum → The Grade → Grade), e.g. "10" / "8.5". */
+const gradeNumber = (attrs: CcAttr[] | undefined): string | null =>
+  attrByTrait(attrs, 'GradeNum')?.match(GRADE_NUM_RE)?.[0] ??
+  attrByTrait(attrs, 'The Grade')?.match(GRADE_NUM_RE)?.[0] ??
+  attrByTrait(attrs, 'Grade')?.match(GRADE_NUM_RE)?.[0] ?? null;
+/** FULL grade for the reveal + the owned card ("Your pulls"): "<company> <full descriptor>" e.g.
+ *  "PSA GEM MINT 10" (company + the verbatim `The Grade` text). Falls back to `<company> <number>` when the
+ *  full descriptor is absent, then to whichever half exists — so a graded card is never blank. */
+export const gradeFull = (attrs: CcAttr[] | undefined): string | null => {
+  const company = attrByTrait(attrs, 'Grading Company');
+  const full = attrByTrait(attrs, 'The Grade') ?? gradeNumber(attrs); // "GEM MINT 10", else "10"
+  return company && full ? `${company} ${full}` : (company || full);
+};
 
 export function toLobbyMachine(m: CcMachine): LobbyMachine {
   const tiers = Object.entries(m.odds ?? {}).map(([label, p]) => {
@@ -167,8 +191,17 @@ export function toLobbyMachine(m: CcMachine): LobbyMachine {
   };
 }
 export function toLobbyCard(n: CcPackNft): LobbyCard {
-  const g = (n.description || n.name || '').match(GRADE_RE); // description has the full (untruncated) name → the grade
-  return { mint: n.nft_address, name: n.name, imageUrl: n.image, valueE6: e6(n.insured_value), rarity: n.rarity, grade: g ? `${g[1].toUpperCase()} ${g[2]}` : null };
+  // SHORT grade for the compact Top-cards grid — "<company> <number>" e.g. "PSA 10" (the reveal path uses
+  // `gradeFull` for the wordy "PSA GEM MINT 10"). Robust against CC giving a short `name` + null `description`
+  // where the grade lives only in attributes. Precedence: a COMPLETE attribute grade wins; else the (possibly
+  // 32-char-truncated) name/description text; else a partial attribute — so a half-populated attribute never
+  // shadows a fuller grade in the text (CC normally pairs the traits, but the code shouldn't depend on it).
+  const company = attrByTrait(n.attributes, 'Grading Company');
+  const num = gradeNumber(n.attributes);
+  const m = (n.description || n.name || '').match(GRADE_RE);
+  const fromText = m ? `${m[1].toUpperCase()} ${m[2]}` : null;
+  const grade = (company && num ? `${company} ${num}` : null) || fromText || company || num || null;
+  return { mint: n.nft_address, name: n.name, imageUrl: n.image, valueE6: e6(n.insured_value), rarity: n.rarity, grade };
 }
 export function toLobbyWinner(w: CcWinner): LobbyWinner {
   return {

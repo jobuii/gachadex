@@ -54,6 +54,31 @@ test('toLobbyCard: grade comes from the full description when name is truncated 
   assert.equal(toLobbyCard(n).grade, 'PSA 10');
 });
 
+test('toLobbyCard: grade from structured attributes when name is short + description is null', () => {
+  // CC sometimes gives a short product `name` with a null `description`; the grade is only in the
+  // attributes (the real "Charizard ex" $25-pack card). Recover it like the reveal path does.
+  const n: CcPackNft = {
+    nft_address: 'MintCgc', name: 'Charizard ex', description: null, rarity: 'epic', image: 'https://cc/x.png', insured_value: 495,
+    attributes: [{ trait_type: 'Grading Company', value: 'CGC' }, { trait_type: 'The Grade', value: 'GEM MINT 10' }],
+  };
+  assert.equal(toLobbyCard(n).grade, 'CGC 10');
+});
+
+test('toLobbyCard: a half-populated attribute never shadows a fuller grade in the text', () => {
+  // CC normally pairs Grading Company + a grade-number trait, but if only ONE half is present the partial
+  // attribute must NOT win over a complete grade parsed from the text (company-only → keep the digit).
+  const companyOnly: CcPackNft = {
+    nft_address: 'M1', name: 'Charizard ex', description: 'Charizard ex PSA 10', rarity: 'epic', image: 'https://cc/x.png', insured_value: 100,
+    attributes: [{ trait_type: 'Grading Company', value: 'PSA' }],
+  };
+  assert.equal(toLobbyCard(companyOnly).grade, 'PSA 10'); // not the bare 'PSA'
+  const numOnly: CcPackNft = {
+    nft_address: 'M2', name: 'Charizard ex', description: 'Charizard ex PSA 10 GEM MINT', rarity: 'epic', image: 'https://cc/x.png', insured_value: 100,
+    attributes: [{ trait_type: 'The Grade', value: '10' }],
+  };
+  assert.equal(toLobbyCard(numOnly).grade, 'PSA 10'); // not the bare '10'
+});
+
 test('toLobbyWinner: nested name/image, insuredValue→micro-USDC, prize_tier→tier', () => {
   const w: CcWinner = {
     winner: '7nB56jAX',

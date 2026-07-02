@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import * as api from '../../lib/api.js';
-import { GachaReveal } from './GachaReveal.jsx';
-import { GachaSummary } from './GachaSummary.jsx';
 import { GachaInventory } from './GachaInventory.jsx';
+import { useGachaReveal } from './useGachaReveal.jsx';
 import { GoldBar } from './GoldBar.jsx';
-import { RARITY_COLORS, usd, usdWhole, pollGachaOpen } from './gacha-util.js';
+import { RARITY_COLORS, usd, usdWhole, pollGachaOpen, hideBrokenImg } from './gacha-util.js';
 
 // Classic Gacha (docs/classic-gacha-cc-packs-spec.md, P0–P4). Browses the live Collector Crypt machines (a
 // game-filter, a machine strip, the selected machine's detail = price + tier legend + buyback %, the real
@@ -30,7 +29,6 @@ const badgeOf = (priceE6) => {
 };
 const PREVIEW_IMG = 'https://d1xpxki1g4htqu.cloudfront.net/_nIGwpul5IF9JxQ3La5uK3myeBL6fr6UBcA6s1ZX6V4'; // dev-preview fallback card art
 const titleCase = (s) => (s ?? '').replace(/\b\w/g, (c) => c.toUpperCase());
-const hideBrokenImg = (e) => { e.currentTarget.style.visibility = 'hidden'; }; // CC image 404 → hide, keep the card
 
 export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
   const [machines, setMachines] = useState([]);
@@ -41,23 +39,24 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
   const [err, setErr] = useState(null);
   const [ripping, setRipping] = useState(false);
   const [confirmMachine, setConfirmMachine] = useState(null); // machine pending the buy-confirm
-  const [revealOpen, setRevealOpen] = useState(false); // the reveal overlay (charging → beats → payoff)
-  const [revealResult, setRevealResult] = useState(null); // the open result once it lands (null = still charging)
-  const [revealSpentE6, setRevealSpentE6] = useState('0');
   const [ripErr, setRipErr] = useState(null);
   const [ripPending, setRipPending] = useState(null); // buyback_pending: sell-back broadcast but unconfirmed — the reconciler settles it shortly (not an error)
-  const [inventory, setInventory] = useState([]);
   const [payWith, setPayWith] = useState('usdc');
   const [yolo, setYolo] = useState(false); // YOLO/turbo: auto-sell commons
   const [qty, setQty] = useState(1);
-  const [summaryResults, setSummaryResults] = useState(null); // multi-open results → GachaSummary
-  const [revealQueue, setRevealQueue] = useState(null); // normal-mode multi-open: reveal each result in turn, then summary
-  const [queueIndex, setQueueIndex] = useState(0); // position in revealQueue
-  const [previewSell, setPreviewSell] = useState(false); // dev preview: stub the summary's onSell so the mock can show "Sold ✓"
-  const [previewSellable, setPreviewSellable] = useState(false); // dev preview: force the single-reveal Sell-back button on
   const [instantCutBps, setInstantCutBps] = useState(1000); // GDEX cut on an instant sell-back (from /health); drives the net shown
   const [payWithGold, setPayWithGold] = useState(false); // gates the USDC/Gold pay choice on machines
   const [invVersion, setInvVersion] = useState(0); // bump → the <GachaInventory> panel reloads (after a pull/sell)
+
+  // Shared open→route→reveal state machine — the SAME orchestration the loyalty free-pack claim will reuse
+  // (common → ⚡ auto-sold panel, YOLO uncommon → summary, rare/epic → full reveal, then Keep/Sell/Trade).
+  const gacha = useGachaReveal({
+    instantCutBps,
+    onTradeMarket,
+    onError: setRipErr,
+    onPending: setRipPending,
+    onAfterChange: () => setInvVersion((v) => v + 1),
+  });
 
   useEffect(() => {
     let alive = true;
@@ -81,8 +80,6 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
     return () => { alive = false; };
   }, [selected]);
 
-  const loadInventory = () => { setInvVersion((v) => v + 1); if (!api.hasSession()) return; api.getGachaInventory().then((r) => setInventory(r.inventory ?? [])).catch(() => {}); };
-  useEffect(() => { loadInventory(); }, []);
   // Loyalty Gold: the balance/progress, and whether spending Gold is enabled (earn always accrues).
   useEffect(() => { api.getHealth().then((h) => { setPayWithGold(!!h.payWithGoldEnabled); if (h.gachaInstantCutBps != null) setInstantCutBps(Number(h.gachaInstantCutBps)); }).catch(() => {}); }, []);
 
@@ -106,25 +103,15 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
     if (!m) return;
     setRipErr(null);
     setRipping(true);
-    setRevealSpentE6(m.priceE6); setRevealResult(null); setSummaryResults(null); setRevealQueue(null); setQueueIndex(0); setPreviewSell(false); setPreviewSellable(false); setRevealOpen(true); // charging
+    gacha.startCharging(m.priceE6); // overlay opens charging (open+poll latency = suspense)
     try {
-      if (n === 1) {
-        const r = await openOne(m);
-        await loadInventory(); // so the reveal's Sell-now can resolve the held row
-        // YOLO only: an Uncommon skips the beat reveal → straight to the summary (Keep/Sell), like a multi-open.
-        // (Common is auto-sold to its own ⚡ panel; Rare/Epic still get the full reveal. Normal mode is unchanged.)
-        if (yolo && r.status === 'opened' && (r.card?.rarity || '').toLowerCase() === 'uncommon') setSummaryResults([r]);
-        else setRevealResult(r);
-      } else {
-        const results = [];
-        for (let i = 0; i < n; i++) results.push(await openOne(m)); // sequential = qty separate charges
-        await loadInventory();
-        // YOLO: straight to the summary (no reveals). Normal mode: reveal each card in turn, then the summary.
-        if (yolo) setSummaryResults(results);
-        else { setQueueIndex(0); setRevealQueue(results); }
-      }
+      const results = [];
+      for (let i = 0; i < n; i++) results.push(await openOne(m)); // sequential = qty separate charges
+      // Route by the canonical rules: common → ⚡ auto-sold, YOLO uncommon → summary, rare/epic → full reveal;
+      // multi-open → summary (YOLO) or a reveal-each-then-summary queue (normal). Shared with the free-pack claim.
+      gacha.route(results, { yolo });
     } catch (e) {
-      setRevealOpen(false);
+      gacha.close();
       setRipErr(e?.status === 401 ? 'Sign in to rip a pack.' : e.message);
     } finally {
       setRipping(false);
@@ -132,84 +119,31 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
     }
   };
 
-  const closeReveal = () => { setRevealOpen(false); setRevealResult(null); setSummaryResults(null); setRevealQueue(null); setQueueIndex(0); setPreviewSell(false); setPreviewSellable(false); };
-
-  // Normal-mode multi-open reveal sequence: advance to the next card; after the last (or on Skip-all), hand off to the summary.
-  const goToSummary = () => { setSummaryResults(revealQueue); setRevealQueue(null); setQueueIndex(0); };
-  const advanceQueue = () => {
-    if (!revealQueue) return;
-    const next = queueIndex + 1;
-    if (next >= revealQueue.length) goToSummary();
-    else setQueueIndex(next);
-  };
-  const skipAllToSummary = () => { if (revealQueue) goToSummary(); };
-
   // Dev-only: fire the reveal with a mock pull so the animation/sound can be tuned without a real (paid) open.
   // Borrows a real card image from the current pool when available. Gated by import.meta.env.DEV → never ships.
   const previewReveal = (rarity) => {
     const c = cards?.[0];
     const valueByTier = { common: '12000000', uncommon: '28000000', rare: '85000000', epic: '4475000000' };
-    setRevealSpentE6('50000000');
-    setRevealResult({
-      openId: 'preview', status: 'opened', verifyUrl: null,
-      card: { mint: 'preview', name: c?.name ?? 'Charizard VMAX', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? PREVIEW_IMG, valueE6: valueByTier[rarity] ?? '12000000', rarity, marketId: null, year: '2000' },
+    gacha.preview({
+      spentE6: '50000000',
+      result: { openId: 'preview', status: 'opened', verifyUrl: null, card: { mint: 'preview', name: c?.name ?? 'Charizard VMAX', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? PREVIEW_IMG, valueE6: valueByTier[rarity] ?? '12000000', rarity, marketId: null, year: '2000' } },
+      previewSell: true, // mock: show the Sell-back button (no real held row behind a preview)
     });
-    setPreviewSellable(true); // mock: show the Sell-back button (no real held row behind a preview)
-    setRevealOpen(true);
   };
-  const previewYolo = () => {
-    setRevealSpentE6('50000000'); setSummaryResults(null); setPreviewSellable(false);
-    setRevealResult({ openId: 'preview', status: 'turbo_sold', card: null, verifyUrl: null, turboRefundE6: '27000000' });
-    setRevealOpen(true);
-  };
+  const previewYolo = () => gacha.preview({ spentE6: '50000000', result: { openId: 'preview', status: 'turbo_sold', card: null, verifyUrl: null, turboRefundE6: '27000000' } });
   const previewMulti = () => {
     const c = cards?.[0];
     let n = 0;
     const mk = (rarity, value) => { const id = `p${n++}`; return { openId: id, status: 'opened', verifyUrl: null, turboRefundE6: null, card: { mint: id, name: c?.name ?? 'Card', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? PREVIEW_IMG, valueE6: value, rarity, marketId: null, year: '2000' } }; };
-    setRevealSpentE6('50000000');
-    setSummaryResults([mk('common', '12000000'), mk('rare', '85000000'), mk('epic', '4475000000'), { openId: 'pt', status: 'turbo_sold', card: null, verifyUrl: null, turboRefundE6: '27000000' }, mk('uncommon', '28000000')]);
-    setPreviewSell(true); setPreviewSellable(false); // mock: let the summary's Sell buttons resolve so the sell-all / sell-some flow is demoable
-    setRevealOpen(true);
+    // mock: let the summary's Sell buttons resolve so the sell-all / sell-some flow is demoable
+    gacha.preview({ spentE6: '50000000', summaryResults: [mk('common', '12000000'), mk('rare', '85000000'), mk('epic', '4475000000'), { openId: 'pt', status: 'turbo_sold', card: null, verifyUrl: null, turboRefundE6: '27000000' }, mk('uncommon', '28000000')], previewSell: true });
   };
   const previewSequence = () => { // normal-mode multi-open: reveal each card in turn, then the summary
     const c = cards?.[0];
     let n = 0;
     const mk = (rarity, value) => { const id = `p${n++}`; return { openId: id, status: 'opened', verifyUrl: null, turboRefundE6: null, card: { mint: id, name: c?.name ?? 'Card', grade: c?.grade ?? 'PSA 10', imageUrl: c?.imageUrl ?? PREVIEW_IMG, valueE6: value, rarity, marketId: null, year: '2000' } }; };
-    setRevealSpentE6('50000000'); setSummaryResults(null); setRevealResult(null); setQueueIndex(0);
-    setRevealQueue([mk('common', '12000000'), mk('uncommon', '28000000'), mk('rare', '85000000'), mk('epic', '4475000000')]);
-    setPreviewSell(true); setPreviewSellable(false); // mock: the final summary's Sell buttons resolve
-    setRevealOpen(true);
+    gacha.preview({ spentE6: '50000000', queue: [mk('common', '12000000'), mk('uncommon', '28000000'), mk('rare', '85000000'), mk('epic', '4475000000')], previewSell: true });
   };
-
-  const sellBack = async (item, instant = false) => {
-    setRipErr(null); setRipPending(null);
-    try {
-      await api.sellGachaPrize(item.id, instant);
-      loadInventory();
-      return true;
-    } catch (e) {
-      // The buyback was broadcast but CC hasn't confirmed it landed — NOT a failure. The card stays 'selling'
-      // and the reconciler settles it within a few minutes. Surface it as "processing", not a red error.
-      if (e.code === 'buyback_pending') { setRipPending(e.message); loadInventory(); return 'pending'; }
-      setRipErr(e.message);
-      return false;
-    }
-  };
-
-  // Summary "Sell" — resolve the held inventory row by mint and instant-sell it (−10%).
-  const sellByMint = async (mint) => {
-    const it = inventory.find((i) => i.mint === mint && i.status === 'held');
-    if (!it) return false;
-    setRipErr(null); setRipPending(null);
-    try { await api.sellGachaPrize(it.id, true); await loadInventory(); return true; }
-    catch (e) {
-      if (e.code === 'buyback_pending') { setRipPending(e.message); await loadInventory(); return 'pending'; }
-      setRipErr(e.message); return false;
-    }
-  };
-
-  // Trade tie-in: jump to the card's GDEX perp market (only shown when the won card matched one).
-  const trade = (item) => { if (onTradeMarket && item?.marketId) onTradeMarket({ id: item.marketId }); };
 
   if (loading) return <div className="empty-state">Loading packs…</div>;
   if (err) return <div className="order-error">Couldn’t load packs: {err}</div>;
@@ -222,8 +156,6 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
   const machine = machines.find((m) => m.code === selected) ?? shown[0] ?? machines[0];
   const topCards = cards ? [...cards].sort((a, b) => Number(b.valueE6) - Number(a.valueE6)).slice(0, 25) : null; // top 25 by value
   const totalE6 = String(Number(machine.priceE6 || 0) * qty);
-  const revealCard = revealResult?.card ?? null;
-  const revealItem = revealCard ? inventory.find((i) => i.mint === revealCard.mint) : null; // held row backing the reveal
 
   return (
     <div className="gacha g-classic-gacha">
@@ -376,35 +308,7 @@ export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
         document.body,
       )}
 
-      {revealOpen && (revealQueue ? (
-        <GachaReveal
-          key={queueIndex}
-          result={revealQueue[queueIndex]}
-          spentE6={revealSpentE6}
-          instantCutBps={instantCutBps}
-          seqPos={{ pos: queueIndex + 1, total: revealQueue.length }}
-          onNext={advanceQueue}
-          onSkipAll={skipAllToSummary}
-          onClose={closeReveal}
-        />
-      ) : summaryResults ? (
-        <GachaSummary results={summaryResults} spentE6={revealSpentE6} instantCutBps={instantCutBps} onSell={previewSell ? async () => true : sellByMint} onClose={closeReveal} />
-      ) : (
-        <GachaReveal
-          result={revealResult}
-          spentE6={revealSpentE6}
-          instantCutBps={instantCutBps}
-          canSell={!!revealItem || previewSellable}
-          canTrade={!!revealCard?.marketId}
-          onSellNow={async () => {
-            if (previewSellable) return true;
-            if (revealItem) return await sellBack(revealItem, true);
-            return false;
-          }}
-          onTrade={() => { if (revealCard) trade(revealCard); closeReveal(); }}
-          onClose={closeReveal}
-        />
-      ))}
+      {gacha.overlay}
     </div>
   );
 }

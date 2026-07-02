@@ -11,8 +11,8 @@ import { openPosition } from './engine.ts';
 import { lastMarkE6 } from './marks.ts';
 import { gachaConfig, gachaMarkupE6 } from './gacha-config.ts';
 import type { GachaChain } from './custody/gacha-chain.ts';
-import { defaultCcClient, ccVerifyUrl, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
-import { getAssetTransferInfo } from './das.ts';
+import { defaultCcClient, ccVerifyUrl, attrByTrait, gradeFull, type CcClient, type CcOpenResult } from './providers/collectorcrypt.ts';
+import { getAssetTransferInfo, getAssetImage } from './das.ts';
 import { settleSoldPrize, accrueGachaAffiliateShare, type SellBackResult } from './gacha-settle.ts';
 import { emitPackPullEvent, type PackPullInput } from './chat.ts';
 export type { SellBackResult } from './gacha-settle.ts';
@@ -47,6 +47,7 @@ export interface GachaDeps {
   sleepMs?: (ms: number) => Promise<void>;
   now?: () => number; // injectable clock for the reconcile grace window (tests)
   getAssetInfo?: typeof getAssetTransferInfo; // injectable DAS owner lookup (tests); used to gate sell-back/withdraw reverts
+  getAssetImage?: typeof getAssetImage; // injectable DAS image lookup (tests); recovers a reveal image when CC returns a null links.image
 }
 
 export interface GachaCard { mint: string; name: string | null; grade: string | null; imageUrl: string | null; valueE6: string; rarity: string | null; marketId: string | null; year: string | null }
@@ -90,28 +91,21 @@ async function matchMarket(q: Queryer, cardName: string | null): Promise<string 
 }
 
 // ── reveal-metadata extraction (the won card's name/grade/value come from CC's openPack response) ──
-function attr(reveal: CcOpenResult, key: string): string | null {
-  const hit = (reveal.nftWon?.content?.metadata?.attributes ?? []).find((x) => (x.trait_type ?? '').toLowerCase() === key.toLowerCase());
-  return hit && hit.value != null ? String(hit.value) : null;
-}
 export function extractCard(reveal: CcOpenResult): {
   mint: string; name: string | null; grade: string | null; imageUrl: string | null; insuredValueE6: string; year: string | null; setName: string | null; rarity: string | null;
 } {
-  const company = attr(reveal, 'Grading Company');
-  // The grade number is on 'GradeNum' for some cards, but many CC cards only carry 'The Grade' (e.g.
-  // "GEM-MT 10", "GEM MINT 10", "GEM-MT 8.5") — pull the numeric grade out of that as a fallback so we
-  // don't drop it and render a bare "PSA" instead of "PSA 10".
-  const num = attr(reveal, 'GradeNum') ?? attr(reveal, 'Grade') ?? attr(reveal, 'The Grade')?.match(/\d+(\.\d+)?/)?.[0] ?? null;
-  const grade = company ? `${company} ${num ?? ''}`.trim() : num;
-  const insured = Number(attr(reveal, 'insured value') ?? attr(reveal, 'Insured Value') ?? 0);
+  const attrs = reveal.nftWon?.content?.metadata?.attributes;
+  const insured = Number(attrByTrait(attrs, 'insured value') ?? attrByTrait(attrs, 'Insured Value') ?? 0);
   return {
     mint: reveal.nft_address ?? '',
     name: reveal.nftWon?.content?.metadata?.name ?? null,
-    grade: grade || null,
+    // FULL grade (e.g. "PSA GEM MINT 10") — the reveal + the owned card in "Your pulls" show the whole thing;
+    // only the compact Top-cards grid uses the short "PSA 10". Shared grade helpers keep both paths in step.
+    grade: gradeFull(attrs),
     imageUrl: reveal.nftWon?.content?.links?.image ?? null,
     insuredValueE6: usdc(Number.isFinite(insured) ? insured : 0).toString(),
-    year: attr(reveal, 'Year'),
-    setName: attr(reveal, 'Set'),
+    year: attrByTrait(attrs, 'Year'),
+    setName: attrByTrait(attrs, 'Set'),
     rarity: reveal.rarity ?? null,
   };
 }
@@ -126,7 +120,10 @@ async function getOpenRow(db: Db, openId: string): Promise<OpenRow | null> {
 export async function openPack(db: Db, userId: string, opts: { machineCode: string; idempotencyKey: string; expectedPriceE6?: string; payWith?: 'usdc' | 'gold'; turbo?: boolean; claim?: boolean }, deps: GachaDeps): Promise<OpenResult> {
   if (!config.classicGachaEnabled) throw GACHA_OFF();
   const payWith = opts.payWith === 'gold' ? 'gold' : 'usdc';
-  const turbo = opts.turbo === true; // YOLO: CC auto-sells a Common for instant USDC instead of delivering the slab
+  // YOLO: CC auto-sells a Common for instant USDC instead of delivering the slab. A free-pack CLAIM is ALWAYS
+  // YOLO — forced server-side (not client-trusted), and it's also more stock-resilient (turbo tolerates empty
+  // Common inventory). This only sets the CC turbo flag / common-auto-sell branch; the gold payment is unchanged.
+  const turbo = opts.turbo === true || opts.claim === true;
   const cc = deps.cc ?? defaultCcClient;
   const { chain } = deps;
 
@@ -275,7 +272,7 @@ async function deliverOpen(db: Db, openId: string, deps: GachaDeps): Promise<Ope
         console.error('[gacha] reveal mint already actively held — phantom delivery, refunding open', openId, reveal.nft_address);
         return await settleRefund(db, openId, 'failed');
       }
-      return await recordReveal(db, openId, reveal); // delivered slab (normal mode + turbo non-Common)
+      return await recordReveal(db, openId, reveal, deps); // delivered slab (normal mode + turbo non-Common)
     }
     if (reveal.code === 'WAITING_FOR_WEBHOOK') {
       if (attempt < MAX_REVEAL_ATTEMPTS - 1) { await sleepFn(REVEAL_RETRY_MS); continue; }
@@ -370,8 +367,13 @@ export async function remediateMisrecordedTurboCommon(
 /** A Rare or Epic pull is worth a gold "BIG PACK PULL!" chat bar (case-insensitive vs CC's 'Rare'/'Epic'). */
 const isBigPullRarity = (r: string | null): boolean => r != null && ['rare', 'epic'].includes(r.toLowerCase());
 
-async function recordReveal(db: Db, openId: string, reveal: CcOpenResult): Promise<OpenResult> {
+async function recordReveal(db: Db, openId: string, reveal: CcOpenResult, deps: GachaDeps): Promise<OpenResult> {
   const card = extractCard(reveal);
+  // CC's openPack sometimes returns a null content.links.image even though the on-chain asset has art (their
+  // response is trimmed / their indexer lagged), which would leave the reveal showing a placeholder. Recover
+  // the real image by asking our own DAS (Helius getAsset) for it by mint — best-effort (never blocks or
+  // fails the delivery), done OUTSIDE the tx so no network I/O holds a row lock. Persisted below with the card.
+  if (!card.imageUrl && card.mint) card.imageUrl = await (deps.getAssetImage ?? getAssetImage)(card.mint);
   const out = await db.tx<{ result: OpenResult; pull: PackPullInput | null }>(async (q) => {
     const cur = (await q.query<OpenRow>(`SELECT ${OPEN_COLS} FROM gacha_pack_opens WHERE id = $1 FOR UPDATE`, [openId])).rows[0];
     if (!cur) throw new HttpError(404, 'open not found');

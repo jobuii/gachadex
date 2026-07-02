@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { AuthButton } from './AuthButton';
+import { NavBalance } from './NavBalance';
 import { Wordmark } from './Brand';
 import { useChat } from '../store/chat';
 
@@ -76,6 +77,7 @@ export function Navbar({ activeView, setActiveView, chatOpen, onToggleChat, game
         <button type="button" className="chat-toggle nav-docs" onClick={() => navigate('/docs')} title="Docs" aria-label="Docs">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" /></svg>
         </button>
+        <NavBalance onManageFunds={() => setActiveView('portfolio')} />
         <AuthButton />
       </div>
     </nav>

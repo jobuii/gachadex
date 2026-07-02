@@ -31,6 +31,7 @@ export interface CustomerRow {
   withdrawalsE6: string; // lifetime confirmed withdrawals
   pendingWithdrawalsE6: string; // withdrawals in flight (requested/signed/broadcast)
   openPositions: number;
+  referrals: number; // how many users this customer referred (users.referred_by = this user)
 }
 
 // Sort key -> the numeric ORDER BY expression. The key comes from the client, so it MUST be whitelisted
@@ -42,6 +43,7 @@ const SORT_EXPR: Record<string, string> = {
   locked: 'COALESCE(marg.amount_uusdc, 0)',
   pnl: 'COALESCE(vol.pnl_e6, 0)',
   tips: 'COALESCE(tip.tipped_e6, 0)',
+  referrals: 'COALESCE(ref.referrals, 0)',
   joined: 'u.created_at',
 };
 
@@ -55,9 +57,12 @@ function nftCustodyAddr(index: number | null): string | null {
 
 export async function listCustomers(
   db: Db,
-  opts: { limit: number; offset: number; sort: string },
+  opts: { limit: number; offset: number; sort: string; search?: string },
 ): Promise<{ customers: CustomerRow[]; total: number }> {
   const orderBy = SORT_EXPR[opts.sort] ?? SORT_EXPR.volume;
+  // Optional wallet search (partial, case-insensitive). null = no filter; matched with a bound param (never
+  // interpolated). Applied to BOTH the page query and the count so pagination reflects the filtered set.
+  const search = opts.search?.trim() || null;
   const [r, totalR, pool] = await Promise.all([
     db.query<{
     id: string;
@@ -81,6 +86,7 @@ export async function listCustomers(
     pending_e6: string;
     open_positions: number;
     gold_balance: string;
+    referrals: number;
     free_credit_e6: string;
     credit_remaining_e6: string;
   }>(
@@ -134,6 +140,10 @@ export async function listCustomers(
      gold AS (
        SELECT user_id, balance AS gold_balance FROM gold_balances
      ),
+     -- how many users each customer referred (referred_by points at the referrer; indexed by idx_users_referred_by)
+     ref AS (
+       SELECT referred_by, COUNT(*)::int AS referrals FROM users WHERE referred_by IS NOT NULL GROUP BY referred_by
+     ),
      -- bonus credits (docs/bonus-credits-spec.md): total received across both sources (Σ granted_e6), + the
      -- still-outstanding bonus (Σ SIGNUP_BONUS + DEPOSIT_BONUS − BONUS_EXPIRE on collateral); "Remaining"
      -- clamps that to free collateral
@@ -163,6 +173,7 @@ export async function listCustomers(
             COALESCE(wd.pending_e6, 0)::text AS pending_e6,
             COALESCE(op.open_positions, 0)::int AS open_positions,
             COALESCE(gold.gold_balance, 0)::text AS gold_balance,
+            COALESCE(ref.referrals, 0)::int AS referrals,
             COALESCE(credit.free_credit, 0)::text AS free_credit_e6,
             LEAST(GREATEST(COALESCE(credit.outstanding_g, 0), 0), GREATEST(COALESCE(coll.amount_uusdc, 0), 0))::text AS credit_remaining_e6
      FROM users u
@@ -179,12 +190,17 @@ export async function listCustomers(
      LEFT JOIN fund ON fund.user_id = u.id
      LEFT JOIN lp ON lp.user_id = u.id
      LEFT JOIN gold ON gold.user_id = u.id
+     LEFT JOIN ref ON ref.referred_by = u.id
      LEFT JOIN credit ON credit.user_id = u.id
+     WHERE ($3::text IS NULL OR u.solana_pubkey ILIKE '%' || $3 || '%')
      ORDER BY ${orderBy} DESC NULLS LAST, u.created_at DESC
      LIMIT $1 OFFSET $2`,
-      [opts.limit, opts.offset],
+      [opts.limit, opts.offset, search],
     ),
-    db.query<{ c: string }>(`SELECT COUNT(*)::text AS c FROM users`),
+    db.query<{ c: string }>(
+      `SELECT COUNT(*)::text AS c FROM users u WHERE ($1::text IS NULL OR u.solana_pubkey ILIKE '%' || $1 || '%')`,
+      [search],
+    ),
     getPool(db),
   ]);
   const lpNav = BigInt(pool.navUusdc);
@@ -214,6 +230,7 @@ export async function listCustomers(
       withdrawalsE6: x.withdrawals_e6,
       pendingWithdrawalsE6: x.pending_e6,
       openPositions: x.open_positions,
+      referrals: x.referrals,
     })),
     total: Number(totalR.rows[0].c),
   };

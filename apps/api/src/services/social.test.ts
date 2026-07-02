@@ -16,7 +16,7 @@ const { listMarketsWithData } = await import('./markets.ts');
 const { creditFaucet, getUserBalances } = await import('./faucet.ts');
 const { openPosition, closePosition, getUserPositions } = await import('./engine.ts');
 const { assignReferralCode, getReferralInfo, redeemReferral, setReferralCode } = await import('./referral.ts');
-const { getLeaderboard } = await import('./leaderboard.ts');
+const { getLeaderboard, userStanding } = await import('./leaderboard.ts');
 const { lpDeposit } = await import('./lp.ts');
 const { reconcile } = await import('./reconcile.ts');
 const { usdc } = await import('../money.ts');
@@ -124,14 +124,15 @@ test('leaderboard counts LP capital as account value, not a phantom trading loss
   const lp = await newUser(); // faucets 10,000
   await lpDeposit(db, lp, usdc(5_000));
 
+  // LP capital at par = $0 realized (NOT a phantom trading loss) → the wallet is HIDDEN from the board. A
+  // real phantom loss would instead show a NEGATIVE realized row (non-zero → not hidden), so this guards it.
   const board = await getLeaderboard(db, { viewerUserId: lp });
-  const row = board.you;
-  assert.ok(row, 'viewer row is present');
-  assert.equal(row.realizedPnlUusdc, '0', 'parking capital in the LP pool is not a trading loss');
-  assert.equal(row.equityUusdc, usdc(10_000).toString(), 'equity reflects total account value including the LP stake');
+  assert.equal(board.you, null, 'a $0-realized (LP-at-par) wallet is hidden — not shown as a negative phantom loss');
+  const s = await userStanding(db, lp);
+  assert.equal(s.pnlUusdc, '0', 'parking capital in the LP pool is $0 realized, not a trading loss');
 });
 
-test('leaderboard ranks a profitable trader above a flat account', async () => {
+test('leaderboard ranks a real trader; a flat/idle account is hidden', async () => {
   const trader = await newUser();
   const idle = await newUser();
   await openPosition(db, trader, { marketId: market.id, side: 'long', qtyE6: 5_000_000n, leverage: 10, idempotencyKey: randomUUID() });
@@ -139,14 +140,12 @@ test('leaderboard ranks a profitable trader above a flat account', async () => {
   await closePosition(db, trader, { positionId: pos.id, fractionBps: 10_000, idempotencyKey: randomUUID() });
 
   const lb = await getLeaderboard(db, { limit: 100, viewerUserId: idle });
-  const tRow = lb.rows.find((r) => r.userId === trader)!;
-  const iRow = lb.rows.find((r) => r.userId === idle)!;
-  assert.ok(tRow && iRow);
-  assert.ok(tRow.rank < iRow.rank, 'the profitable trader outranks the idle account');
+  const tRow = lb.rows.find((r) => r.userId === trader);
+  assert.ok(tRow, 'a wallet with a real (non-zero) result is ranked');
   assert.ok(BigInt(tRow.realizedPnlUusdc) > 0n, 'profitable close shows positive net realized PnL');
-  assert.equal(iRow.realizedPnlUusdc, '0', 'an account that only faucets has zero realized PnL');
   assert.ok(BigInt(tRow.volumeUusdc) > 0n, 'the trader has traded volume');
-  assert.equal(lb.you?.userId, idle, 'the viewer row is pinned');
+  assert.ok(!lb.rows.some((r) => r.userId === idle), 'a flat/idle account ($0 realized) is hidden');
+  assert.equal(lb.you, null, 'the idle viewer has no pinned row (rank → —)');
 });
 
 test('ledger still reconciles after referral bonuses and trading', async () => {

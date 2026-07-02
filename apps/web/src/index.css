@@ -479,6 +479,39 @@ button { border-radius: var(--pill); }
   transition: grid-template-columns 0.3s ease;
 }
 
+/* Running ticker tape — biggest 24h card movers, below the navbar on the Trade view. Equal top + bottom
+   margin = symmetric whitespace (nav → ticker → content; .main-grid has no top margin). The item set is
+   duplicated and the track translates -50% for a seamless loop; hover / reduced-motion pause it. Token-driven. */
+.mkt-ticker {
+  margin: 14px 18px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent);
+          mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent);
+}
+.mkt-ticker-track {
+  display: flex; align-items: center; width: max-content;
+  animation: mkt-ticker-scroll 40s linear infinite;
+}
+@keyframes mkt-ticker-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.mkt-ticker:hover .mkt-ticker-track { animation-play-state: paused; }
+/* per-item margin (not a track `gap`) so the track is exactly 2× one set → translateX(-50%) loops seamlessly */
+.mkt-tick {
+  display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
+  background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: pointer;
+  margin: 7px; padding: 4px 10px; font-size: 12.5px; transition: background 0.14s, border-color 0.14s;
+}
+.mkt-tick:hover { background: var(--bg-3); border-color: var(--border); }
+.mkt-tick:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 1px; }
+.mkt-tick-nm { font-family: var(--font-display); font-weight: 600; color: var(--text); }
+.mkt-tick-pr { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.mkt-tick-ch { font-family: ui-monospace, monospace; font-weight: 600; font-size: 11px; padding: 1px 6px; border-radius: 5px; }
+.mkt-tick-ch.up { color: var(--success); background: rgba(52, 211, 153, 0.1); }
+.mkt-tick-ch.down { color: var(--danger); background: rgba(244, 63, 94, 0.1); }
+@media (prefers-reduced-motion: reduce) { .mkt-ticker-track { animation: none; } }
+
 .main-grid.sidebar-collapsed {
   grid-template-columns: 60px 1fr 280px;
 }
@@ -1465,6 +1498,74 @@ button { border-radius: var(--pill); }
 .acct-disconnect:hover { border-color: var(--danger); }
 .acct-copy:focus-visible, .acct-disconnect:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .acct-menu { animation: none; } }
+
+/* Option B unified balance chip. Desktop: full chip (USDC + Gold legs · live-pulse · in-chip eye + caret) →
+   an anchored "YOUR MONEY" popover. Mobile (mobile.css): collapses to a single $-only tap target → a bottom
+   sheet that expands to both. Cyan = USDC's currency colour (fixed, like the gold ingot is intrinsically
+   gold); everything else is token-driven so it themes across skins. */
+.navbal { position: relative; display: flex; }
+
+.navbal-chip {
+  display: flex; align-items: center; gap: 0; height: 40px; padding: 0 6px 0 8px;
+  border-radius: var(--pill); background: var(--bg-3); border: 1px solid var(--border); color: var(--text);
+  cursor: pointer; user-select: none; position: relative; overflow: hidden;
+  transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
+}
+.navbal-chip:hover, .navbal-chip.open { border-color: var(--accent); background: var(--bg-2); box-shadow: 0 0 0 1px var(--accent); }
+.navbal-chip:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 2px; }
+.navbal-leg { display: flex; align-items: center; gap: 7px; padding: 0 8px; }
+.navbal-glyph {
+  width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center;
+  font-family: var(--font-display); font-weight: 700; font-size: 12px; color: #06121a;
+  background: radial-gradient(circle at 35% 30%, #7DECFB, #22D3EE 70%); box-shadow: 0 0 12px -2px rgba(34, 211, 238, 0.6);
+}
+.navbal-ingot { flex-shrink: 0; }
+.navbal-val { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 14px; letter-spacing: -0.2px; color: var(--text); min-width: 44px; text-align: right; }
+.navbal-val.gold { color: #FCE5AE; min-width: 36px; }
+.navbal-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--success); margin-left: -2px; box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); animation: navbal-pulse 2.4s ease-out infinite; }
+@keyframes navbal-pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); } 70% { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } }
+.navbal-div { color: var(--text-muted); font-size: 14px; opacity: 0.6; line-height: 1; }
+.navbal-tools { display: flex; align-items: center; gap: 2px; padding-left: 4px; }
+.navbal-eye { width: 28px; height: 28px; border-radius: 6px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; display: grid; place-items: center; transition: color 0.15s, background 0.15s; }
+.navbal-eye:hover { background: var(--bg-2); color: var(--text); }
+.navbal-eye:focus-visible { outline: 2px solid var(--accent-lit); outline-offset: 1px; }
+.navbal-eye svg { width: 16px; height: 16px; }
+.navbal-caret { color: var(--text-muted); display: grid; place-items: center; width: 16px; transition: transform 0.2s, color 0.18s; }
+.navbal-caret svg { width: 13px; height: 13px; }
+.navbal-chip.open .navbal-caret { transform: rotate(180deg); color: var(--accent-lit); }
+
+.navbal-pop {
+  position: absolute; top: calc(100% + 10px); right: 0; z-index: 120;
+  width: 340px; max-width: 92vw;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 30px 70px -24px rgba(0, 0, 0, 0.9); padding: 6px; animation: acct-pop 0.16s ease;
+}
+.navbal-pop::before { content: ""; position: absolute; top: -5px; right: 22px; width: 10px; height: 10px; background: var(--bg-2); border-left: 1px solid var(--border); border-top: 1px solid var(--border); transform: rotate(45deg); }
+.navbal-pop-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 10px 8px; }
+.navbal-pop-title { font-family: var(--font-display); font-weight: 600; font-size: 13px; letter-spacing: 0.2px; color: var(--text-muted); }
+.navbal-mask { display: flex; align-items: center; gap: 6px; font-family: var(--font-display); font-size: 11.5px; font-weight: 500; color: var(--text-muted); background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px; cursor: pointer; transition: color 0.15s, border-color 0.15s; }
+.navbal-mask:hover { color: var(--text); border-color: var(--accent); }
+.navbal-mask svg { width: 14px; height: 14px; }
+.navbal-row { display: flex; align-items: flex-start; gap: 12px; padding: 13px 12px; border-radius: 8px; }
+.navbal-row + .navbal-row { margin-top: 2px; }
+.navbal-ricon { width: 36px; height: 36px; border-radius: 9px; flex-shrink: 0; display: grid; place-items: center; font-family: var(--font-display); font-weight: 700; font-size: 16px; }
+.navbal-ricon.usdc { color: #06121a; background: radial-gradient(circle at 35% 30%, #7DECFB, #22D3EE 70%); box-shadow: 0 0 16px -4px rgba(34, 211, 238, 0.55); }
+.navbal-ricon.gold { background: linear-gradient(160deg, #2a2114, #1a1610); border: 1px solid #3a2e16; }
+.navbal-meta { flex: 1; min-width: 0; }
+.navbal-nm { display: flex; align-items: center; gap: 8px; }
+.navbal-nm b { font-family: var(--font-display); font-weight: 600; font-size: 14px; color: var(--text); }
+.navbal-tag { font-family: var(--font-display); font-size: 9.5px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; border: 1px solid; }
+.navbal-tag.tradeable { color: #22D3EE; background: rgba(34, 211, 238, 0.12); border-color: rgba(34, 211, 238, 0.28); }
+.navbal-tag.loyalty { color: #F5B544; background: rgba(245, 181, 68, 0.12); border-color: rgba(245, 181, 68, 0.28); }
+.navbal-sub { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; }
+.navbal-amt { text-align: right; flex-shrink: 0; }
+.navbal-big { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 16px; letter-spacing: -0.3px; color: var(--text); }
+.navbal-big.gold { color: #FCE5AE; }
+.navbal-unit { font-size: 10.5px; color: var(--text-muted); font-family: var(--font-display); font-weight: 500; margin-top: 2px; }
+.navbal-actions { display: flex; gap: 8px; padding: 8px 6px 6px; }
+.navbal-act { flex: 1; display: inline-flex; align-items: center; justify-content: center; }
+@media (prefers-reduced-motion: reduce) { .navbal-pop, .navbal-pulse { animation: none; } }
+
 /* navbar auth buttons — bigger, readable text (Select Wallet / Sign In / Logout) */
 .navbar .wallet-adapter-button { font-size: 0.72rem !important; }
 .nav-actions .btn-primary, .nav-actions .btn-ghost { font-size: 0.68rem; padding: 0.55rem 0.95rem; }
@@ -1875,6 +1976,14 @@ td.addr:hover { text-decoration: underline; }
 .avatar-modal-head h3 { margin: 0; font-size: 0.95rem; }
 .avatar-modal-close { background: none; border: none; color: var(--text-muted); font-size: 1rem; cursor: pointer; }
 .avatar-modal-close:hover { color: var(--text); }
+/* chat identity color swatches (avatar box + username color in chat) */
+.avatar-color-row { display: flex; align-items: center; gap: 0.7rem; padding: 0.7rem 1rem 0; flex-wrap: wrap; }
+.avatar-color-label { font-size: 0.6rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+.avatar-swatches { display: inline-flex; gap: 0.45rem; flex-wrap: wrap; }
+.avatar-swatch { width: 26px; height: 26px; border-radius: 999px; background: var(--sw); border: 2px solid transparent; cursor: pointer; padding: 0; transition: transform .12s ease; }
+.avatar-swatch:hover { transform: scale(1.12); }
+.avatar-swatch.sel { border-color: var(--text); box-shadow: 0 0 0 2px var(--bg-2), 0 0 0 3px var(--sw); }
+.avatar-swatch:disabled { cursor: default; opacity: 0.6; }
 .avatar-modal-controls { display: flex; align-items: center; gap: 0.6rem; padding: 0.7rem 1rem; flex-wrap: wrap; }
 .avatar-variant-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .avatar-variant-toggle button { background: var(--bg-3); border: none; color: var(--text-muted); padding: 0.35rem 0.7rem; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
@@ -1926,7 +2035,15 @@ td.addr:hover { text-decoration: underline; }
 .io-col-price, .io-col-range { width: 6.5rem; }
 .io-col-chg { width: 5.25rem; }
 .io-col-action { width: 5.5rem; }
+.io-col-trend { width: 5rem; }
 /* .io-col-name carries no width → it absorbs the remaining space, identical for every panel (still aligned) */
+/* TREND sparkline column — markets indices + cards tables (a 24h-direction trend line: green up / red down) */
+.io-table th.io-trend, .io-table td.io-trend { text-align: center; padding-left: 0.4rem; padding-right: 0.4rem; }
+.screener-table th.screener-trend, .screener-table td.screener-trend { text-align: center; }
+.trend-spark { width: 54px; height: 20px; display: inline-block; vertical-align: middle; }
+.trend-spark.up { color: var(--success); }
+.trend-spark.down { color: var(--danger); }
+.trend-spark-na { color: var(--text-muted); font-family: ui-monospace, monospace; font-size: 0.7rem; }
 .io-table thead th { background: var(--bg-2); text-align: left; white-space: nowrap;
   font-family: var(--font-chat); font-size: 0.58rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--text-muted); padding: 0.62rem 0.9rem; border-bottom: 1px solid var(--border); }

@@ -101,15 +101,15 @@ const feeRev = async (): Promise<bigint> =>
 const noWait = { sleepMs: async () => {} };
 const PRICE = usdc(50);
 
-test('extractCard: grade number falls back to "The Grade" when GradeNum is absent (PSA 10 / CGC 8.5, not bare "PSA")', () => {
+test('extractCard: the reveal shows the FULL grade — "<company> <The Grade>" verbatim (not shortened)', () => {
   const reveal = (attrs: Array<{ trait_type: string; value: string }>) =>
     ({ success: true, nft_address: 'M1', rarity: 'rare', nftWon: { content: { metadata: { name: 'Card', attributes: attrs }, links: { image: 'x' } } } }) as never;
-  // GradeNum present → used directly (unchanged behaviour)
+  // 'The Grade' present → show the WHOLE descriptor (e.g. "PSA GEM MINT 10"), NOT the short "PSA 10" (that's
+  // the Top-cards grid's job, via toLobbyCard). The reveal + "Your pulls" want the full grade.
+  assert.equal(extractCard(reveal([{ trait_type: 'Grading Company', value: 'PSA' }, { trait_type: 'The Grade', value: 'GEM MINT 10' }])).grade, 'PSA GEM MINT 10');
+  assert.equal(extractCard(reveal([{ trait_type: 'Grading Company', value: 'CGC' }, { trait_type: 'The Grade', value: 'GEM MINT 8.5' }])).grade, 'CGC GEM MINT 8.5');
+  // no full descriptor → fall back to "<company> <number>" from GradeNum, so it's never blank
   assert.equal(extractCard(reveal([{ trait_type: 'Grading Company', value: 'PSA' }, { trait_type: 'GradeNum', value: '10' }])).grade, 'PSA 10');
-  // only 'The Grade' (e.g. CC's "GEM-MT 10") → parse the number → "PSA 10" (was a bare "PSA" before the fix)
-  assert.equal(extractCard(reveal([{ trait_type: 'Grading Company', value: 'PSA' }, { trait_type: 'The Grade', value: 'GEM-MT 10' }])).grade, 'PSA 10');
-  // decimal grade out of 'The Grade'
-  assert.equal(extractCard(reveal([{ trait_type: 'Grading Company', value: 'CGC' }, { trait_type: 'The Grade', value: 'GEM MINT 8.5' }])).grade, 'CGC 8.5');
   // no grade attributes at all → null (no crash)
   assert.equal(extractCard(reveal([])).grade, null);
 });
@@ -130,6 +130,38 @@ test('open: debits the price, records the held NFT, funds + pays CC', async () =
   assert.ok(open.payment_sig && open.cc_memo);
   const inv = (await db.query<{ status: string; mint: string }>(`SELECT status, mint FROM gacha_nft_inventory WHERE user_id = $1`, [user])).rows[0];
   assert.equal(inv.status, 'held');
+});
+
+test('open: recovers a null CC reveal image from DAS by mint (persisted to the open + inventory)', async () => {
+  const user = await newUser();
+  const cc = fakeCc();
+  // CC delivered the slab but with a null links.image (trimmed response / indexer lag) — the reveal would
+  // otherwise show a placeholder even though the on-chain asset has art.
+  cc.reveals.push({
+    success: true, nft_address: 'MintNoImg', rarity: 'rare',
+    nftWon: { content: { metadata: { name: 'Charizard PSA 10', attributes: [{ trait_type: 'insured value', value: 4475 }] }, links: { image: null } } },
+  });
+  let askedMint: string | null = null;
+  const getAssetImage = async (mint: string) => { askedMint = mint; return 'https://das/recovered.png'; };
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'noimg' }, { chain: fakeChain(), cc, getAssetImage, ...noWait });
+  assert.equal(r.status, 'opened');
+  assert.equal(askedMint, 'MintNoImg'); // DAS was consulted by the won mint
+  assert.equal(r.card!.imageUrl, 'https://das/recovered.png'); // recovered image on the reveal result
+  const row = (await db.query<{ nft_image: string | null; image_url: string | null }>(
+    `SELECT o.nft_image, i.image_url FROM gacha_pack_opens o JOIN gacha_nft_inventory i ON i.open_id = o.id WHERE o.user_id = $1`, [user],
+  )).rows[0];
+  assert.equal(row.nft_image, 'https://das/recovered.png'); // persisted to the open
+  assert.equal(row.image_url, 'https://das/recovered.png'); // persisted to inventory
+});
+
+test('open: does NOT hit DAS when CC already returned a reveal image', async () => {
+  const user = await newUser();
+  const cc = fakeCc(); // default keptReveal carries links.image = 'https://cc/x.png'
+  let called = false;
+  const getAssetImage = async () => { called = true; return 'https://das/should-not-be-used.png'; };
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'hasimg' }, { chain: fakeChain(), cc, getAssetImage, ...noWait });
+  assert.equal(r.card!.imageUrl, 'https://cc/x.png');
+  assert.equal(called, false); // the CC image was present → no fallback lookup
 });
 
 test('open: insufficient balance is rejected before any charge', async () => {
@@ -604,6 +636,20 @@ test('gold: a gold-bought open spends Gold, funds CC from the rewards budget, ea
   assert.equal(await goldBal(user), 100_000n - 50_000n); // spent the gold price; NO earn on a gold open
   assert.equal(await collOf(user), collBefore);           // no USDC collateral debit
   assert.equal((await rewardsBudget()) - budgetBefore, -PRICE); // the budget paid CC the real USDC
+});
+
+test('gold: a free-pack CLAIM is server-forced to YOLO/turbo (even when the client omits turbo)', async () => {
+  const user = await newUser();
+  await db.tx(async (q) => earnGold(q, user, 25_000n, 'SEED', {})); // fund a $25 free-pack claim (25,000 Gold)
+  const cc = fakeCc();
+  cc.price = 25; // a $25 machine = 25,000 Gold = FREE_PACK_GOLD (the only claimable pack)
+  let genTurbo: boolean | undefined;
+  cc.generatePack = async (p: unknown) => { genTurbo = (p as { turbo?: boolean }).turbo; return { memo: `m-${randomUUID().slice(0, 8)}`, transaction: 'unsigned' }; };
+  // claim=true, turbo NOT passed (defaults false) → the server must force turbo=true (a free pack is always YOLO)
+  const r = await openPack(db, user, { machineCode: 'pokemon_50', idempotencyKey: 'claim-yolo', payWith: 'gold', claim: true }, { chain: fakeChain(), cc, ...noWait });
+  assert.equal(genTurbo, true, 'a claim forces CC generatePack turbo=true');
+  assert.equal(r.status, 'opened'); // the default keptReveal is a delivered (non-Common) card
+  assert.equal(await goldBal(user), 0n); // spent exactly the 25,000 Gold; money path unchanged by turbo
 });
 
 test('gold: a gold open with too few Gold is rejected (no pack, no charge)', async () => {

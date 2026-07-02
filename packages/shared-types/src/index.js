@@ -258,6 +258,15 @@ export const AvatarRequest = z.object({
   avatar: z.string().trim().regex(/^(default|shiny)\/\d{1,4}\.png$/, 'invalid avatar'),
 });
 
+// The chat identity colors (avatar box + username). SINGLE SOURCE shared by the avatar/color picker, the
+// chat renderer, and server-side validation. A user's chat_color is null until they pick one, in which case
+// the client derives a stable color from their handle (see colorFor).
+export const CHAT_COLORS = ['#f0c040', '#3fb950', '#58a6ff', '#e74c3c', '#bc8cff', '#f78166', '#39d3bb'];
+// Pick a chat identity color — must be one of CHAT_COLORS.
+export const ColorRequest = z.object({
+  color: z.string().refine((c) => CHAT_COLORS.includes(c), 'invalid color'),
+});
+
 // --- chat moderation ---------------------------------------------------------
 
 // Mute a user for N minutes (1 min – 30 days); omitted -> server default.

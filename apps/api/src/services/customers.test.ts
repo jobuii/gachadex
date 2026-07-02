@@ -138,3 +138,37 @@ test('listCustomers surfaces the live Gold BALANCE (gold_balances), not lifetime
   const noGold = customers.find((c) => c.pubkey === 'wallet-pk-1')!;
   assert.equal(noGold.goldBalance, '0', 'no gold_balances row -> 0');
 });
+
+test('listCustomers: referral count = how many users each customer referred (0 when none)', async () => {
+  const referrer = await newUser('wallet-ref-parent', 'deposit-ref-parent', 21);
+  const childA = await newUser('wallet-ref-childA', 'deposit-ref-childA', 22);
+  const childB = await newUser('wallet-ref-childB', 'deposit-ref-childB', 23);
+  await db.query(`UPDATE users SET referred_by = $1 WHERE id = ANY($2)`, [referrer, [childA, childB]]);
+
+  const { customers } = await listCustomers(db, { limit: 500, offset: 0, sort: 'joined' });
+  assert.equal(customers.find((c) => c.userId === referrer)!.referrals, 2, 'referred 2 users');
+  assert.equal(customers.find((c) => c.userId === childA)!.referrals, 0, 'referred nobody');
+
+  // sort by referrals DESC surfaces the top referrer first (only this user has referrals in the test DB)
+  const byRef = await listCustomers(db, { limit: 500, offset: 0, sort: 'referrals' });
+  assert.equal(byRef.customers[0].userId, referrer, 'the referrer sorts to the top');
+});
+
+test('listCustomers: wallet search filters (partial + case-insensitive) and total reflects the filter', async () => {
+  await newUser('SEARCHME-XyZ-777', 'deposit-searchme', 31);
+  // case-insensitive substring match → only the one wallet, and total is the FILTERED count
+  const hit = await listCustomers(db, { limit: 50, offset: 0, sort: 'joined', search: 'searchme-xyz' });
+  assert.equal(hit.total, 1);
+  assert.equal(hit.customers.length, 1);
+  assert.equal(hit.customers[0].pubkey, 'SEARCHME-XyZ-777');
+  // a shorter fragment still matches
+  const frag = await listCustomers(db, { limit: 50, offset: 0, sort: 'joined', search: 'XyZ-77' });
+  assert.equal(frag.customers[0]?.pubkey, 'SEARCHME-XyZ-777');
+  // no match → empty + total 0
+  const none = await listCustomers(db, { limit: 50, offset: 0, sort: 'joined', search: 'no-such-wallet-zzz' });
+  assert.equal(none.total, 0);
+  assert.equal(none.customers.length, 0);
+  // blank/whitespace search = no filter (counts everyone)
+  const all = await listCustomers(db, { limit: 500, offset: 0, sort: 'joined', search: '   ' });
+  assert.ok(all.total >= 2);
+});

@@ -47,6 +47,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
   const [sold, setSold] = useState(false); // sold → show the SOLD confirmation, then auto-close
   const [sellPending, setSellPending] = useState(false); // buyback broadcast but unconfirmed → "processing" confirmation (reconciler settles it)
   const [sellErr, setSellErr] = useState(null); // sell-back failed → show it here (the sidebar error is behind this overlay)
+  const [imgKey, setImgKey] = useState(0); // CC card-image load: <img> remount key, bumped to retry a flaky load; ≥2 = gave up → placeholder
   const coinLoop = useRef(null);
   const timers = useRef([]);
   const started = useRef(false);
@@ -116,6 +117,7 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
 
   const flipped = phase === 'flip' || phase === 'done';
   const done = phase === 'done';
+  const imgFailed = imgKey >= 2; // first load + one retry both failed → show the placeholder, not a blank front
   const valE6 = shownE6 != null ? String(shownE6) : (card?.valueE6 ?? '0');
   // What the player nets selling this slab straight back to CC now (instant cut, e.g. 10%). Shown on the button.
   const sellNetE6 = card?.valueE6 ? netAfterCutE6(card.valueE6, instantCutBps) : 0n;
@@ -145,6 +147,14 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
     if (!el) return;
     el.style.setProperty('--rx', '0deg');
     el.style.setProperty('--ry', '0deg');
+  };
+
+  // The revealed card art is the whole payoff, so a flaky image load must NOT leave the front blank: CC's
+  // image CDN occasionally drops a request, so retry the load once (after a short delay — re-fetching the
+  // exact-same URL too fast tends to hit the same blip), and only then fall back to the placeholder tile.
+  const onCardImgError = () => {
+    if (imgKey >= 1) setImgKey(2); // already retried once → give up gracefully (placeholder, never a blank)
+    else timers.current.push(setTimeout(() => setImgKey(1), 450)); // one delayed retry → remounts the <img>
   };
 
   // Sell back from the reveal: sell, then update IN PLACE to a SOLD confirmation (rare.win-style). The player
@@ -233,8 +243,8 @@ export function GachaReveal({ result, spentE6, canSell, canTrade, onSellNow, onT
                 </div>
                 {/* front face — the revealed card, with pointer-reactive holo foil (shine / holo / sparkle) */}
                 <div className="gacha-card3d-front">
-                  {card?.imageUrl
-                    ? <img src={card.imageUrl} alt={card.name ?? ''} referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
+                  {card?.imageUrl && !imgFailed
+                    ? <img key={imgKey} src={card.imageUrl} alt={card.name ?? ''} referrerPolicy="no-referrer" decoding="async" fetchPriority="high" onError={onCardImgError} />
                     : <div className="gacha-card3d-noimg" aria-hidden>🃏</div>}
                   <div className="gacha-card3d-shine" aria-hidden />
                   <div className="gacha-card3d-holo" aria-hidden />

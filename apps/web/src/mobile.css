@@ -24,6 +24,7 @@
 
   /* ---- top bar: logo + chat + theme + wallet (links live in the tab bar) ---- */
   .navbar { padding: 0 0.6rem; height: var(--m-bar-h); gap: 0.4rem; }
+  .mkt-ticker { margin: 11px 10px; } /* tighter sides on a phone; vertical stays symmetric */
   .nav-links, .nav-social-link { display: none; }
   .nav-left { gap: 0.55rem; }
   .nav-brand { gap: 0.4rem; }
@@ -35,6 +36,18 @@
   .nav-actions { gap: 0.4rem; }
   .acct-handle, .acct-caret { display: none; } /* account pill = avatar-only on mobile; the dropdown still shows the name + address */
   .acct-pill { padding: 0.28rem; }
+  /* balance chip: collapse to the $ value only (Gold leg hidden). Tap opens the SAME anchored dropdown as
+     desktop (not a bottom sheet) — fixed to the top-right so a 340px menu can't clip off a phone screen. */
+  .navbal-chip { height: 36px; padding: 0 7px; gap: 4px; }
+  .navbal-chip .navbal-pulse,
+  .navbal-chip .navbal-div,
+  .navbal-chip .navbal-tools,
+  .navbal-chip .navbal-leg.gold { display: none; }
+  .navbal-leg { padding: 0 2px; gap: 5px; }
+  .navbal-glyph { width: 18px; height: 18px; font-size: 11px; }
+  .navbal-val { font-size: 13px; min-width: 0; }
+  .navbal-pop { position: fixed; top: calc(var(--m-bar-h, 56px) + 6px); right: 8px; left: auto; bottom: auto; width: min(340px, calc(100vw - 16px)); max-width: none; }
+  .navbal-pop::before { display: none; }
   .theme-trigger { font-size: 0.42rem; padding: 0.4rem 0.45rem; }
   .navbar .wallet-adapter-button {
     font-size: 0.45rem !important;

@@ -165,6 +165,7 @@ export const postChat = (body, replyTo) =>
 export const getProfile = () => req('/me/profile', { auth: true });
 export const setUsername = (username) => req('/me/username', { method: 'POST', auth: true, body: { username } });
 export const setAvatar = (avatar) => req('/me/avatar', { method: 'POST', auth: true, body: { avatar } });
+export const setColor = (color) => req('/me/color', { method: 'POST', auth: true, body: { color } });
 
 // Moderator actions (require a mod account; 403 otherwise).
 export const chatDelete = (id) => req(`/chat/messages/${id}/delete`, { method: 'POST', auth: true });
@@ -348,8 +349,8 @@ export const adminRefreshPoolSnapshot = (adminKey) => adminReq('/admin/pool-snap
 export const adminGetWithdrawalAutoProcess = (adminKey) => adminGet('/admin/withdrawal-auto-process', adminKey);
 export const adminSetWithdrawalAutoProcess = (enabled, adminKey) => adminReq('/admin/withdrawal-auto-process', adminKey, { enabled });
 // Per-customer operator view (paginated + sortable) -> { customers: [...], total }.
-export const adminGetCustomers = ({ limit = 50, offset = 0, sort = 'volume' } = {}, adminKey) =>
-  adminGet(`/admin/customers?limit=${limit}&offset=${offset}&sort=${encodeURIComponent(sort)}`, adminKey);
+export const adminGetCustomers = ({ limit = 50, offset = 0, sort = 'volume', search = '' } = {}, adminKey) =>
+  adminGet(`/admin/customers?limit=${limit}&offset=${offset}&sort=${encodeURIComponent(sort)}${search ? `&search=${encodeURIComponent(search)}` : ''}`, adminKey);
 // One customer's open positions per market (expand-row drill-down) -> { positions: [...] }.
 export const adminGetCustomerPositions = (userId, adminKey) => adminGet(`/admin/customers/${userId}/positions`, adminKey);
 // One customer's history (deposits, withdrawals, completed trades) -> { entries: [...] }.

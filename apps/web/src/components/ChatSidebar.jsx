@@ -1,17 +1,17 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { formatUsd } from '@pokex/pricing';
-import { CHAT_REACTIONS } from '@pokex/shared-types';
+import { CHAT_REACTIONS, CHAT_COLORS } from '@pokex/shared-types';
 import { useAuth } from '../auth/AuthContext';
 import { useChat } from '../store/chat';
 import { BrandMark } from './Brand';
 import { avatarSrc, avatarFallback } from '../lib/avatar.js';
 import * as api from '../lib/api.js';
 
-const PALETTE = ['#f0c040', '#3fb950', '#58a6ff', '#e74c3c', '#bc8cff', '#f78166', '#39d3bb'];
+// A user's chosen chat color wins; absent that, derive a STABLE color from their handle (hash → palette).
 function colorFor(handle) {
   let h = 0;
   for (let i = 0; i < (handle || '').length; i++) h = (h * 31 + handle.charCodeAt(i)) >>> 0;
-  return PALETTE[h % PALETTE.length];
+  return CHAT_COLORS[h % CHAT_COLORS.length];
 }
 function fmtTime(iso) {
   const d = new Date(iso);
@@ -409,7 +409,7 @@ export function ChatSidebar({ open, onToggle }) {
           messages.map((m, i) => {
             if (m.kind === 'event') return <ActionBar key={m.id} m={m} rank={ranks[m.userId]} isMod={isMod} onDelete={() => modAct('Message deleted', () => api.chatDelete(m.id))} />;
             const mine = m.userId === user?.id;
-            const hColor = colorFor(m.handle);
+            const hColor = m.color || colorFor(m.handle);
             const aState = effFor(m.userId, m.authorMutedUntil, m.authorBanned);
             const aMuted = muteLeftMin(aState.mutedUntil) > 0;
             const aBanned = aState.banned;
@@ -541,7 +541,7 @@ export function ChatSidebar({ open, onToggle }) {
         <div className="chat-input">
           <span
             className="chat-avatar chat-me-avatar"
-            style={{ background: me?.handle ? colorFor(me.handle) : 'var(--border)' }}
+            style={{ background: me?.color || (me?.handle ? colorFor(me.handle) : 'var(--border)') }}
             onClick={openNameEditor}
             title="Change your username"
           >

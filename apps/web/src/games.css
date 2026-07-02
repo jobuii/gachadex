@@ -121,11 +121,11 @@
 .gacha-tier-pct { font-weight: 700; }
 .gacha-meta { display: flex; flex-direction: column; gap: 0.15rem; margin-top: 0.7rem; font-size: 0.74rem; color: var(--text-muted, #9a9ab0); }
 .gacha-cards h4, .gacha-winners h4 { margin: 0 0 0.6rem; }
-.gacha-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 0.6rem; }
-.gacha-card { border: 1px solid var(--border, #2a2a38); border-radius: var(--radius, 10px); padding: 0.5rem; background: var(--bg-2, #14141c); display: flex; flex-direction: column; gap: 0.3rem; }
-.gacha-card img { width: 100%; height: 120px; object-fit: contain; }
-.gacha-card-name { font-size: 0.7rem; line-height: 1.1; max-height: 2.2em; overflow: hidden; }
-.gacha-card-val { font-size: 0.82rem; font-weight: 700; color: #22c55e; display: inline-flex; align-items: center; gap: 0.22rem; white-space: nowrap; }
+.gacha-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
+.gacha-card { border: 1px solid var(--border, #2a2a38); border-radius: var(--radius, 10px); padding: 0.75rem; background: var(--bg-2, #14141c); display: flex; flex-direction: column; gap: 0.5rem; }
+.gacha-card img { width: 100%; height: 240px; object-fit: contain; }
+.gacha-card-name { font-size: 0.9rem; line-height: 1.15; max-height: 2.3em; overflow: hidden; }
+.gacha-card-val { font-size: 1.05rem; font-weight: 700; color: #22c55e; display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
 /* Rarity (tier) chip on an inventory card — colour set inline per rarity; border tracks it via currentColor. */
 .gacha-card-tier { align-self: flex-start; font-size: 0.5rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.12em; padding: 0.12rem 0.4rem; border: 1px solid currentColor; border-radius: 999px; opacity: 0.92; }
 .gacha-winners { margin-top: 1.2rem; }
@@ -640,8 +640,8 @@
 .gacha-meta-line { font-size: 0.66rem; color: var(--muted, #8b8b9a); text-align: center; margin: 0.7rem 0 0; }
 /* card-in-pack meta (insured value + grade), collectorroll layout */
 /* value on its own line, grade as a readable badge below (was cramped sharing one row in a ~110px tile) */
-.gacha-card-meta { display: flex; flex-direction: column; align-items: flex-start; gap: 0.3rem; width: 100%; margin-top: 0.35rem; }
-.gacha-card-grade { font-size: 0.68rem; font-weight: 700; color: var(--text); background: var(--bg-3, rgba(255,255,255,0.04)); border: 1px solid var(--border); border-radius: 5px; padding: 0.12rem 0.42rem; white-space: nowrap; }
+.gacha-card-meta { display: flex; flex-direction: column; align-items: flex-start; gap: 0.4rem; width: 100%; margin-top: 0.5rem; }
+.gacha-card-grade { font-size: 0.85rem; font-weight: 700; color: var(--text); background: var(--bg-3, rgba(255,255,255,0.04)); border: 1px solid var(--border); border-radius: 6px; padding: 0.18rem 0.55rem; white-space: nowrap; }
 
 /* smaller Contains/Buyback (less in-your-face) */
 .gacha-machine-grid .gacha-eyebrow { font-size: 0.52rem; }

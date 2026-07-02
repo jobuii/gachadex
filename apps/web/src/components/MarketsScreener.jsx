@@ -3,6 +3,7 @@ import { formatUsd } from '@pokex/pricing';
 import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { useStickyState } from '../lib/useStickyState';
 import { GAME_TABS as GAMES } from '../lib/games.js';
+import { TrendSpark } from './TrendSpark';
 
 // Dedicated "Markets" screener (the filters/Option-C page): a sortable table of every card market with
 // top-mover tabs (Top/Volume/Gainers/Losers), a game filter, a rarity filter, and search. Sorting keys
@@ -123,6 +124,7 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
                 <th>CARD</th>
                 <th className={`num ${sort === 'top' ? 'sorted' : ''}`}>PRICE</th>
                 <th className={`num ${sort === 'gainers' || sort === 'losers' ? 'sorted' : ''}`}>24H %</th>
+                <th className="screener-trend">TREND</th>
                 <th className={`num ${sort === 'volume' ? 'sorted' : ''}`}>VOLUME</th>
                 <th>RARITY</th>
               </tr>
@@ -142,6 +144,7 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
                     </td>
                     <td className="num"><PriceCell market={m} /></td>
                     <td className={`num ${up ? 'up' : 'down'}`}>{up ? '+' : ''}{ch.toFixed(2)}%</td>
+                    <td className="screener-trend"><TrendSpark pct={m.change24hPct} seed={m.id} /></td>
                     <td className="num">{fmtVol(m.volume24hUsd)}</td>
                     <td><span className="screener-badge">{m.rarity || '—'}</span></td>
                   </tr>
@@ -149,7 +152,7 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="screener-empty">No markets match these filters.</td>
+                  <td colSpan={7} className="screener-empty">No markets match these filters.</td>
                 </tr>
               )}
             </tbody>

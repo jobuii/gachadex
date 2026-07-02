@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { RARITY_COLORS, usd, netAfterCutE6 } from './gacha-util.js';
+import { RARITY_COLORS, usd, netAfterCutE6, hideBrokenImg } from './gacha-util.js';
 
 // Multi-open summary (docs/classic-gacha-cc-packs-spec.md). After opening more than one pack: a net line
 // (spent vs value) + a grid of every pull. Mirrors rare.win's PackOpen summary. Tap any pull to select it
@@ -68,7 +68,7 @@ export function GachaSummary({ results, spentE6, onSell, onClose, instantCutBps 
                 {r.card ? (
                   <>
                     {sellableCard && <span className="gacha-summary-check" aria-hidden>{isSel ? '✓' : ''}</span>}
-                    {r.card.imageUrl && <img src={r.card.imageUrl} alt={r.card.name ?? ''} referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />}
+                    {r.card.imageUrl && <img src={r.card.imageUrl} alt={r.card.name ?? ''} referrerPolicy="no-referrer" onError={hideBrokenImg} />}
                     <span className="gacha-summary-name" title={r.card.name ?? ''}>{r.card.name ?? 'card'}</span>
                     <span className="gacha-summary-val" style={{ color: tierColor(r.card.rarity) }}>{usd(r.card.valueE6)}</span>
                     {sold[r.card.mint] && <span className="gacha-summary-sold">Sold ✓</span>}

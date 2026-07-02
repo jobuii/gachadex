@@ -129,6 +129,11 @@ async function computeRanked(db: Db): Promise<RankedEntry[]> {
         goldEarned: goldByUser.get(u.id) ?? 0n,
       };
     })
+    // Only rank wallets with a real result: drop $0-realized-PnL wallets — idle deposits and never-traded
+    // wallets all net to exactly 0n (cash − capital-in). This single gate keeps every consumer consistent
+    // (the leaderboard list, top-100 rank badges, and each profile's rank/total all read this list). A dropped
+    // wallet's figures are genuinely 0, so its userStanding stays correct (rank → null, PnL/volume → 0).
+    .filter((e) => e.realized !== 0n)
     .sort((a, b) => (b.realized === a.realized ? cmp(b.equity, a.equity) : cmp(b.realized, a.realized)));
 }
 
