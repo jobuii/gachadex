@@ -91,3 +91,25 @@ test('houseEconomics is ledger-derived (no chain / no real-funds needed) and mir
   assert.ok(BigInt(after.fundingCollectedE6) >= BigInt(after.fundingLpE6));
   assert.equal(typeof after.pnlBreakdown.surplusE6, 'string');
 });
+
+test('houseEconomics: gacha net (house) = narrow revenue − Gold rebate − gacha referral; referral fees paid = perps + gacha', async () => {
+  const fee = await getOrCreateSystemAccount(db, 'FEE_REVENUE');
+  const budget = await getOrCreateSystemAccount(db, 'GACHA_REWARDS_BUDGET');
+  const cp = await getOrCreateSystemAccount(db, 'TREASURY_USDC'); // dummy counterparty for the test legs
+  const before = await houseEconomics(db);
+  await db.tx(async (q) => {
+    // $2 gacha house revenue (sell-back cut) to FEE_REVENUE
+    await postTxn(q, { reason: 'GACHA_SELLBACK', refType: 'gacha', refId: 'he-g1', entries: [{ accountId: cp, amount: -usdc(2) }, { accountId: fee, amount: usdc(2) }] });
+    // fund the rewards budget $0.50 from fees, then draw it to fund a Gold pack (the Gold rebate cost)
+    await postTxn(q, { reason: 'GACHA_REWARDS_FUND', refType: 'admin', refId: 'he-g2', entries: [{ accountId: fee, amount: -usdc(0.5) }, { accountId: budget, amount: usdc(0.5) }] });
+    await postTxn(q, { reason: 'PACK_BUY_GOLD_FUND', refType: 'gacha_open', refId: 'he-g3', entries: [{ accountId: budget, amount: -usdc(0.5) }, { accountId: cp, amount: usdc(0.5) }] });
+    // referral payouts out of FEE_REVENUE: gacha share $0.30 + perps cashback $0.20
+    await postTxn(q, { reason: 'GAME_REVENUE_SHARE', refType: 'gacha', refId: 'he-g4', entries: [{ accountId: fee, amount: -usdc(0.3) }, { accountId: cp, amount: usdc(0.3) }] });
+    await postTxn(q, { reason: 'REFERRAL_CASHBACK', refType: 'fee', refId: 'he-g5', entries: [{ accountId: fee, amount: -usdc(0.2) }, { accountId: cp, amount: usdc(0.2) }] });
+  });
+  const after = await houseEconomics(db);
+  // gacha net Δ = revenue $2 − Gold rebate $0.50 − gacha referral $0.30 = $1.20 (the GACHA_REWARDS_FUND top-up is NOT double-counted)
+  assert.equal(BigInt(after.gachaNetE6) - BigInt(before.gachaNetE6), usdc(1.2), 'gacha net = narrow revenue − Gold rebate − gacha referral');
+  // referral fees paid Δ = gacha $0.30 + perps $0.20 = $0.50
+  assert.equal(BigInt(after.referralFeesPaidE6) - BigInt(before.referralFeesPaidE6), usdc(0.5), 'referral paid = perps + gacha payouts');
+});

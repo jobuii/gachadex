@@ -121,6 +121,8 @@ export interface HouseEconomics {
   fundingHouseE6: string; // house cut of funding (FUNDING legs on FEE_REVENUE)
   fundingLpE6: string; // funding paid into the LP pool (FUNDING legs on LP_POOL) — owed to LP providers, NOT house
   fundingCollectedE6: string; // gross funding into the LP pool (positive FUNDING legs on LP_POOL)
+  gachaNetE6: string; // net gacha fees to the house = gacha revenue − Gold rebate − referral share (matches the Gacha-tab NET)
+  referralFeesPaidE6: string; // total paid OUT to referrers: REFERRAL_CASHBACK (perps) + GAME_REVENUE_SHARE (gacha)
   totalDepositsE6: string; // lifetime credited customer deposits (real-funds; 0 in play-money)
   totalWithdrawalsE6: string; // lifetime confirmed customer withdrawals (real-funds; 0 in play-money)
   pnlBreakdown: HousePnlBreakdown;
@@ -136,6 +138,36 @@ async function customerFlowTotals(db: Db): Promise<{ deposits: bigint; withdrawa
   return { deposits: BigInt(dep.rows[0].s), withdrawals: BigInt(wd.rows[0].s) };
 }
 
+/** Gacha/referral totals for the operator Overview (ledger-derived). gachaNet is computed the SAME way as the
+ *  Gacha-tab NET (gacha-monitoring.ts) so the two agree: NARROW gacha revenue (the 4 GACHA_* FEE_REVENUE reasons)
+ *  − Gold rebate (budget draw) − gacha referral share. NB do NOT use feesGachaE6 − rebate: feesGachaE6's broad
+ *  `GACHA%` filter also nets the GACHA_REWARDS_FUND budget top-up, so that would double-count the gold flow.
+ *  referralPaid = total paid OUT to referrers: perps (REFERRAL_CASHBACK) + gacha (GAME_REVENUE_SHARE); both are
+ *  negative legs on FEE_REVENUE, so SUM(-amount) is the positive amount paid. */
+async function gachaEconomicsExtras(db: Db): Promise<{ gachaNet: bigint; referralPaid: bigint }> {
+  const [fee, rebate] = await Promise.all([
+    // one pass over FEE_REVENUE (CASE, mirroring housePnlBreakdown): narrow gacha revenue, the gacha referral
+    // share (subtracted from gacha net), and total referral paid across perps + gacha (both negative legs).
+    db.query<{ rev: string; gacha_ref: string; all_ref: string }>(
+      `SELECT
+         COALESCE(SUM(CASE WHEN reason IN ('GACHA_SELLBACK','GACHA_TURBO_SELL','GACHA_PACK_BUY','GACHA_REFUND') THEN amount_uusdc ELSE 0 END), 0)::text AS rev,
+         COALESCE(SUM(CASE WHEN reason = 'GAME_REVENUE_SHARE' THEN -amount_uusdc ELSE 0 END), 0)::text AS gacha_ref,
+         COALESCE(SUM(CASE WHEN reason IN ('REFERRAL_CASHBACK','GAME_REVENUE_SHARE') THEN -amount_uusdc ELSE 0 END), 0)::text AS all_ref
+       FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
+      WHERE a.user_id IS NULL AND a.type = 'FEE_REVENUE'`,
+    ),
+    db.query<{ t: string }>(
+      `SELECT COALESCE(SUM(-le.amount_uusdc), 0)::text AS t FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
+        WHERE a.user_id IS NULL AND a.type = 'GACHA_REWARDS_BUDGET' AND le.reason IN ('PACK_BUY_GOLD_FUND', 'GACHA_REFUND')`,
+    ),
+  ]);
+  const f = fee.rows[0];
+  return {
+    gachaNet: BigInt(f.rev) - BigInt(rebate.rows[0].t) - BigInt(f.gacha_ref), // = Gacha-tab NET (revenue − rebate − referral)
+    referralPaid: BigInt(f.all_ref),
+  };
+}
+
 /**
  * House economics for the admin Overview — ALL ledger-derived (no chain reads, no real-funds
  * requirement), so it renders in BOTH play-money and real-funds modes. The chain/custody figures
@@ -143,11 +175,12 @@ async function customerFlowTotals(db: Db): Promise<{ deposits: bigint; withdrawa
  * /admin/treasury endpoint and layer on top of this when present.
  */
 export async function houseEconomics(db: Db): Promise<HouseEconomics> {
-  const [cust, customerLp, bd, flows] = await Promise.all([
+  const [cust, customerLp, bd, flows, gx] = await Promise.all([
     customerFunds(db),
     customerLpTotal(db),
     housePnlBreakdown(db),
     customerFlowTotals(db),
+    gachaEconomicsExtras(db),
   ]);
   return {
     freeE6: cust.freeE6.toString(),
@@ -161,6 +194,8 @@ export async function houseEconomics(db: Db): Promise<HouseEconomics> {
     // gross + LP funding come from the SAME query (housePnlBreakdown's LP scan), so gross >= the net LP
     // share always holds — no race between two snapshots (the same approach treasuryState uses).
     fundingCollectedE6: bd.fundingLpGrossE6,
+    gachaNetE6: gx.gachaNet.toString(), // = Gacha-tab NET: narrow gacha revenue − Gold rebate − gacha referral share
+    referralFeesPaidE6: gx.referralPaid.toString(),
     totalDepositsE6: flows.deposits.toString(),
     totalWithdrawalsE6: flows.withdrawals.toString(),
     pnlBreakdown: bd,

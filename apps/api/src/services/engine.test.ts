@@ -15,6 +15,8 @@ const { fromPokemontcg } = await import('./providers/pokemontcg.ts');
 const { listMarketsWithData } = await import('./markets.ts');
 const { creditFaucet, getUserBalances } = await import('./faucet.ts');
 const { openPosition, closePosition, getUserPositions } = await import('./engine.ts');
+const { accrueFunding } = await import('./funding.ts');
+const { setFundingFactor } = await import('./fees.ts');
 const { reconcile } = await import('./reconcile.ts');
 const { usdc } = await import('../money.ts');
 const { fee, notional } = await import('@pokex/pricing');
@@ -193,4 +195,23 @@ test('reconciler stays balanced after all trading activity', async () => {
 
 after(async () => {
   await closeDb();
+});
+
+test('getUserPositions: accrued funding is signed from the CUSTOMER view (− owes / + receives), and zeroes after settle', async () => {
+  await setFundingFactor(db, 50); // +0.50%/hr max funding (a valid small-bps knob)
+  const longU = await newUser();
+  const shortU = await newUser();
+  await openPosition(db, longU, { marketId: market.id, side: 'long', qtyE6: 5_000_000n, leverage: 5, idempotencyKey: randomUUID() });
+  await openPosition(db, shortU, { marketId: market.id, side: 'short', qtyE6: 1_000_000n, leverage: 5, idempotencyKey: randomUUID() });
+  await accrueFunding(db, market.id); // net-LONG skew → cumulative index rises → longs PAY, shorts RECEIVE
+  const [lp] = await getUserPositions(db, longU);
+  const [sp] = await getUserPositions(db, shortU);
+  assert.ok(BigInt(lp.accruedFundingUusdc) < 0n, 'the net-long OWES → negative (customer view)');
+  assert.ok(BigInt(sp.accruedFundingUusdc) > 0n, 'the net-short RECEIVES → positive');
+  // partially closing the long settles its funding → the snapshot catches up → the remaining accrual is 0
+  await closePosition(db, longU, { positionId: lp.id, fractionBps: 5_000, idempotencyKey: randomUUID() });
+  const [lpAfter] = await getUserPositions(db, longU);
+  assert.equal(BigInt(lpAfter.accruedFundingUusdc), 0n, 'after a settle the snapshot catches up → 0 accrued');
+  await closeAll(longU); await closeAll(shortU); // reset OI for any later test
+  await setFundingFactor(db, 30); // restore the default knob
 });
