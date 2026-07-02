@@ -48,9 +48,9 @@ export const SYSTEM_ACCOUNT_TYPES: AccountType[] = [
   // gold-bought pack debits it to pay CC real USDC (Gold is a cost, not revenue — kept OUT of FEE_REVENUE,
   // which is shared with LP fees + affiliate cashback). Its negative balance = outstanding deferred liability.
   'GACHA_REWARDS_BUDGET',
-  // Free signup-credit budget (docs/signup-credit-spec.md). Pre-funded by the operator from FEE_REVENUE
-  // (admin Perks page); a SIGNUP_CREDIT grant debits it into USER_COLLATERAL. Its balance is the program's
-  // hard cap (grants clamp to it). Dark until signup_credit_enabled.
+  // Bonus-credit budget (docs/bonus-credits-spec.md). Pre-funded by the operator from FEE_REVENUE
+  // (admin Perks page); SIGNUP_BONUS / DEPOSIT_BONUS grants debit it into USER_COLLATERAL. Its balance is the
+  // program's hard cap (grants clamp to it). Dark until the per-source *_bonus_enabled toggles.
   'CREDIT_BUDGET',
   // Real-funds custody mirror (docs/real-funds-custody-plan.md): the only account real deposits/
   // withdrawals touch. Its negative balance == total internal claims; the chain reconciler asserts

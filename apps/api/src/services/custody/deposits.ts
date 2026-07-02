@@ -5,7 +5,7 @@ import type { Db } from '../../db/client.ts';
 import { getOrCreateSystemAccount, getOrCreateUserAccount, postTxn } from '../ledger.ts';
 import { usdc } from '../../money.ts';
 import { deriveDepositKeypair } from './wallet.ts';
-import { grantSignupCredit } from '../signup-credit.ts';
+import { grantDepositBonus } from '../bonus.ts';
 
 /**
  * Deposit pipeline (custody P1 + P1.5):
@@ -126,14 +126,14 @@ export async function creditDeposit(db: Db, depositId: string): Promise<string |
       `UPDATE deposits SET status = 'credited', usdc_credited_e6 = $2, txn_id = $3, credited_at = now() WHERE id = $1`,
       [depositId, amount.toString(), txnId],
     );
-    return { txnId, userId: d.user_id };
+    return { txnId, userId: d.user_id, amount };
   });
   if (!out) return null;
-  // Deposit-first signup-credit grant (docs/signup-credit-spec.md §9.1) — AFTER the deposit commits, best-effort.
-  // grantSignupCredit is a no-op when the program is off and idempotent (one per user), so a credit hiccup can
-  // never affect the deposit (the .catch swallows it), and re-credits don't re-grant. Awaited (a small local
-  // tx) so the grant lands with the deposit rather than racing it.
-  await grantSignupCredit(db, out.userId).catch(() => {});
+  // Deposit bonus (docs/bonus-credits-spec.md §2.2): a % of the deposit, granted AFTER the deposit commits,
+  // best-effort. grantDepositBonus is a no-op when the source is off/paused and idempotent (first deposit only),
+  // so a bonus hiccup can never affect the deposit (the .catch swallows it) and re-credits don't re-grant.
+  // Awaited (a small local tx) so the bonus lands with the deposit rather than racing it.
+  await grantDepositBonus(db, out.userId, out.amount, depositId).catch(() => {});
   return out.txnId;
 }
 

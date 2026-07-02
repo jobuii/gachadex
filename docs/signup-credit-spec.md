@@ -1,5 +1,12 @@
 # Free Signup Credit — Spec
 
+> **⚠️ SUPERSEDED (2026-07-02) by [`bonus-credits-spec.md`](bonus-credits-spec.md).** The operator asked to
+> keep the deposit bonus (now as a **% of deposit**) *and* add a separate **signup bonus** (flat $ at account
+> creation), both sharing the protections here via a common engine. This document remains the accurate record
+> of the shared money mechanics (the floor §2.2, wagering §2.3, dormancy §2.5, review §3d, velocity §3.1,
+> CREDIT_BUDGET funding §9.2) — the v2 spec reuses all of it and only generalises the *triggers* and adds a
+> second source. Read the v2 spec for the current plan; read this for the mechanics it builds on.
+
 **Status:** DRAFT → **QA'd + revised** (grounding + adversarial design review, 2026-06-30). Not built; flag-gated when built. The QA caught a **principal-leak in the earlier withdrawable formula** (old §2.4) and a headline contradiction — both fixed; §2.2 is now the single authoritative rule. Remaining product calls in §9.
 **Author:** design session 2026-06-30.
 **One-liner:** Give new accounts a configurable amount of **free, tradeable, non-withdrawable** USDC credit, with loss-prevention so we never give away the principal and bound the cost of withdrawable winnings.

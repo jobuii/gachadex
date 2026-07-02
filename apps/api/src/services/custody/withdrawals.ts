@@ -8,7 +8,7 @@ import { usdc } from '../../money.ts';
 import type { CustodyLog } from './deposits.ts';
 import { withdrawalsFrozen } from './treasury.ts';
 import { getWithdrawalAutoProcess } from '../withdrawal-config.ts';
-import { creditState, floorWithdrawable, needsFirstWithdrawalReview } from '../signup-credit.ts';
+import { bonusState, floorWithdrawable, needsFirstWithdrawalReview } from '../bonus.ts';
 
 /**
  * Withdrawal pipeline (custody P2). Lifecycle: requested -> signed -> broadcast -> confirmed,
@@ -170,10 +170,10 @@ export async function requestWithdrawal(
       [coll],
     );
     const lockedBalance = lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n;
-    // Signup-credit floor (docs/signup-credit-spec.md §2.2): for a normal account this == lockedBalance; for a
-    // credit account it excludes the non-withdrawable grant principal (and winnings, pre-wagering). The single
+    // Bonus-credit floor (docs/bonus-credits-spec.md §3): for a normal account this == lockedBalance; for a
+    // bonus account it excludes the non-withdrawable grant principal (and winnings, pre-wagering). The single
     // withdrawal cap; the locked balance read above keeps the check-then-debit atomic.
-    const available = floorWithdrawable(lockedBalance, await creditState(q, userId));
+    const available = floorWithdrawable(lockedBalance, await bonusState(q, userId));
     if (available < input.amountE6) throw new HttpError(400, 'insufficient balance');
 
     const treasury = await getOrCreateSystemAccount(q, 'TREASURY_USDC');
@@ -251,7 +251,7 @@ export async function processWithdrawal(db: Db, chain: WithdrawChain, id: string
  *  toggle is ON, it's within the auto-approve cap, and withdrawals aren't frozen (a PoR breach pauses even
  *  auto-approval). Drives the client's request-confirmation message. */
 export async function willAutoApprove(db: Db, amountE6: bigint, userId?: string): Promise<boolean> {
-  // A credit-origin first withdrawal is held for manual review (signup-credit §3d) — mirror processAllRequested's
+  // A bonus-origin first withdrawal is held for manual review (bonus-credits §3d) — mirror processAllRequested's
   // skip here so the client is told "follows approval", not "on its way".
   if (userId && (await needsFirstWithdrawalReview(db, userId))) return false;
   return (
@@ -273,7 +273,7 @@ export async function processAllRequested(
   );
   let confirmed = 0;
   for (const { id, user_id } of r.rows) {
-    // Hold a credit-origin account's FIRST withdrawal for manual review (signup-credit spec §3d) — never auto-pay it.
+    // Hold a bonus-origin account's FIRST withdrawal for manual review (bonus-credits spec §3d) — never auto-pay it.
     if (await needsFirstWithdrawalReview(db, user_id)) continue;
     try {
       await processWithdrawal(db, chain, id);

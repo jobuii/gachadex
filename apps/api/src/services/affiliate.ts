@@ -212,7 +212,7 @@ export async function setAffiliateTerms(
   // All three writes (account upsert → branded code → terms) run in ONE transaction so a mid-way
   // failure can't leave a half-made affiliate (a code with no terms, or terms with no code).
   const userId = await db.tx(async (q) => {
-    const uid = await upsertUser(q, pubkey);
+    const { id: uid } = await upsertUser(q, pubkey); // admin affiliate setup — no signup bonus (not an organic signup)
     if (opts.code) await setReferralCodeTx(q, uid, opts.code); // validates length/charset + uniqueness, reserves old code
     await q.query(
       `INSERT INTO affiliate_terms(user_id, cashback_bps, fee_discount_bps, game_revenue_bps, label, active, updated_at)
