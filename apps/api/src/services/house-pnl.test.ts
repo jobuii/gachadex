@@ -9,7 +9,7 @@ process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
 
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
-const { getOrCreateSystemAccount, postTxn } = await import('./ledger.ts');
+const { getOrCreateSystemAccount, getOrCreateUserAccount, postTxn } = await import('./ledger.ts');
 const { housePnlBreakdown, houseEconomics } = await import('./house-pnl.ts');
 const { creditFaucet } = await import('./faucet.ts');
 const { lpDeposit } = await import('./lp.ts');
@@ -61,8 +61,8 @@ test('housePnlBreakdown: house earnings sum to the surplus; the LP side sums to 
   assert.equal(d('insuranceE6'), usdc(0), 'insurance not funded by the liquidation penalty');
 
   // House-earning lines must sum EXACTLY to the surplus (the whole point of the card).
-  const houseSum = BigInt(a.feesTradingE6) + BigInt(a.feesGachaE6) + BigInt(a.fundingHouseE6) + BigInt(a.liqHouseE6) + BigInt(a.feesOtherE6);
-  assert.equal(houseSum, BigInt(a.surplusE6), 'trading + gacha + funding + liq + other = surplus');
+  const houseSum = BigInt(a.feesTradingE6) + BigInt(a.feesGachaE6) + BigInt(a.fundingHouseE6) + BigInt(a.liqHouseE6) + BigInt(a.bonusCreditedE6) + BigInt(a.feesOtherE6);
+  assert.equal(houseSum, BigInt(a.surplusE6), 'trading + gacha + funding + liq + bonus + other = surplus');
   // LP-side lines must sum EXACTLY to the LP pool balance.
   const lpSum = BigInt(a.feesLpE6) + BigInt(a.fundingLpE6) + BigInt(a.traderPnlE6) + BigInt(a.lpOtherE6);
   assert.equal(lpSum, BigInt(a.lpPoolE6), 'LP fees + LP funding + trader P/L + LP capital = LP pool balance');
@@ -132,5 +132,27 @@ test('housePnlBreakdown: gacha earnings net the ACTUAL Gold spent; the UNUSED re
   assert.equal(d('feesGachaE6'), usdc(7), 'gacha net = $10 fee income − $3 ACTUAL Gold spend (not the $4 funding)');
   assert.equal(d('feesOtherE6'), -usdc(1), 'the $1 UNUSED rewards-budget funding falls into Other');
   assert.equal(d('surplusE6'), usdc(6), 'surplus rose by fee income minus the budget top-up ($10 − $4)');
-  assert.equal(d('feesTradingE6') + d('feesGachaE6') + d('fundingHouseE6') + d('liqHouseE6') + d('feesOtherE6'), d('surplusE6'), 'lines still sum to surplus');
+  assert.equal(d('feesTradingE6') + d('feesGachaE6') + d('fundingHouseE6') + d('liqHouseE6') + d('bonusCreditedE6') + d('feesOtherE6'), d('surplusE6'), 'the six lines still sum to surplus');
+});
+
+test('housePnlBreakdown: bonus credits ISSUED are their own house-cost line; the UNUSED credit budget stays in Other', async () => {
+  const fee = await getOrCreateSystemAccount(db, 'FEE_REVENUE');
+  const budget = await getOrCreateSystemAccount(db, 'CREDIT_BUDGET');
+  const cp = await getOrCreateSystemAccount(db, 'TREASURY_USDC'); // dummy counterparty
+  const user = randomUUID();
+  await db.query(`INSERT INTO users(id, solana_pubkey) VALUES($1, $2)`, [user, 'pk-' + user.slice(0, 8)]);
+  const before = await housePnlBreakdown(db);
+  await db.tx(async (q) => {
+    // fund the credit budget with $8 from fees (a reserve top-up — NOT a house cut yet)
+    await postTxn(q, { reason: 'CREDIT_BUDGET_FUND', refType: 'admin', refId: 'hp-b1', entries: [{ accountId: fee, amount: -usdc(8) }, { accountId: budget, amount: usdc(8) }] });
+    // ISSUE a $3 signup bonus to a customer ($5 stays UNUSED in the budget)
+    const coll = await getOrCreateUserAccount(q, user, 'USER_COLLATERAL');
+    await postTxn(q, { reason: 'SIGNUP_BONUS', refType: 'bonus', refId: 'hp-b2', entries: [{ accountId: budget, amount: -usdc(3) }, { accountId: coll, amount: usdc(3) }] });
+  });
+  const after = await housePnlBreakdown(db);
+  const d = (k: keyof typeof after) => BigInt(after[k]) - BigInt(before[k]);
+  assert.equal(d('bonusCreditedE6'), -usdc(3), 'the $3 issued bonus is its own debit line');
+  assert.equal(d('feesOtherE6'), -usdc(5), 'the $5 UNUSED credit-budget funding stays in Other');
+  assert.equal(d('surplusE6'), -usdc(8), 'surplus fell by the $8 budget top-up (fees → reserve)');
+  assert.equal(d('feesTradingE6') + d('feesGachaE6') + d('fundingHouseE6') + d('liqHouseE6') + d('bonusCreditedE6') + d('feesOtherE6'), d('surplusE6'), 'the six lines still sum to surplus');
 });
