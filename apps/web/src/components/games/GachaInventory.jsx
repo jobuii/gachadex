@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import * as api from '../../lib/api.js';
 import { signAndSubmitNftWithdrawal } from '../../lib/withdraw.js';
-import { usd, RARITY_COLORS } from './gacha-util.js';
+import { usd, RARITY_COLORS, hideBrokenImg } from './gacha-util.js';
 
 const tierColor = (r) => RARITY_COLORS[(r || '').toLowerCase()] ?? '#9aa0aa'; // rarity → its tier colour (grey fallback)
 
@@ -12,7 +12,6 @@ const tierColor = (r) => RARITY_COLORS[(r || '').toLowerCase()] ?? '#9aa0aa'; //
 // inventory and refreshes after each action; `refreshKey` lets a parent (the lobby, after a pull) force a reload.
 // Renders nothing when there's no session or nothing held, so a host page just omits the section.
 
-const hideBrokenImg = (e) => { e.currentTarget.style.visibility = 'hidden'; }; // CC image 404 → hide, keep the card
 
 export function GachaInventory({ onTradeMarket, refreshKey = 0, heading = 'Your gacha pulls' }) {
   const [inventory, setInventory] = useState([]);

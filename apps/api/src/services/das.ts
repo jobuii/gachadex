@@ -55,6 +55,7 @@ export async function getAssetImage(mint: string): Promise<string | null> {
   if (c.links?.image) return c.links.image;
   // guard the predicate against a malformed files entry (null element / non-string mime) so this best-effort
   // lookup can never throw into the money-safety delivery path — every failure resolves to null, not a reject.
-  const file = (c.files ?? []).find((f) => typeof f?.mime === 'string' && f.mime.startsWith('image')) ?? (c.files ?? [])[0];
+  const files = c.files ?? [];
+  const file = files.find((f) => typeof f?.mime === 'string' && f.mime.startsWith('image')) ?? files[0];
   return file?.uri ?? null;
 }

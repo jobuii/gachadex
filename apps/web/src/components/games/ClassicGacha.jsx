@@ -4,7 +4,7 @@ import * as api from '../../lib/api.js';
 import { GachaInventory } from './GachaInventory.jsx';
 import { useGachaReveal } from './useGachaReveal.jsx';
 import { GoldBar } from './GoldBar.jsx';
-import { RARITY_COLORS, usd, usdWhole, pollGachaOpen } from './gacha-util.js';
+import { RARITY_COLORS, usd, usdWhole, pollGachaOpen, hideBrokenImg } from './gacha-util.js';
 
 // Classic Gacha (docs/classic-gacha-cc-packs-spec.md, P0–P4). Browses the live Collector Crypt machines (a
 // game-filter, a machine strip, the selected machine's detail = price + tier legend + buyback %, the real
@@ -29,7 +29,6 @@ const badgeOf = (priceE6) => {
 };
 const PREVIEW_IMG = 'https://d1xpxki1g4htqu.cloudfront.net/_nIGwpul5IF9JxQ3La5uK3myeBL6fr6UBcA6s1ZX6V4'; // dev-preview fallback card art
 const titleCase = (s) => (s ?? '').replace(/\b\w/g, (c) => c.toUpperCase());
-const hideBrokenImg = (e) => { e.currentTarget.style.visibility = 'hidden'; }; // CC image 404 → hide, keep the card
 
 export function ClassicGacha({ onTradeMarket, onGoldChanged }) {
   const [machines, setMachines] = useState([]);

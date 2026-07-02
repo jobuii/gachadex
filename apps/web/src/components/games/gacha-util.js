@@ -23,6 +23,10 @@ export const usdWhole = (e6) => `$${Math.round(Number(e6 || 0) / 1e6).toLocaleSt
 // micro-USD a player nets after a basis-point cut (floor) — e.g. a sell-back fee.
 export const netAfterCutE6 = (valueE6, cutBps) => (BigInt(valueE6 || 0) * (10_000n - BigInt(cutBps))) / 10_000n;
 
+// <img onError> for CC card art: a 404 hides the broken <img> but keeps the card (used across the gacha grid,
+// inventory, and summary). The reveal's hero image uses a richer retry+placeholder (GachaReveal) instead.
+export const hideBrokenImg = (e) => { e.currentTarget.style.visibility = 'hidden'; };
+
 // Poll a freshly-charged open until CC's reveal lands (≤12×2s). The POST already charged, so a mid-poll network
 // error must NOT bubble — a re-click would mint a NEW idempotency key → a SECOND charge. Swallow it and keep the
 // last-known 'paid' open; the reconciler + a later getGachaOpen finish it. Returns the most resolved result seen.
