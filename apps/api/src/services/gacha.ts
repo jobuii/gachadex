@@ -4,6 +4,7 @@ import { config } from '../config.ts';
 import { HttpError } from '../errors.ts';
 import { usdc } from '../money.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, postTxn } from './ledger.ts';
+import { assertSpendableExcludingBonus } from './bonus.ts';
 import { getNftCustodyKeypair } from './custody/wallet.ts';
 import { createNftWithdrawNonce, verifyNftWithdrawStepUp } from './auth.ts';
 import { spendGold, earnGold, reverseEarnedGold, goldEarnedForOpen, goldPriceForPack, FREE_PACK_GOLD } from './gold.ts';
@@ -176,9 +177,9 @@ export async function openPack(db: Db, userId: string, opts: { machineCode: stri
       });
     } else {
       const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
-      const lock = await q.query<{ amount_uusdc: string }>(`SELECT amount_uusdc FROM balances WHERE account_id = $1 FOR UPDATE`, [coll]);
-      const avail = lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n;
-      if (avail < allIn) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
+      // Bonus is perp-only: locks collateral + rejects spending the locked bonus (or un-wagered funds) on packs.
+      // Subsumes the plain insufficient-balance check.
+      await assertSpendableExcludingBonus(q, userId, allIn);
       // user pays allIn; CC's base goes to treasury; any markup is GDEX revenue (entry omitted when markup=0).
       const entries = [{ accountId: coll, amount: -allIn }, { accountId: treasury, amount: price }];
       const feeAcc = markup > 0n ? await getOrCreateSystemAccount(q, 'FEE_REVENUE') : null;

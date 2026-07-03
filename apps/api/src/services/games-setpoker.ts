@@ -4,6 +4,7 @@ import { config } from '../config.ts';
 import { usdc } from '../money.ts';
 import type { Db, Queryer } from '../db/client.ts';
 import { getOrCreateSystemAccount, getOrCreateUserAccount, getBalance, postTxn } from './ledger.ts';
+import { assertSpendableExcludingBonus } from './bonus.ts';
 import { handleFor } from './handles.ts';
 import { publish } from './bus.ts';
 import { emitGameWinEvent } from './chat.ts';
@@ -132,12 +133,14 @@ async function userCollateral(q: Queryer, userId: string): Promise<{ id: string;
   return { id, balance: lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n };
 }
 
-/** Move a wager (ante or swap fee) USER_COLLATERAL → GAME_POOL, returning the post-debit collateral. */
-async function chargeToPool(q: Queryer, collId: string, balance: bigint, amount: bigint, reason: string, refId: string): Promise<bigint> {
-  if (balance < amount) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
+/** Move a wager (ante or swap fee) USER_COLLATERAL → GAME_POOL, returning the post-debit collateral. Bonus is
+ *  perp-only: the guard (FOR UPDATE + floor) authorises the spend and subsumes the plain balance check — so a
+ *  locked signup bonus can't be wagered on Set Poker (covers BOTH the ante and the swap-fee callers). */
+async function chargeToPool(q: Queryer, userId: string, collId: string, amount: bigint, reason: string, refId: string): Promise<bigint> {
+  const locked = await assertSpendableExcludingBonus(q, userId, amount);
   const pool = await getOrCreateSystemAccount(q, 'GAME_POOL');
   await postTxn(q, { reason, refType: 'set_poker', refId, entries: [{ accountId: collId, amount: -amount }, { accountId: pool, amount }] });
-  return balance - amount;
+  return locked - amount;
 }
 
 /** Deal a new hand: pay the ante, draw five player + five house cards provably-fairly (cursors 0..9). */
@@ -168,7 +171,7 @@ export async function dealHand(db: Db, userId: string, idempotencyKey: string): 
     if (other.rows[0]) throw new HttpError(409, 'finish your open hand before dealing a new one', 'hand_in_progress');
 
     const coll = await userCollateral(q, userId);
-    const balanceAfter = await chargeToPool(q, coll.id, coll.balance, ante, 'GAME_WAGER', playId);
+    const balanceAfter = await chargeToPool(q, userId, coll.id, ante, 'GAME_WAGER', playId);
 
     const pool = await featuredCards(q);
     if (pool.length === 0) throw new HttpError(503, 'no cards available to deal yet');
@@ -222,7 +225,7 @@ export async function swapCard(db: Db, userId: string, slot: number, idempotency
     const coll = await userCollateral(q, userId);
     // Charge the fee SNAPSHOTTED at deal time (what the player was shown), not the live knob — a mid-hand
     // admin change must not silently bill a different amount than the hand displays.
-    const balanceAfter = await chargeToPool(q, coll.id, coll.balance, usdc(hand.swapFeeUsd), 'GAME_SWAP', row.id);
+    const balanceAfter = await chargeToPool(q, userId, coll.id, usdc(hand.swapFeeUsd), 'GAME_SWAP', row.id);
 
     const pool = await featuredCards(q);
     if (pool.length === 0) throw new HttpError(503, 'no cards available right now');
