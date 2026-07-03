@@ -21,12 +21,13 @@ import { customerLpTotal } from './lp.ts';
  * Strings, not bigints, so the route can return it without per-field serialization.
  */
 export interface HousePnlBreakdown {
-  // House earnings — these five sum EXACTLY to surplusE6 (the FEE_REVENUE balance).
+  // House earnings — these SIX sum EXACTLY to surplusE6 (the FEE_REVENUE balance).
   feesTradingE6: string; // trading-fee house cut: OPEN_FEE + CLOSE_FEE + REFERRAL_CASHBACK (rebate) legs on FEE_REVENUE
   feesGachaE6: string; // gacha house NET = fee income (revenue − referral) − Gold ACTUALLY spent; excludes the reserve FUNDING (unused part → feesOther). = the "Gacha net (house)" box
   fundingHouseE6: string; // funding house cut: FUNDING legs on FEE_REVENUE
   liqHouseE6: string; // liquidation-penalty house cut: LIQUIDATION_FEE legs on FEE_REVENUE
-  feesOtherE6: string; // reconciling remainder: fees swept to/from reserves — insurance, bonus/credit budget, UNUSED gacha-rewards budget — + anything uncategorized
+  bonusCreditedE6: string; // bonus credits ISSUED to customers (net of expiry) — a house cost/debit; the UNUSED credit-budget reserve stays in feesOther
+  feesOtherE6: string; // reconciling remainder: fees to/from insurance + the UNUSED reserves (credit budget, gacha-rewards budget) + anything uncategorized
   surplusE6: string; // = FEE_REVENUE balance = the house's net earned surplus (the P/L box; excludes the LP pool)
 
   // LP side — owed to LP providers, NOT house P/L. These four reconcile to lpPoolE6.
@@ -47,7 +48,7 @@ export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
     getOrCreateSystemAccount(db, 'FEE_REVENUE'),
     getOrCreateSystemAccount(db, 'INSURANCE_FUND'),
   ]);
-  const [lpBal, feeBal, insBal, feeRows, lpRows, liqRows, goldRebateRow] = await Promise.all([
+  const [lpBal, feeBal, insBal, feeRows, lpRows, liqRows, goldRebateRow, bonusRow] = await Promise.all([
     getBalance(db, lp),
     getBalance(db, fee),
     getBalance(db, ins),
@@ -84,6 +85,13 @@ export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
       `SELECT COALESCE(SUM(-le.amount_uusdc), 0)::text AS t FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
         WHERE a.user_id IS NULL AND a.type = 'GACHA_REWARDS_BUDGET' AND le.reason IN ('PACK_BUY_GOLD_FUND', 'GACHA_REFUND')`,
     ),
+    // Bonus credits ISSUED to customers (net of clawbacks) — the credit-budget analogue of the Gold spend:
+    // SIGNUP_BONUS + DEPOSIT_BONUS − BONUS_EXPIRE on customer collateral. Its own house-cost line; the UNUSED
+    // credit-budget reserve stays in feesOther (mirrors gold: spent → own line, unspent → Other).
+    db.query<{ t: string }>(
+      `SELECT COALESCE(SUM(le.amount_uusdc), 0)::text AS t FROM ledger_entries le JOIN accounts a ON a.id = le.account_id
+        WHERE a.type = 'USER_COLLATERAL' AND le.reason IN ('SIGNUP_BONUS', 'DEPOSIT_BONUS', 'BONUS_EXPIRE')`,
+    ),
   ]);
 
   // House earnings: FEE_REVENUE decomposed; feesOther is the remainder so the lines sum to the balance.
@@ -94,7 +102,10 @@ export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
   const feesGacha = BigInt(feeRows.rows[0].gacha) - BigInt(goldRebateRow.rows[0].t);
   const fundingHouse = BigInt(feeRows.rows[0].funding);
   const liqHouse = BigInt(feeRows.rows[0].liq);
-  const feesOther = feeBal - feesTrading - feesGacha - fundingHouse - liqHouse;
+  // Bonus credits issued to customers — a house cost (debit) on its own line (a customer-acquisition cost, not a
+  // gacha/trading cut). `bonusRow` sums the POSITIVE credits net of expiry, so negate it into a debit.
+  const bonusCredited = -BigInt(bonusRow.rows[0].t);
+  const feesOther = feeBal - feesTrading - feesGacha - fundingHouse - liqHouse - bonusCredited;
 
   // LP side: LP_POOL decomposed; lpOther is the remainder so the lines sum to the pool balance.
   const feesLp = BigInt(lpRows.rows[0].fees);
@@ -107,6 +118,7 @@ export async function housePnlBreakdown(db: Db): Promise<HousePnlBreakdown> {
     feesGachaE6: feesGacha.toString(),
     fundingHouseE6: fundingHouse.toString(),
     liqHouseE6: liqHouse.toString(),
+    bonusCreditedE6: bonusCredited.toString(),
     feesOtherE6: feesOther.toString(),
     surplusE6: feeBal.toString(),
     feesLpE6: feesLp.toString(),
