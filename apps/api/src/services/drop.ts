@@ -3,6 +3,7 @@ import { HttpError } from '../errors.ts';
 import { config } from '../config.ts';
 import { usdc } from '../money.ts';
 import { getOrCreateSystemAccount, getOrCreateUserAccount, getBalance, postTxn } from './ledger.ts';
+import { assertSpendableExcludingBonus } from './bonus.ts';
 import { handleFor } from './handles.ts';
 import type { Db, Queryer } from '../db/client.ts';
 
@@ -54,11 +55,9 @@ export async function tipDrop(db: Db, userId: string, amountUusdc: bigint): Prom
 
   const balanceE6 = await db.tx(async (q) => {
     const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
-    // Lock the collateral row before reading the balance (same discipline as withdrawals) so two
-    // concurrent tips can't both pass the check and overdraw.
-    const lock = await q.query<{ amount_uusdc: string }>(`SELECT amount_uusdc FROM balances WHERE account_id = $1 FOR UPDATE`, [coll]);
-    const available = lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n;
-    if (available < amountUusdc) throw new HttpError(400, 'insufficient balance');
+    // Bonus is perp-only: can't be tipped into the DROP pot. Locks collateral (concurrent-tip-safe) + subsumes
+    // the balance check (was an inline FOR UPDATE + "insufficient balance").
+    const available = await assertSpendableExcludingBonus(q, userId, amountUusdc);
     const pool = await getOrCreateSystemAccount(q, 'DROP_POOL');
     const tipId = randomUUID();
     const txnId = await postTxn(q, {

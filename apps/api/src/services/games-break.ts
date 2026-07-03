@@ -5,6 +5,7 @@ import { usdc } from '../money.ts';
 import type { Db, Queryer } from '../db/client.ts';
 import { getOrCreateSystemAccount, getOrCreateUserAccount, getBalance, postTxn } from './ledger.ts';
 import { handleFor } from './handles.ts';
+import { assertSpendableExcludingBonus } from './bonus.ts';
 import { publish } from './bus.ts';
 import { emitGameWinEvent } from './chat.ts';
 import { theBreakConfig, type TheBreakConfig } from './game-config.ts';
@@ -191,9 +192,7 @@ export async function joinBreak(db: Db, userId: string, idempotencyKey: string):
     if (!open) await q.query(`UPDATE game_plays SET round_id = $1 WHERE id = $2`, [round.id, playId]);
 
     const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
-    const lock = await q.query<{ amount_uusdc: string }>(`SELECT amount_uusdc FROM balances WHERE account_id = $1 FOR UPDATE`, [coll]);
-    const available = lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n;
-    if (available < entry) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
+    await assertSpendableExcludingBonus(q, userId, entry); // bonus is perp-only — can't be wagered in games
     const pool = await getOrCreateSystemAccount(q, 'GAME_POOL');
     await postTxn(q, { reason: 'GAME_WAGER', refType: 'game_play', refId: playId, entries: [{ accountId: coll, amount: -entry }, { accountId: pool, amount: entry }] });
 

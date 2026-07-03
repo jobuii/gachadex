@@ -5,6 +5,7 @@ import { usdc } from '../money.ts';
 import type { Db, Queryer } from '../db/client.ts';
 import { getOrCreateSystemAccount, getOrCreateUserAccount, postTxn } from './ledger.ts';
 import { handleFor } from './handles.ts';
+import { assertSpendableExcludingBonus } from './bonus.ts';
 import { publish } from './bus.ts';
 import { emitGameWinEvent } from './chat.ts';
 import { priceDuelConfig, type PriceDuelConfig } from './game-config.ts';
@@ -119,8 +120,7 @@ function buildView(duel: DuelRow, userId: string): DuelView {
 /** Move an ante from the player's collateral into GAME_POOL (the duel escrow). */
 async function chargeAnte(q: Queryer, userId: string, ante: bigint, refId: string): Promise<void> {
   const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
-  const lock = await q.query<{ amount_uusdc: string }>(`SELECT amount_uusdc FROM balances WHERE account_id = $1 FOR UPDATE`, [coll]);
-  if ((lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n) < ante) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
+  await assertSpendableExcludingBonus(q, userId, ante); // bonus is perp-only — can't be wagered in games
   const pool = await getOrCreateSystemAccount(q, 'GAME_POOL');
   await postTxn(q, { reason: 'GAME_WAGER', refType: 'price_duel', refId, entries: [{ accountId: coll, amount: -ante }, { accountId: pool, amount: ante }] });
 }

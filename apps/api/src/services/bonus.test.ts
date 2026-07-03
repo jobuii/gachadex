@@ -218,3 +218,54 @@ test('deposit trigger — creditDeposit issues the deposit bonus once (first dep
   assert.equal(await collBal(u), usdc(350), '+$100 deposit, no second bonus');
   assert.equal((await bonus.bonusState(db, u)).grantE6, usdc(50), 'still just the one $50 deposit bonus');
 });
+
+// --- Spend guard: the bonus is PERP-ONLY (docs/bonus-credits-spec.md) ---
+
+test('spend guard — blocks spending the bonus on anything non-perp; allows own funds', async () => {
+  await setCfg({ signupEnabled: true, signupUsd: 50 });
+  await fundFee(usdc(100)); await bonus.fundCreditBudget(db, usdc(100));
+  const u = await newUser();
+  await bonus.grantSignupBonus(db, u); // $50 bonus, no deposit
+  // any non-perp spend of the locked bonus is rejected with the perp-only message
+  await assert.rejects(() => db.tx((q) => bonus.assertSpendableExcludingBonus(q, u, usdc(1))), /only be used for trading/, 'bonus cannot be spent');
+  // deposit $100 → they can now spend up to their own $100, but never the $50 bonus
+  await post(u, 'DEPOSIT', usdc(100), 'TREASURY_USDC'); // collateral $150 = $50 bonus + $100 deposit
+  const bal = await db.tx((q) => bonus.assertSpendableExcludingBonus(q, u, usdc(100)));
+  assert.equal(bal, usdc(150), 'passes at the deposit limit; returns the row-locked collateral balance');
+  await assert.rejects(() => db.tx((q) => bonus.assertSpendableExcludingBonus(q, u, usdc(101))), /only be used for trading/, '$101 would dip into the bonus');
+});
+
+test('spend guard — a non-bonus account is unaffected (plain balance check)', async () => {
+  const u = await newUser();
+  await post(u, 'DEPOSIT', usdc(30), 'TREASURY_USDC');
+  assert.equal(await db.tx((q) => bonus.assertSpendableExcludingBonus(q, u, usdc(30))), usdc(30), 'can spend its whole balance');
+  await assert.rejects(() => db.tx((q) => bonus.assertSpendableExcludingBonus(q, u, usdc(31))), /insufficient balance/, 'over balance → plain shortfall');
+});
+
+test('spend guard wired into LP — bonus cannot be deposited into the pool, own funds can', async () => {
+  const { lpDeposit } = await import('./lp.ts');
+  await setCfg({ signupEnabled: true, signupUsd: 50 });
+  await fundFee(usdc(100)); await bonus.fundCreditBudget(db, usdc(100));
+  const u = await newUser();
+  await bonus.grantSignupBonus(db, u); // $50 bonus
+  await assert.rejects(() => lpDeposit(db, u, usdc(50)), /only be used for trading/, 'bonus rejected at the LP chokepoint');
+  await post(u, 'DEPOSIT', usdc(40), 'TREASURY_USDC'); // own funds
+  assert.ok((await lpDeposit(db, u, usdc(40))).sharesMinted, 'own deposit CAN provide liquidity');
+});
+
+test('fail-closed net — every non-perp collateral-spend file calls the guard (auto-discovers new games)', async () => {
+  const { readdirSync, readFileSync } = await import('node:fs');
+  const dir = new URL('./', import.meta.url);
+  // Every game wagers collateral → must gate with the guard. AUTO-DISCOVERED (a new games-*.ts is caught here,
+  // not trusted to a hand-list — the exact gap that let Set Poker slip). A game that does NOT spend collateral
+  // goes in nonSpendGames to acknowledge it. Plus the fixed non-game spends (gacha / LP / DROP).
+  const guardedGames = ['games.ts', 'games-break.ts', 'games-grade.ts', 'games-duel.ts', 'games-fantasy.ts', 'games-arena.ts', 'games-setpoker.ts'];
+  const nonSpendGames: string[] = []; // games files that never debit collateral (none today)
+  const gameFiles = readdirSync(dir).filter((f) => /^games.*\.ts$/.test(f) && !f.endsWith('.test.ts'));
+  const unclassified = gameFiles.filter((f) => !guardedGames.includes(f) && !nonSpendGames.includes(f));
+  assert.deepEqual(unclassified, [], `Unclassified game file(s): ${unclassified.join(', ')} — if it wagers collateral, call assertSpendableExcludingBonus + add to guardedGames; else add to nonSpendGames.`);
+  for (const f of [...guardedGames, 'gacha.ts', 'lp.ts', 'drop.ts']) {
+    const src = readFileSync(new URL('./' + f, dir), 'utf8');
+    assert.ok(src.includes('assertSpendableExcludingBonus'), `${f} must gate its collateral spend with assertSpendableExcludingBonus (bonus is perp-only)`);
+  }
+});

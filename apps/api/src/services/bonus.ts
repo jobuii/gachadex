@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Db, Queryer } from '../db/client.ts';
+import { HttpError } from '../errors.ts';
 import { usdc } from '../money.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, getBalance, getBalanceForUpdate, postTxn } from './ledger.ts';
 import { bonusConfig } from './bonus-config.ts';
@@ -71,6 +72,26 @@ export function floorWithdrawable(collateralE6: bigint, s: BonusState): bigint {
 export async function withdrawableBalance(q: Queryer, userId: string): Promise<bigint> {
   const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
   return floorWithdrawable(await getBalance(q, coll), await bonusState(q, userId));
+}
+
+/**
+ * THE spend guard (docs/bonus-credits-spec.md): a bonus is **perp-only**. Every collateral spend that is NOT
+ * opening a perp position — gacha packs, LP deposits, DROP tips, game wagers, … — must call this first. It
+ * row-locks USER_COLLATERAL and rejects any spend that would dip into the locked bonus (or un-wagered winnings),
+ * i.e. the spend cap is exactly the withdrawal floor `floorWithdrawable`. Opening a perp position is the one
+ * allowed use of the bonus and deliberately does NOT call this. Race-safe (FOR UPDATE) — call it inside the
+ * spending tx, right before the debit. Also subsumes the plain balance check the call sites used to inline;
+ * returns the row-locked collateral balance for callers that need it (e.g. to report the post-debit balance).
+ */
+export async function assertSpendableExcludingBonus(q: Queryer, userId: string, amountE6: bigint): Promise<bigint> {
+  const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
+  const locked = await getBalanceForUpdate(q, coll); // FOR UPDATE — keeps the check-then-debit atomic
+  const s = await bonusState(q, userId);
+  if (amountE6 <= floorWithdrawable(locked, s)) return locked;
+  // Blocked — distinguish "your balance is locked bonus" from a plain shortfall so the UI can show the right thing.
+  if (s.grantE6 > 0n && amountE6 <= locked)
+    throw new HttpError(400, 'Your signup bonus can only be used for trading — deposit and meet the wagering requirement to spend these funds here.', 'bonus_funds_locked');
+  throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
 }
 
 /** New accounts created in the last 24h — the shared velocity signal (spec §4). */

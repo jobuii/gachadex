@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { HttpError } from '../errors.ts';
 import type { Db, Queryer } from '../db/client.ts';
 import { getOrCreateUserAccount, getOrCreateSystemAccount, getBalance, postTxn } from './ledger.ts';
+import { assertSpendableExcludingBonus } from './bonus.ts';
 import { grossOpenNotional } from './oi.ts';
 
 /**
@@ -41,8 +42,8 @@ export async function lpDeposit(db: Db, userId: string, amountUusdc: bigint): Pr
   return db.tx(async (q) => {
     const lp = await getOrCreateSystemAccount(q, 'LP_POOL');
     const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
-    const available = await getBalance(q, coll);
-    if (available < amountUusdc) throw new HttpError(400, 'insufficient balance');
+    // Bonus is perp-only: it can't be deposited into the LP pool. Locks collateral + subsumes the balance check.
+    await assertSpendableExcludingBonus(q, userId, amountUusdc);
 
     const nav = await getBalance(q, lp);
     const { totalShares } = await poolMeta(q);

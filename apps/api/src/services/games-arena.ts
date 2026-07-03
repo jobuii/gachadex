@@ -5,6 +5,7 @@ import { usdc } from '../money.ts';
 import type { Db, Queryer } from '../db/client.ts';
 import { getOrCreateSystemAccount, getOrCreateUserAccount, postTxn } from './ledger.ts';
 import { handleFor } from './handles.ts';
+import { assertSpendableExcludingBonus } from './bonus.ts';
 import { publish } from './bus.ts';
 import { emitGameWinEvent } from './chat.ts';
 import { commitServerSeed, fairShuffle } from './game-fairness.ts';
@@ -248,8 +249,7 @@ export async function joinArena(db: Db, userId: string, wishlist: string[], idem
     }
 
     const coll = await getOrCreateUserAccount(q, userId, 'USER_COLLATERAL');
-    const lock = await q.query<{ amount_uusdc: string }>(`SELECT amount_uusdc FROM balances WHERE account_id = $1 FOR UPDATE`, [coll]);
-    if ((lock.rows[0] ? BigInt(lock.rows[0].amount_uusdc) : 0n) < entry) throw new HttpError(400, 'insufficient balance', 'insufficient_balance');
+    await assertSpendableExcludingBonus(q, userId, entry); // bonus is perp-only — can't be wagered in games
     const poolAcct = await getOrCreateSystemAccount(q, 'GAME_POOL');
     await postTxn(q, { reason: 'GAME_WAGER', refType: 'draft_arena', refId: playId, entries: [{ accountId: coll, amount: -entry }, { accountId: poolAcct, amount: entry }] });
 
