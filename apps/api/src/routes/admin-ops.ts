@@ -9,6 +9,7 @@ import { gachaAdminConfig, setGachaConfig } from '../services/gacha-config.ts';
 import { gachaMonitoring, fundGachaRewardsBudget } from '../services/gacha-monitoring.ts';
 import { bonusConfigView, setBonusConfig } from '../services/bonus-config.ts';
 import { fundCreditBudget, bonusOverview, clearFirstWithdrawalReview } from '../services/bonus.ts';
+import { getWorkerHealth } from '../services/worker-health.ts'; // DB-only → reports RPC health even when the RPC is down
 import { reconcileStuckPrizes } from '../services/gacha-reconcile.ts'; // web3-free (DB + DAS) → eager-safe
 import { recentRestocks } from '../services/gacha-stock.ts'; // web3-free (DB + CC read client) → eager-safe
 import { resetGoldBalances } from '../services/gold.ts'; // web3-free (DB only) → eager-safe
@@ -102,6 +103,10 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
   // House economics for the admin Overview — all ledger-derived, so it works in BOTH fund modes
   // (unlike /admin/treasury, which is real-funds-only and layers the chain/custody figures on top).
   app.get('/admin/economics', rl(config.routeRateLimits.admin), async () => houseEconomics(await getDb()));
+
+  // Custody / RPC health — DB-only (reads the worker_health table), so it still answers when the on-chain
+  // RPC is down and /admin/treasury cannot. Drives the admin health strip + the "RPC unreachable" banner.
+  app.get('/admin/custody-health', rl(config.routeRateLimits.admin), async () => getWorkerHealth(await getDb()));
   app.post('/admin/insurance/from-fees', rl(config.routeRateLimits.admin), async (req) => {
     const { amountUusdc } = InsuranceFundRequest.parse(req.body);
     return allocateFeesToInsurance(await getDb(), BigInt(amountUusdc));

@@ -308,6 +308,8 @@ export const adminResetGold = (adminKey) => adminReq('/admin/gacha/reset-gold', 
 // Treasury + insurance. /admin/treasury (full PoR view incl. insurance + allocatable surplus) is
 // real-funds-only; /admin/insurance (balance) + the fee-allocation moves work in play-money too.
 export const adminGetTreasury = (adminKey) => adminGet('/admin/treasury', adminKey);
+// Custody/RPC health — DB-only, so it answers even when the on-chain RPC is down (unlike /admin/treasury).
+export const adminGetCustodyHealth = (adminKey) => adminGet('/admin/custody-health', adminKey);
 export const adminGetInsurance = (adminKey) => adminGet('/admin/insurance', adminKey);
 // Withdrawal freeze toggle (real-funds incident response). Freeze needs a reason; unfreeze is the ONLY way a
 // freeze clears — the PoR auto-freeze never self-clears. The treasury GET carries the live `frozen` reason.

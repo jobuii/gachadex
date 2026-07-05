@@ -17,6 +17,19 @@ import { Stat, PnlStat } from './adminStats.jsx';
 const KEY_STORE = 'gachadex_admin_key';
 const MIN_KEY_LEN = 32; // ADMIN_API_KEY floor — mirrors the server's length requirement (config.ts)
 
+// "X ago" for the custody-health strip (ISO string → relative). Kept tiny + local; no dep.
+function relAgo(iso) {
+  if (!iso) return 'never';
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms)) return 'unknown';
+  const m = Math.round(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 // Live-tunable custody limits surfaced in the panel: [key, label, unit].
 const LIMIT_FIELDS = [
   ['hotWalletMaxUsd', 'Hot wallet cap', 'USD'],
@@ -44,6 +57,8 @@ export function AdminPanel({ onGoToMarket } = {}) {
   const [msg, setMsg] = useState(null);
   const [err, setErr] = useState(null);
   const [treasury, setTreasury] = useState(null); // full PoR view (real-funds); null in play-money
+  const [treasuryErr, setTreasuryErr] = useState(false); // /admin/treasury threw (real-funds) — usually the RPC is down
+  const [custodyHealth, setCustodyHealth] = useState(null); // DB-only worker-health readout (answers even when the RPC is down)
   const [economics, setEconomics] = useState(null); // ledger-derived house economics (both fund modes)
   const [insuranceE6, setInsuranceE6] = useState(null); // insurance balance (works in both modes)
   const [feesDraft, setFeesDraft] = useState('');
@@ -125,12 +140,24 @@ export function AdminPanel({ onGoToMarket } = {}) {
           setEconomics(null);
         }
       })(),
-      // Treasury / proof-of-reserves (real-funds only) — layers the on-chain custody boxes on top.
+      // Treasury / proof-of-reserves (real-funds only) — layers the on-chain custody boxes on top. This
+      // GET needs the chain RPC, so it FAILS during an RPC outage; treasuryErr records that so the banner
+      // below can explain the missing boxes instead of them silently vanishing (the health strip confirms).
       (async () => {
         try {
           setTreasury(await api.adminGetTreasury(key));
+          setTreasuryErr(false);
         } catch {
           setTreasury(null);
+          setTreasuryErr(true);
+        }
+      })(),
+      // Custody / RPC health — DB-only, so it succeeds even when /admin/treasury above is failing.
+      (async () => {
+        try {
+          setCustodyHealth(await api.adminGetCustodyHealth(key));
+        } catch {
+          setCustodyHealth(null);
         }
       })(),
       (async () => {
@@ -731,6 +758,50 @@ export function AdminPanel({ onGoToMarket } = {}) {
             </div>
           )}
         </>
+      )}
+
+      {/* (A) On-chain custody unreachable — the treasury GET needs the chain RPC, so it fails during an RPC
+          outage. Rather than let the treasury boxes silently vanish, say so loudly + reassure that the
+          exchange itself is unaffected. Gated on custodyActive so play-money (where treasury is always null)
+          never shows it. */}
+      {custodyHealth?.custodyActive && (treasuryErr || custodyHealth.rpcHealthy === false) && (
+        <div className="custody-alert-banner">
+          <div className="cab-head"><span className="cab-ico">⚠️</span><strong>On-chain custody data is unavailable.</strong></div>
+          <p className="cab-body">
+            Treasury &amp; proof-of-reserves can’t be read right now — usually the Solana RPC is unreachable (e.g. out of credits); see the health strip below.
+            {' '}<strong>Trading and customer balances are unaffected</strong> (they’re off-chain), but while this persists <strong>new deposits aren’t being credited,
+            withdrawals can’t be processed, and reserves aren’t being verified.</strong> Check the RPC provider (SOLANA_RPC_URL — credits / rate limits).
+          </p>
+        </div>
+      )}
+
+      {/* (B) Custody / RPC health strip — DB-only, so it renders even when (A) is firing. One chip per
+          RPC-dependent loop + when PoR last verified + any stalled withdrawals + whether alerts are wired. */}
+      {custodyHealth?.custodyActive && (
+        <div className="custody-health">
+          <div className="ch-row">
+            <span className="ch-title">Custody / RPC</span>
+            {custodyHealth.components.map((c) => (
+              <span
+                key={c.component}
+                className={`ch-chip ${c.status}`}
+                title={c.status === 'bad' ? (c.lastErr || 'failing') : c.status === 'warn' ? 'running, not succeeding' : c.status === 'idle' ? 'idle — no recent activity' : 'healthy'}
+              >
+                <span className="ch-dot" />{c.label}{c.status === 'bad' ? ` · ${c.failStreak} fails` : ''}
+              </span>
+            ))}
+          </div>
+          <div className="ch-meta">
+            <span>PoR verified: <b>{relAgo(custodyHealth.porLastVerifiedAt)}</b></span>
+            {custodyHealth.stalledWithdrawals > 0 && (
+              <span className="ch-stall">⏳ {custodyHealth.stalledWithdrawals} withdrawal{custodyHealth.stalledWithdrawals > 1 ? 's' : ''} stalled</span>
+            )}
+            <span className="ch-flex" />
+            <span className={`ch-alerts ${custodyHealth.alertChannels.length ? '' : 'none'}`}>
+              Alerts: {custodyHealth.alertChannels.length ? custodyHealth.alertChannels.join(' · ') : 'none configured'}
+            </span>
+          </div>
+        </div>
       )}
 
       <div className="admin-tabs">

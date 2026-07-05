@@ -607,6 +607,19 @@ CREATE TABLE IF NOT EXISTS system_flags (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Custody worker health (custody observability). One row per RPC-dependent loop (deposit scan,
+-- withdrawal processing, proof-of-reserves). Each pass records success (last_ok_at, fail_streak→0)
+-- or failure (last_err_at + last_err, fail_streak++). DB-only, so /admin/custody-health can report
+-- "the RPC is down" even when the RPC is down (the treasury report itself can't — it needs the chain).
+CREATE TABLE IF NOT EXISTS worker_health (
+  component   TEXT PRIMARY KEY,                 -- 'deposit_scan' | 'withdrawal_process' | 'treasury_por'
+  last_ok_at  TIMESTAMPTZ,
+  last_err_at TIMESTAMPTZ,
+  last_err    TEXT,
+  fail_streak INT NOT NULL DEFAULT 0,           -- consecutive failed passes; an incident alert fires past a threshold
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Outbound withdrawals. Two-phase: ledger debited at `signed`, BEFORE broadcast; signed_tx +
 -- onchain_sig persisted at signing so a crash can only re-broadcast the SAME tx (idempotent),
 -- never double-pay. Reversed only when the sig is definitively absent + abandoned.

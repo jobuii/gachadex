@@ -6,6 +6,7 @@ import { liquidateAllEligible, haltStaleMarkets, autoDeleverage, checkRestingOrd
 import { scanDeposits } from './services/custody/deposits.ts';
 import { recoverInFlight, processAllRequested } from './services/custody/withdrawals.ts';
 import { treasuryPass } from './services/custody/treasury.ts';
+import { trackPass, checkAndAlert } from './services/worker-health.ts';
 import { loadLimits } from './services/custody/limits.ts';
 import {
   loadFee,
@@ -243,11 +244,9 @@ function startDepositScanner(db: Db, log: FastifyBaseLogger) {
   const chain = solanaDepositChain();
   chainLoop(
     () =>
-      scanDeposits(db, chain, log)
-        .then((r) => {
-          if (r.credited > 0) log.info(r, 'deposits credited');
-        })
-        .catch((e) => log.error(e, 'deposit scan failed (will retry)')),
+      trackPass(db, 'deposit_scan', log, () => scanDeposits(db, chain, log), (r) => {
+        if (r.credited > 0) log.info(r, 'deposits credited');
+      }),
     3000,
     config.depositScanMs,
   );
@@ -268,12 +267,10 @@ function startWithdrawalWorker(db: Db, log: FastifyBaseLogger) {
   chainLoop(
     () =>
       getWithdrawalAutoProcess()
-        ? processAllRequested(db, chain, log)
-            .then((r) => {
-              if (r.confirmed > 0) log.info(r, 'withdrawals processed');
-            })
-            .catch((e) => log.error(e, 'withdrawal processing failed (will retry)'))
-        : Promise.resolve(),
+        ? trackPass(db, 'withdrawal_process', log, () => processAllRequested(db, chain, log), (r) => {
+            if (r.confirmed > 0) log.info(r, 'withdrawals processed');
+          })
+        : Promise.resolve(), // auto-process off (manual approval): nothing to attempt; the treasury loop drives alerting
     config.withdrawalProcessMs,
     config.withdrawalProcessMs,
   );
@@ -284,11 +281,12 @@ function startTreasuryWorker(db: Db, log: FastifyBaseLogger) {
   const chain = solanaTreasuryChain();
   chainLoop(
     () =>
-      treasuryPass(db, chain, log)
-        .then((r) => {
-          if (r.sweptE6 > 0n) log.info({ sweptE6: r.sweptE6.toString() }, 'hot-wallet excess swept to cold');
-        })
-        .catch((e) => log.error(e, 'treasury pass failed (will retry)')),
+      // The treasury pass is the SINGLE alert driver: after recording its own health it runs checkAndAlert,
+      // which reads the whole worker_health table — so it alerts on deposit/withdrawal degradation too,
+      // without those loops racing on the shared alert state. Runs even if treasuryPass threw (RPC down).
+      trackPass(db, 'treasury_por', log, () => treasuryPass(db, chain, log), (r) => {
+        if (r.sweptE6 > 0n) log.info({ sweptE6: r.sweptE6.toString() }, 'hot-wallet excess swept to cold');
+      }).then(() => checkAndAlert(db, log).catch((e) => log.error(e, 'custody health alert check failed'))),
     config.treasuryPassMs,
     config.treasuryPassMs,
   );

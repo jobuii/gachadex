@@ -262,6 +262,25 @@ export const config = {
   // under REAL_FUNDS). Approve/reverse withdrawals, freeze/unfreeze, treasury report — see
   // docs/ops-runbook.md. The key authenticates the operator; signing stays server-side.
   adminApiKey: process.env.ADMIN_API_KEY ?? '',
+
+  // --- Custody health alerting (operator push notifications) ---------------------------------------
+  // When an RPC-dependent custody loop (deposit scan / withdrawal processing / proof-of-reserves) fails
+  // for this many consecutive passes, an incident alert is pushed to every CONFIGURED channel below (and
+  // a "recovered" alert when it clears). Each channel is independent + optional — leave a channel's env
+  // unset to skip it. This is the missing piece behind a silent RPC outage: the exchange keeps trading
+  // (off-chain), but deposits/withdrawals/PoR stall, and nothing told the operator until now.
+  custodyAlertFailStreak: num('CUSTODY_ALERT_FAIL_STREAK', 3), // consecutive failed passes before an incident alert
+  custodyStaleMs: num('CUSTODY_STALE_MS', 10 * 60_000), // last-OK older than this → admin flags the component degraded (display only)
+  withdrawalStallMs: num('WITHDRAWAL_STALL_MS', 20 * 60_000), // a queued withdrawal older than this counts as "stalled" (a symptom surfaced in admin + alerts)
+  // Telegram: create a bot via @BotFather → token; ALERT_TELEGRAM_CHAT_ID is the operator chat/channel id.
+  alertTelegramBotToken: process.env.ALERT_TELEGRAM_BOT_TOKEN ?? '',
+  alertTelegramChatId: process.env.ALERT_TELEGRAM_CHAT_ID ?? '',
+  // Discord: a channel Incoming-Webhook URL (Server Settings → Integrations → Webhooks).
+  alertDiscordWebhookUrl: process.env.ALERT_DISCORD_WEBHOOK_URL ?? '',
+  // Email via Resend (HTTP API, no SMTP dep): an API key + verified from-address + one/comma-list to-address.
+  alertResendApiKey: process.env.ALERT_RESEND_API_KEY ?? '',
+  alertEmailFrom: process.env.ALERT_EMAIL_FROM ?? '',
+  alertEmailTo: process.env.ALERT_EMAIL_TO ?? '',
 };
 
 if (config.realFunds) {
