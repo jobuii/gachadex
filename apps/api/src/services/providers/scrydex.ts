@@ -38,7 +38,7 @@ export interface ScrydexPrice {
 }
 /** One day of Scrydex price history: per-variant raw (condition) and graded (company + grade) rows. */
 export interface ScrydexHistoryDay {
-  date: string; // 'YYYY-MM-DD'
+  date: string; // 'YYYY-MM-DD' (getPriceHistory normalizes the API's 'YYYY/MM/DD')
   prices?: (ScrydexPrice & { variant?: string; is_perfect?: boolean; is_signed?: boolean; is_error?: boolean })[];
 }
 export interface ScrydexMarketplace {
@@ -136,7 +136,7 @@ export class ScrydexClient {
       const qs = `start_date=${startDate}&end_date=${endDate}&page=${page}&page_size=${pageSize}`;
       const json = await this.request(`/${slug}/v1/cards/${encodeURIComponent(id)}/price_history?${qs}`, priority);
       const data: ScrydexHistoryDay[] = Array.isArray(json?.data) ? json.data : [];
-      out.push(...data);
+      out.push(...data.map((d) => ({ ...d, date: String(d.date).replaceAll('/', '-') })));
       const total = typeof json?.total_count === 'number' ? json.total_count : null;
       if (data.length < (typeof json?.page_size === 'number' ? json.page_size : pageSize) || (total != null && out.length >= total)) break;
     }

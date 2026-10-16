@@ -54,6 +54,15 @@ test('searchCards builds the slug path with include=prices and returns the envel
   assert.match(calls[0], /q=Black\+Lotus/);
 });
 
+test('getPriceHistory normalizes the API\'s YYYY/MM/DD dates to YYYY-MM-DD (live probe 2026-10-16)', async () => {
+  const day = { date: '2026/10/01', prices: [{ variant: 'normal', condition: 'NM', type: 'raw', market: 697.99, currency: 'USD' }] };
+  const { client, calls } = clientWith([json({ data: [day], total_count: 1, page: 1, page_size: 100 })]);
+  const h = await client.getPriceHistory('pokemon', 'base1-4', '2026-10-01', '2026-10-01', 'discovery');
+  assert.equal(h[0].date, '2026-10-01');
+  assert.equal(h[0].prices?.[0].market, 697.99);
+  assert.match(calls[0], /\/pokemon\/v1\/cards\/base1-4\/price_history\?start_date=2026-10-01&end_date=2026-10-01/);
+});
+
 test('getCard unwraps the data envelope (and a bare card)', async () => {
   const wrapped = clientWith([json({ data: { id: 'sv-1', name: 'Card' } })]);
   assert.equal((await wrapped.client.getCard('pokemon', 'sv-1', 'refresh'))?.id, 'sv-1');
