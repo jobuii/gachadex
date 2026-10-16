@@ -41,8 +41,8 @@ test('GJ / G&P / Pokedaq diverge end-to-end across two ingest passes (same baske
 
   // GJ price-weighted: the giant is ~90% of the basket, so +10% on it ≈ +9% on the index.
   assert.equal(idxVal(gj), 1090);
-  // G&P equal-weight: (1.1 + 20·1.0) / 21 → +0.476%. The giant no longer dominates.
-  assert.equal(Math.round(idxVal(gp) * 1000) / 1000, 1004.761);
+  // G&P equal-weight (geometric / Jevons): (1.1 · 1.0^20)^(1/21) → +0.455%. The giant no longer dominates.
+  assert.equal(Math.round(idxVal(gp) * 1000) / 1000, 1004.549);
   // Pokedaq capped 5%: the giant contributes only 5% → +0.5%.
   assert.equal(idxVal(pdq), 1005);
 

@@ -22,7 +22,8 @@ const card = (id: string, usd: number, tid: number | null = null): TplCardT => (
   id, tcgplayer_id: tid, name: `Card ${id}`, number: '1/100', rarity: 'Rare', variant: 'Standard',
   image_url: `img/${id}`, updated_at: '2026-06-10T12:00:00Z', set: { slug: 's', name: 'Set' },
   game: { slug: 'onepiece', name: 'One Piece' },
-  prices: usd > 0 ? { raw: { near_mint: { tcgplayer: { market: usd } } } } : { raw: {} },
+  // a liquid single by default (eBay sold it this week) — the featured set excludes one-static-listing cards
+  prices: usd > 0 ? { raw: { near_mint: { tcgplayer: { market: usd }, ebay: { avg_7d: usd } } } } : { raw: {} },
 });
 
 /** A fake paginated catalog + batch lookup; records the offsets requested. */
@@ -160,4 +161,26 @@ test('a mid-crawl failure checkpoints progress and the next run resumes from tha
   assert.equal(r.resumedFromOffset, 100);
   assert.deepEqual(ok.offsets, [100, 200]);
   assert.deepEqual(r.top.map((c) => c.id), ['c-5']); // the valuable card from the FIRST run's pages survived the crash
+});
+
+test('featuredSelection: liquid only; top-N singles and top-N sealed chosen SEPARATELY; Code Cards in neither', async () => {
+  const { featuredSelection } = await import('./discovery.ts');
+  const kept = [
+    { id: 'box', price: 30_000, tid: 1, pt: 'sealed' as const, liq: true }, // priciest product: must NOT take a card slot
+    { id: 'static', price: 8_000, tid: 2, pt: 'single' as const, liq: false }, // one static listing: never index-eligible
+    { id: 'code', price: 5_000, tid: 3, pt: 'other' as const, liq: true },
+    { id: 'mox', price: 2_000, tid: 4, pt: 'single' as const, liq: true },
+    { id: 'lotus', price: 1_000, tid: 5, pt: 'single' as const, liq: true },
+    { id: 'legacy', price: 500, tid: 6 }, // checkpointed before pt/liq existed → a liquid single (never empties the set)
+  ];
+  assert.deepEqual(featuredSelection(kept, 2).map((c) => c.id), ['mox', 'lotus', 'box']);
+  assert.deepEqual(featuredSelection(kept, 10).map((c) => c.id), ['mox', 'lotus', 'legacy', 'box']);
+});
+
+test('hasLiquiditySignal: eBay sales or a real TCGplayer spread; one static listing is not liquid', async () => {
+  const { hasLiquiditySignal } = await import('./tcgpricelookup.ts');
+  assert.equal(hasLiquiditySignal({ prices: { raw: { near_mint: { tcgplayer: { market: 30950, low: 30950 } } } } }), false); // "Alpha Booster Pack"
+  assert.equal(hasLiquiditySignal({ prices: { raw: { near_mint: { tcgplayer: { market: 100 }, ebay: { avg_7d: 98 } } } } }), true);
+  assert.equal(hasLiquiditySignal({ prices: { raw: { lightly_played: { tcgplayer: { market: 100, low: 80, mid: 100, high: 130 } } } } }), true);
+  assert.equal(hasLiquiditySignal({ prices: null }), false);
 });

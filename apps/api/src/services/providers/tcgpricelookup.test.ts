@@ -252,3 +252,31 @@ test('fetchTrackedCards + ingest: legacy + provider-native markets re-price IN P
   const native = await db.query<{ n: string }>(`SELECT COUNT(*)::text AS n FROM oracle_prices WHERE market_id = $1`, [nativeId]);
   assert.equal(native.rows[0].n, '1');
 });
+
+test('tplCrossCheck: a placeholder rung (below half the card\'s best tcgpl market) is skipped → next condition', () => {
+  // Entei ☆: NM $0.99 but LP $990 — a real NM can't sit under half its own LP.
+  const card = { prices: { raw: { near_mint: { tcgplayer: { market: 0.99 } }, lightly_played: { tcgplayer: { market: 990 }, ebay: { avg_1d: 899 } } } } };
+  assert.deepEqual(tplCrossCheck(card), { tcgpMarket: 990, ebay1d: 899 });
+  // An ordinary NM > LP spread is untouched.
+  const ok = { prices: { raw: { near_mint: { tcgplayer: { market: 100 } }, lightly_played: { tcgplayer: { market: 80 } } } } };
+  assert.equal(tplCrossCheck(ok).tcgpMarket, 100);
+});
+
+test('tplCrossCheck: ordinary 2–4× condition inversions on a thin card are NOT placeholders (measured live)', () => {
+  // Tundra: NM $500 / LP $1,200 / HP $786 — one listing per rung; NM is a real price and must be kept.
+  const tundra = { prices: { raw: { near_mint: { tcgplayer: { market: 500 } }, lightly_played: { tcgplayer: { market: 1200.48 } }, heavily_played: { tcgplayer: { market: 785.99 } } } } };
+  assert.equal(tplCrossCheck(tundra).tcgpMarket, 500);
+  // Torchic ☆: NM $1,200 with a lone HP ask at $4,500 and no LP — NM still stands (a 0.5× rule would have halted it).
+  const torchic = { prices: { raw: { near_mint: { tcgplayer: { market: 1200 } }, heavily_played: { tcgplayer: { market: 4500 } } } } };
+  assert.equal(tplCrossCheck(torchic).tcgpMarket, 1200);
+});
+
+test('tplCrossCheck: a placeholder NM rung WITH eBay data is still skipped — LP is read (refuted-review L2)', () => {
+  const card = { prices: { raw: { near_mint: { tcgplayer: { market: 0.99 }, ebay: { avg_1d: 900 } }, lightly_played: { tcgplayer: { market: 990 } } } } };
+  assert.deepEqual(tplCrossCheck(card), { tcgpMarket: 990, ebay1d: null });
+});
+
+test('tplCrossCheck: one absurd low-grade ask cannot poison good NM/LP prices (median reference, review L3)', () => {
+  const card = { prices: { raw: { near_mint: { tcgplayer: { market: 400 } }, lightly_played: { tcgplayer: { market: 380 } }, damaged: { tcgplayer: { market: 5000 } } } } };
+  assert.equal(tplCrossCheck(card).tcgpMarket, 400);
+});

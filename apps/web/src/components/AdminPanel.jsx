@@ -775,24 +775,41 @@ export function AdminPanel({ onGoToMarket } = {}) {
         </div>
       )}
 
-      {/* (B) Custody / RPC health strip — DB-only, so it renders even when (A) is firing. One chip per
-          RPC-dependent loop + when PoR last verified + any stalled withdrawals + whether alerts are wired. */}
-      {custodyHealth?.custodyActive && (
+      {/* Price feed failing — the oracle loop is degraded (e.g. a provider 402). Prices and index history stop
+          updating while trading on open markets continues, so this is loud but not a custody incident. */}
+      {custodyHealth && custodyHealth.feedHealthy === false && (
+        <div className="custody-alert-banner">
+          <div className="cab-head"><span className="cab-ico">⚠️</span><strong>Price feed is failing — prices are not updating.</strong></div>
+          <p className="cab-body">
+            The oracle has not completed a pass since <b>{relAgo(custodyHealth.feedLastOkAt)}</b>. Card and index prices are frozen,
+            markets will halt as stale, and index history gets a gap until it recovers. Usually a price provider is refusing
+            requests (Scrydex / tcgpricelookup credits or billing — HTTP 402/401). See the Price feed chip below for the error.
+          </p>
+        </div>
+      )}
+
+      {/* (B) Health strip — DB-only, so it renders even while a banner above is firing. The price-feed chip
+          always shows; the custody chips (RPC-dependent loops) only under real funds. Plus when PoR last
+          verified, any stalled withdrawals, and whether push alerts are wired. */}
+      {custodyHealth && (
         <div className="custody-health">
           <div className="ch-row">
-            <span className="ch-title">Custody / RPC</span>
-            {custodyHealth.components.map((c) => (
-              <span
-                key={c.component}
-                className={`ch-chip ${c.status}`}
-                title={c.status === 'bad' ? (c.lastErr || 'failing') : c.status === 'warn' ? 'running, not succeeding' : c.status === 'idle' ? 'idle — no recent activity' : 'healthy'}
-              >
-                <span className="ch-dot" />{c.label}{c.status === 'bad' ? ` · ${c.failStreak} fails` : ''}
-              </span>
-            ))}
+            <span className="ch-title">Feeds &amp; custody</span>
+            {custodyHealth.components
+              .filter((c) => c.monitored)
+              .map((c) => (
+                <span
+                  key={c.component}
+                  className={`ch-chip ${c.status}`}
+                  title={c.status === 'bad' ? (c.lastErr || 'failing') : c.status === 'warn' ? (c.lastErr || 'running, not succeeding') : c.status === 'idle' ? 'idle — no recent activity' : 'healthy'}
+                >
+                  <span className="ch-dot" />{c.label}{c.status === 'bad' ? ` · ${c.failStreak} fails` : ''}
+                </span>
+              ))}
           </div>
           <div className="ch-meta">
-            <span>PoR verified: <b>{relAgo(custodyHealth.porLastVerifiedAt)}</b></span>
+            <span>Prices updated: <b>{relAgo(custodyHealth.feedLastOkAt)}</b></span>
+            {custodyHealth.custodyActive && <span>PoR verified: <b>{relAgo(custodyHealth.porLastVerifiedAt)}</b></span>}
             {custodyHealth.stalledWithdrawals > 0 && (
               <span className="ch-stall">⏳ {custodyHealth.stalledWithdrawals} withdrawal{custodyHealth.stalledWithdrawals > 1 ? 's' : ''} stalled</span>
             )}

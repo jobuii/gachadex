@@ -1,91 +1,113 @@
 import { SCALE } from '@pokex/pricing';
 
 /**
- * Index weighting methodologies (docs/index-series-spec.md). The same per-game baskets are turned into
- * three index levels by three weighting schemes:
- *   - GJ  (price-weighted / Dow): the divisor method in oracle.ts — NOT here.
- *   - G&P (equal-weight / S&P 500 Equal Weight): every card contributes its % change equally.
- *   - Pokedaq (capped / Nasdaq-100): price-weighted, every card capped at a fixed %.
+ * Index level math (docs/index-series-spec.md). The same per-game baskets are turned into three index levels:
+ *   - GJ      (price-weighted / Dow):           period return = Σ P₁ / Σ P₀            (Dutot)
+ *   - G&P     (equal-weight / S&P EW):          period return = geometric mean of P₁/P₀ (Jevons)
+ *   - Pokedaq (capped / Nasdaq-100):            period return = capped-price-weighted mean of P₁/P₀
  *
- * G&P and Pokedaq are CHAIN-LINKED returns: Iₜ = Iₜ₋₁ · (weighted average of Pᵢ,ₜ / Pᵢ,ₜ₋₁). Chaining
- * over the cards present in BOTH passes makes a composition change continuous (an entrant/leaver
- * contributes no return the pass it changes) — the same role GJ's divisor re-peg plays. Pure (no DB).
+ * All three are CHAIN-LINKED: Iₜ = Iₜ₋₁ · Rₜ, with Rₜ measured over the PREVIOUS pass's basket (its snapshot
+ * prices P₀) at this pass's prices P₁ — then the basket rebalances to the new top-N. Three rules make that
+ * honest (each fixes a measured defect, 2026-10 audit):
+ *   1. Leavers count. A card that drops out of a top-N basket usually dropped in price; measuring Rₜ over the
+ *      previous basket (not just the cards present in both passes) keeps that fall in the index.
+ *   2. Geometric, not arithmetic, for equal weight. The chained arithmetic mean of price relatives (Carli)
+ *      drifts upward whenever prices bounce: A 100→200→100 and B 100→50→100 end flat but chain to +56%. It
+ *      fails the time-reversal test; Jevons passes it (why official CPIs use it).
+ *   3. Outlier guard. A card whose price moves ≥ outlierFactor× (or ≤ 1/outlierFactor×) in ONE pass is a data
+ *      error far more often than a market move (e.g. a $0.99 → $1,067 mis-mapped print). It's left out of that
+ *      pass's return; its new price becomes the base next pass, so a genuine re-price counts from then on and
+ *      a flip-back is caught again.
+ * Cards with no usable price this pass (unpriced, or an outlier) are simply left out of Rₜ — the pass's move is
+ * imputed from the rest of the basket (class-mean imputation), never forced to zero. Pure (no DB).
  */
 
-/** Indices launch — and re-base — at 1000.000000 points. Shared with oracle.ts's price-weighted anchor. */
+/** Indices launch — and re-base — at 1000.000000 points. */
 export const BASE_VALUE_E6 = 1_000_000_000n;
+
+export type IndexWeighting = 'price' | 'equal' | 'capped';
+
+/** A catalog entry's weighting → the chain-link method (GJ's catalog weighting is 'price'). */
+export function weightingOf(idx: { weighting?: string }): IndexWeighting {
+  return idx.weighting === 'equal' || idx.weighting === 'capped' ? idx.weighting : 'price';
+}
 
 export interface ConstituentPrice {
   cardId: string;
   priceE6: bigint;
 }
 
-/** One-period price relative Pₜ / Pₜ₋₁, e6-scaled. */
-function relativeE6(curE6: bigint, prevE6: bigint): bigint {
-  return (curE6 * SCALE) / prevE6;
+export interface ChainOptions {
+  outlierFactor: number; // config.indexOutlierFactor
+  capBps: number; // capped weighting only (DEFAULT_CAP_BPS)
 }
 
-/** The chain-link set: cards in this pass AND last pass with usable (>0) prices on both sides. */
-function commonNames(prevPrices: Map<string, bigint>, members: ConstituentPrice[]): ConstituentPrice[] {
-  return members.filter((m) => {
-    const p = prevPrices.get(m.cardId);
-    return p != null && p > 0n && m.priceE6 > 0n;
-  });
-}
-
-/**
- * Equal-weight (S&P 500 Equal Weight): each constituent contributes its % change equally — the period
- * return is the simple average of the constituents' price relatives. Flat passes are exact (no drift).
- */
-export function equalWeightLevel(
-  prevLevelE6: bigint,
-  prevPrices: Map<string, bigint>,
-  members: ConstituentPrice[],
-): bigint {
-  if (prevLevelE6 <= 0n || prevPrices.size === 0) return BASE_VALUE_E6; // launch
-  const common = commonNames(prevPrices, members);
-  if (common.length === 0) return prevLevelE6; // full turnover (never in practice) — carry forward
-  let sumRelE6 = 0n;
-  for (const m of common) sumRelE6 += relativeE6(m.priceE6, prevPrices.get(m.cardId)!);
-  const avgRelE6 = sumRelE6 / BigInt(common.length);
-  return (prevLevelE6 * avgRelE6) / SCALE;
+export interface ChainStep {
+  levelE6: bigint;
+  used: number; // previous-basket cards that contributed a return this pass
+  missing: number; // previous-basket cards with no usable price this pass (imputed)
+  outliers: string[]; // previous-basket cards excluded by the outlier guard (cardIds)
+  launched: boolean; // no prior level/snapshot → started at BASE_VALUE_E6
 }
 
 /**
- * Capped price-weight (Nasdaq-100): price weights, every card capped at `capBps`, the period return the
- * capped-weighted average of price relatives. Flat passes are exact (the weights sum to SCALE exactly).
+ * One chain link. `prev` = the previous pass's basket snapshot (cardId → price), `cur` = this pass's price for
+ * ANY card that has one (basket members AND leavers). Returns the new level.
  */
-export function cappedWeightLevel(
+export function chainStep(
   prevLevelE6: bigint,
-  prevPrices: Map<string, bigint>,
-  members: ConstituentPrice[],
-  capBps: number,
-): bigint {
-  if (prevLevelE6 <= 0n || prevPrices.size === 0) return BASE_VALUE_E6; // launch
-  const common = commonNames(prevPrices, members);
-  if (common.length === 0) return prevLevelE6;
-  const weights = cappedWeights(
-    common.map((m) => ({ cardId: m.cardId, prevE6: prevPrices.get(m.cardId)! })),
-    capBps,
-  );
-  // Normalize by the weight sum so the return is the capped-weighted AVERAGE relative: flat passes give
-  // exactly SCALE regardless of any integer-division drift in the weights (only the weight ratios matter).
-  let num = 0n;
-  let wsum = 0n;
-  for (const m of common) {
-    const w = weights.get(m.cardId) ?? 0n;
-    num += w * relativeE6(m.priceE6, prevPrices.get(m.cardId)!);
-    wsum += w;
+  prev: Map<string, bigint>,
+  cur: Map<string, bigint>,
+  weighting: IndexWeighting,
+  opts: ChainOptions,
+): ChainStep {
+  if (prevLevelE6 <= 0n || prev.size === 0) return { levelE6: BASE_VALUE_E6, used: 0, missing: 0, outliers: [], launched: true };
+  const hi = opts.outlierFactor;
+  const lo = 1 / opts.outlierFactor;
+  const used: { cardId: string; p0: bigint; p1: bigint; rel: number }[] = [];
+  const outliers: string[] = [];
+  let missing = 0;
+  for (const [cardId, p0] of prev) {
+    const p1 = cur.get(cardId);
+    if (!(p0 > 0n) || p1 == null || !(p1 > 0n)) {
+      missing++;
+      continue;
+    }
+    const rel = Number(p1) / Number(p0);
+    if (rel >= hi || rel <= lo) {
+      outliers.push(cardId);
+      continue;
+    }
+    used.push({ cardId, p0, p1, rel });
   }
-  if (wsum <= 0n) return prevLevelE6;
-  return (prevLevelE6 * (num / wsum)) / SCALE;
+  if (used.length === 0) return { levelE6: prevLevelE6, used: 0, missing, outliers, launched: false }; // nothing measurable — carry forward
+
+  let r: number;
+  if (weighting === 'price') {
+    const s0 = used.reduce((a, u) => a + u.p0, 0n);
+    const s1 = used.reduce((a, u) => a + u.p1, 0n);
+    r = Number(s1) / Number(s0);
+  } else if (weighting === 'equal') {
+    r = Math.exp(used.reduce((a, u) => a + Math.log(u.rel), 0) / used.length);
+  } else {
+    const w = cappedWeights(used.map((u) => ({ cardId: u.cardId, prevE6: u.p0 })), opts.capBps);
+    let num = 0;
+    let den = 0;
+    for (const u of used) {
+      const wi = Number(w.get(u.cardId) ?? 0n);
+      num += wi * u.rel;
+      den += wi;
+    }
+    r = den > 0 ? num / den : 1;
+  }
+  return { levelE6: BigInt(Math.round(Number(prevLevelE6) * r)), used: used.length, missing, outliers, launched: false };
 }
 
 /**
  * Price weights (from period-start prices) iteratively capped at `capBps`: any weight above the cap is
  * pinned to the cap and the excess redistributed pro-rata to the under-cap names, repeated until none
- * exceed it. Returns cardId -> weight (e6-scaled). Only the RATIOS matter — cappedWeightLevel normalizes
- * by the weight sum — so the integer-division residual is harmless. Exposed for tests.
+ * exceed it. Returns cardId -> weight (e6-scaled). Only the RATIOS matter — chainStep normalizes by the
+ * weight sum — so the integer-division residual is harmless. Exposed for tests.
  */
 export function cappedWeights(items: { cardId: string; prevE6: bigint }[], capBps: number): Map<string, bigint> {
   const w = new Map<string, bigint>();

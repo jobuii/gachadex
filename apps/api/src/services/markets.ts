@@ -4,6 +4,7 @@ import type { Db, Queryer } from '../db/client.ts';
 import { usdc } from '../money.ts';
 import { getFeeBps, getFundingFactorBps } from './fees.ts';
 import { gradeLadder, sortGradeRows, type GradeRow } from './providers/tcgpricelookup.ts';
+import type { ProductType } from './product-type.ts';
 
 // Per-side open-interest caps (risk parameters). Indices are diversified -> deeper books.
 const CARD_OI_CAP = usdc(50_000).toString();
@@ -71,6 +72,8 @@ export interface CardUpsert {
   providerCardId?: string | null;
   // Index-constituent eligibility (the discovery top-250). Omit to keep the stored value.
   featured?: boolean | null;
+  // single | sealed | other (product-type.ts) — from the provider's structured fields. Omit to keep the stored value.
+  productType?: ProductType | null;
   // Creation-only: the per-market quantity floor (a fine step; the $1 dollar dust floor is the
   // engine's min-notional check). Never touched on re-upsert — the operator may retune a live market's min.
   minQtyE6?: bigint | null;
@@ -96,8 +99,8 @@ export async function upsertCardMarket(q: Queryer, opts: CardUpsert): Promise<st
   const meta = opts.metadata != null ? JSON.stringify(opts.metadata) : null;
   await q.query(
     `INSERT INTO markets(id, kind, game, symbol, display_name, card_id, variant, image_small, image_large, set_logo, metadata, tradeable,
-       max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id, featured, min_qty_e6, graded_psa10_e6, scrydex_card_id, scrydex_expansion_id)
-     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13, COALESCE($14, false), COALESCE($15, 100), $16, $17, $18)
+       max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id, featured, min_qty_e6, graded_psa10_e6, scrydex_card_id, scrydex_expansion_id, product_type)
+     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13, COALESCE($14, false), COALESCE($15, 100), $16, $17, $18, $19)
      ON CONFLICT(symbol) DO UPDATE
        SET display_name = EXCLUDED.display_name, image_small = EXCLUDED.image_small, image_large = EXCLUDED.image_large,
            set_logo = EXCLUDED.set_logo, metadata = EXCLUDED.metadata, variant = EXCLUDED.variant,
@@ -106,34 +109,42 @@ export async function upsertCardMarket(q: Queryer, opts: CardUpsert): Promise<st
            featured = COALESCE($14, markets.featured),
            graded_psa10_e6 = COALESCE($16, markets.graded_psa10_e6),
            scrydex_card_id = COALESCE(EXCLUDED.scrydex_card_id, markets.scrydex_card_id),
-           scrydex_expansion_id = COALESCE(EXCLUDED.scrydex_expansion_id, markets.scrydex_expansion_id)`,
+           scrydex_expansion_id = COALESCE(EXCLUDED.scrydex_expansion_id, markets.scrydex_expansion_id),
+           product_type = COALESCE(EXCLUDED.product_type, markets.product_type)`,
     [
       id, opts.symbol, opts.displayName, opts.cardId, opts.variant, opts.imageSmall, opts.imageLarge ?? null,
       opts.setLogo ?? null, meta, CARD_OI_CAP, opts.game ?? 'pokemon', opts.tcgplayerId ?? null, opts.providerCardId ?? null,
       opts.featured ?? null, opts.minQtyE6?.toString() ?? null, opts.gradedE6?.toString() ?? null,
-      opts.scrydexCardId ?? null, opts.scrydexExpansionId ?? null,
+      opts.scrydexCardId ?? null, opts.scrydexExpansionId ?? null, opts.productType ?? null,
     ],
   );
   const r = await q.query<{ id: string }>(`SELECT id FROM markets WHERE symbol = $1`, [opts.symbol]);
   return r.rows[0].id;
 }
 
+/** An index market's symbol. Pokémon keeps its original un-namespaced symbol (back-compat, preserves history);
+ *  other games are namespaced so e.g. One Piece 'top-100' can't collide with Pokémon's. */
+export function indexSymbol(game: string, slug: string): string {
+  return game === 'pokemon' ? `INDEX:${slug}` : `INDEX:${game}:${slug}`;
+}
+
 export async function upsertIndexMarket(
   q: Queryer,
-  opts: { game: string; slug: string; name: string; tradeable: boolean },
+  // tradeable 'keep': insert untradeable, and NEVER overwrite on later passes — for catalog-gated tiers (sealed)
+  // that the ingest builds but only an operator lists for trading.
+  opts: { game: string; slug: string; name: string; tradeable: boolean | 'keep' },
 ): Promise<string> {
   const id = randomUUID();
-  // Pokémon keeps its original un-namespaced symbol (back-compat, preserves history); other games are
-  // namespaced so e.g. One Piece 'top-100' can't collide with Pokémon's.
-  const symbol = opts.game === 'pokemon' ? `INDEX:${opts.slug}` : `INDEX:${opts.game}:${opts.slug}`;
+  const symbol = indexSymbol(opts.game, opts.slug);
   const oi = INDEX_OI_CAP;
   await q.query(
     `INSERT INTO markets(id, kind, game, symbol, display_name, index_slug, tradeable,
        max_oi_long_uusdc, max_oi_short_uusdc, max_dev_bps)
      VALUES($1, 'index', $7, $2, $3, $4, $5, $6, $6, 1000)
      ON CONFLICT(symbol) DO UPDATE
-       SET display_name = EXCLUDED.display_name, tradeable = EXCLUDED.tradeable`,
-    [id, symbol, opts.name, opts.slug, opts.tradeable, oi, opts.game],
+       SET display_name = EXCLUDED.display_name,
+           tradeable = CASE WHEN $8 THEN markets.tradeable ELSE EXCLUDED.tradeable END`,
+    [id, symbol, opts.name, opts.slug, opts.tradeable === true, oi, opts.game, opts.tradeable === 'keep'],
   );
   const r = await q.query<{ id: string }>(`SELECT id FROM markets WHERE symbol = $1`, [symbol]);
   return r.rows[0].id;

@@ -7,6 +7,8 @@ process.env.PGLITE_DIR = 'memory://';
 process.env.DATABASE_URL = '';
 process.env.ALERT_DISCORD_WEBHOOK_URL = 'https://discord.test/webhook'; // enables alerting()
 process.env.CUSTODY_ALERT_FAIL_STREAK = '2';
+process.env.ORACLE_ALERT_FAIL_STREAK = '2';
+process.env.ORACLE_REFRESH_MS = String(6 * 60 * 60 * 1000); // 6h cadence → 12.5h 'recent' window
 process.env.WITHDRAWAL_STALL_MS = '60000'; // 60s
 process.env.CUSTODY_STALE_MS = '600000';
 
@@ -29,7 +31,7 @@ after(() => { global.fetch = realFetch; });
 
 beforeEach(async () => {
   await db.query(`DELETE FROM worker_health`);
-  await db.query(`DELETE FROM system_flags WHERE key = 'custody_alert_state'`);
+  await db.query(`DELETE FROM system_flags WHERE key = 'health_alert_state'`);
   sent = [];
 });
 
@@ -98,44 +100,58 @@ test('a degraded component whose loop STOPS ages out of degraded (a stuck incide
   assert.equal(por.status, 'idle');
 });
 
-test('checkAndAlert is edge-triggered: incident once, no repeat, then recovery', async () => {
+test('checkAndAlert is edge-triggered on the price feed: incident once, no repeat, then recovery', async () => {
   // Below threshold → no alert.
-  await recordErr(db, 'treasury_por', new Error('blip'));
+  await recordErr(db, 'oracle_ingest', new Error('scrydex 402 on /pokemon/v1/cards'));
   await checkAndAlert(db);
   assert.equal(sent.length, 0, 'one failure (< threshold) does not alert');
 
-  // Cross the threshold → exactly one incident alert.
-  await recordErr(db, 'treasury_por', new Error('RPC down'));
+  // Cross the threshold → exactly one incident alert, worded as a price-feed outage (not custody).
+  await recordErr(db, 'oracle_ingest', new Error('scrydex 402 on /pokemon/v1/cards'));
   await checkAndAlert(db);
   assert.equal(sent.length, 1, 'crossing the threshold fires one incident alert');
-  assert.match(sent[0].body, /custody incident/i);
+  assert.match(sent[0].body, /price feed failing/i);
+  assert.match(sent[0].body, /scrydex 402/);
+  assert.doesNotMatch(sent[0].body, /Solana RPC/);
 
   // Still degraded on the next pass → NO repeat alert.
-  await recordErr(db, 'treasury_por', new Error('RPC down'));
+  await recordErr(db, 'oracle_ingest', new Error('scrydex 402'));
   await checkAndAlert(db);
   assert.equal(sent.length, 1, 'a persisting incident does not re-alert every pass');
 
   // Recovery → exactly one recovery alert.
-  await recordOk(db, 'treasury_por');
+  await recordOk(db, 'oracle_ingest');
   await checkAndAlert(db);
   assert.equal(sent.length, 2, 'clearing fires one recovery alert');
   assert.match(sent[1].body, /recovered/i);
 });
 
-test('escalation: a second component degrading re-alerts; full recovery clears', async () => {
-  await recordErr(db, 'treasury_por', new Error('x'));
-  await recordErr(db, 'treasury_por', new Error('x'));
-  await checkAndAlert(db); // incident (por)
-  assert.equal(sent.length, 1);
+test('the price feed stays degraded across its own 6h cadence (a 10-minute custody window would hide it)', async () => {
+  await recordErr(db, 'oracle_ingest', new Error('scrydex 402'));
+  await recordErr(db, 'oracle_ingest', new Error('scrydex 402'));
+  const threeHoursLater = () => Date.now() + 3 * 3_600_000;
+  let h = await getWorkerHealth(db, threeHoursLater);
+  assert.equal(h.feedHealthy, false, 'an error 3h ago (mid-cadence) is still recent for a 6h loop');
+  assert.equal(h.components.find((c) => c.component === 'oracle_ingest')!.status, 'bad');
+  const dayLater = () => Date.now() + 26 * 3_600_000; // past 2×6h + 30m with no further pass → stopped, not failing
+  h = await getWorkerHealth(db, dayLater);
+  assert.equal(h.feedHealthy, true);
+});
 
-  await recordErr(db, 'deposit_scan', new Error('x'));
-  await recordErr(db, 'deposit_scan', new Error('x'));
-  await checkAndAlert(db); // escalation (por + deposit)
-  assert.equal(sent.length, 2, 'a newly-degraded component escalates the incident');
+test('custody components never alert while custody is inactive (play-money / REAL_FUNDS off)', async () => {
+  await recordErr(db, 'treasury_por', new Error('RPC down'));
+  await recordErr(db, 'treasury_por', new Error('RPC down'));
+  const h = await getWorkerHealth(db);
+  assert.equal(h.custodyActive, false);
+  assert.equal(h.components.find((c) => c.component === 'treasury_por')!.degraded, true, 'still reported in the view');
+  await checkAndAlert(db);
+  assert.equal(sent.length, 0, 'but no custody push when custody is not running');
+});
 
-  await recordOk(db, 'treasury_por');
-  await recordOk(db, 'deposit_scan');
-  await checkAndAlert(db); // recovery
-  assert.equal(sent.length, 3);
-  assert.match(sent[2].body, /recovered/i);
+test('one failed pass shows as warn immediately, not green (review H8)', async () => {
+  await recordOk(db, 'oracle_ingest');
+  await recordErr(db, 'oracle_ingest', new Error('scrydex 402'));
+  const c = (await getWorkerHealth(db)).components.find((x) => x.component === 'oracle_ingest')!;
+  assert.equal(c.degraded, false, 'below the alert threshold');
+  assert.equal(c.status, 'warn');
 });

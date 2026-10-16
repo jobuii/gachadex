@@ -2,7 +2,8 @@ import { config } from '../../config.ts';
 import type { Db } from '../../db/client.ts';
 import { cardSymbol, upsertCardMarket } from '../markets.ts';
 import { toCardUpsert } from '../oracle.ts';
-import { rawPriceUsd, fromTplCard, tplTcgplayerId, MIN_LIST_PRICE_USD, type TcgPriceLookupClient, type TrackedMarket } from './tcgpricelookup.ts';
+import { rawPriceUsd, fromTplCard, tplTcgplayerId, hasLiquiditySignal, MIN_LIST_PRICE_USD, type TcgPriceLookupClient, type TrackedMarket } from './tcgpricelookup.ts';
+import { productTypeOf, type ProductType } from '../product-type.ts';
 
 /**
  * Discovery (P4): crawl a game's tcgpricelookup catalog (no price sort exists, so we enumerate) and
@@ -29,6 +30,10 @@ interface Candidate {
   id: string;
   price: number;
   tid: number | null; // tcgplayer id (tiebreaker)
+  // Absent on a crawl checkpointed before these existed → treated as a liquid single (the legacy behaviour),
+  // so resuming an old crawl can never empty the featured set.
+  pt?: ProductType; // single | sealed | other (product-type.ts)
+  liq?: boolean; // hasLiquiditySignal — a real market, not one static listing
 }
 
 interface CrawlState {
@@ -83,6 +88,18 @@ export function topCandidates(kept: Candidate[], topN: number): Candidate[] {
     if (out.length === topN) break;
   }
   return out;
+}
+
+/** The index-eligible (featured) set: liquid products only (one static listing can't move — it froze the
+ *  index), chosen as top-N SINGLES and, separately, top-N SEALED — so sealed product never takes a card
+ *  slot (it was 71% of the Pokémon "Top 100 cards" by weight) and feeds its own Sealed basket. 'other'
+ *  (e.g. Code Cards) is in neither. */
+export function featuredSelection(kept: Candidate[], topN: number): Candidate[] {
+  const liquid = kept.filter((c) => c.liq !== false);
+  return [
+    ...topCandidates(liquid.filter((c) => (c.pt ?? 'single') === 'single'), topN),
+    ...topCandidates(liquid.filter((c) => c.pt === 'sealed'), topN),
+  ];
 }
 
 // Global weekly-rebalance bookkeeping (read by the index.ts discovery loop): the interval is enforced
@@ -140,7 +157,7 @@ export async function discoverGame(
       for (const c of page.data) {
         const price = rawPriceUsd(c);
         if (price >= minPriceUsd) {
-          state.kept.push({ id: c.id, price, tid: tplTcgplayerId(c) });
+          state.kept.push({ id: c.id, price, tid: tplTcgplayerId(c), pt: productTypeOf(c.rarity, c.number), liq: hasLiquiditySignal(c) });
         }
       }
       scanned += page.data.length;
@@ -156,7 +173,7 @@ export async function discoverGame(
     await saveState(db, game, state);
   }
 
-  const top = topCandidates(state.kept, topN);
+  const top = featuredSelection(state.kept, topN);
   if (!apply) {
     return { game, scanned, kept: state.kept.length, top, applied: false, resumedFromOffset };
   }

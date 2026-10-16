@@ -7,6 +7,8 @@ import { getJpyUsd } from './fx.ts';
 import { ProviderLimiter, sleep, type ProviderPriority } from './limiter.ts';
 import { formatDisplayName } from './display.ts';
 import { fromTplCard, getDefaultClient, tplCrossCheck, sortGradeRows, type GradeRow, type TplCard, type TrackedMarket } from './tcgpricelookup.ts';
+import { productTypeOf } from '../product-type.ts';
+import { normVariant } from './backfill.ts';
 
 /**
  * Scrydex provider (Growth plan; spec docs/scrydex-pricing-build-spec.md). Primary RAW price source
@@ -33,6 +35,11 @@ export interface ScrydexPrice {
   market?: number;
   currency?: string; // 'USD' | 'JPY'
   trends?: Record<string, ScrydexTrend>; // days_1, days_7, days_14, days_30, days_90, days_180
+}
+/** One day of Scrydex price history: per-variant raw (condition) and graded (company + grade) rows. */
+export interface ScrydexHistoryDay {
+  date: string; // 'YYYY-MM-DD'
+  prices?: (ScrydexPrice & { variant?: string; is_perfect?: boolean; is_signed?: boolean; is_error?: boolean })[];
 }
 export interface ScrydexMarketplace {
   name?: string; // 'tcgplayer'
@@ -116,6 +123,24 @@ export class ScrydexClient {
       page: Number(json?.page ?? 1),
       page_size: Number(json?.page_size ?? 0),
     };
+  }
+
+  /** Daily price history for one card (docs: /{game}/v1/cards/{id}/price_history, read 2026-10-16): one entry
+   *  per day, each with per-variant raw/graded rows. ~3 credits per call per the pricing page; paged — this
+   *  walks pages until a short one. Shape fields the docs leave unverified (graded company/grade on a row,
+   *  max page_size) are read defensively by the caller. */
+  async getPriceHistory(slug: string, id: string, startDate: string, endDate: string, priority: ProviderPriority): Promise<ScrydexHistoryDay[]> {
+    const out: ScrydexHistoryDay[] = [];
+    const pageSize = 100;
+    for (let page = 1; page <= 20; page++) {
+      const qs = `start_date=${startDate}&end_date=${endDate}&page=${page}&page_size=${pageSize}`;
+      const json = await this.request(`/${slug}/v1/cards/${encodeURIComponent(id)}/price_history?${qs}`, priority);
+      const data: ScrydexHistoryDay[] = Array.isArray(json?.data) ? json.data : [];
+      out.push(...data);
+      const total = typeof json?.total_count === 'number' ? json.total_count : null;
+      if (data.length < (typeof json?.page_size === 'number' ? json.page_size : pageSize) || (total != null && out.length >= total)) break;
+    }
+    return out;
   }
 
   /** GET /{slug}/v1/cards/{id} — one card with prices. Envelope is `{ data }` or the bare card. */
@@ -214,17 +239,27 @@ export interface ScrydexRaw {
 /** Extract OUR card's raw TCGplayer quote from a Scrydex card: find the variant whose marketplace
  *  `product_id` equals our `tcgplayer_id`, then its raw price for the best available condition
  *  (NM→LP→MP) that actually carries a positive market value. Returns null if unmatched/unpriced. */
-/** The card variant whose TCGplayer marketplace matches OUR product id (the per-printing join key). */
-function findVariantByProduct(card: ScrydexCard, tcgplayerId: number | null): ScrydexVariant | undefined {
+/** The card variant whose TCGplayer marketplace matches OUR product id (the per-printing join key). One
+ *  TCGplayer product can carry SEVERAL Scrydex variants (MTG product 2831 = Birds of Paradise Normal AND
+ *  Foil): then OUR market's variant decides — an exact name match first ("Reverse Holofoil" ≡
+ *  reverseHolofoil), else the same foil-ness — so a Foil market is never priced off the Normal printing
+ *  (that mismatch made Birds flip $19 ↔ $3,960). With no variant to go on, the first match (legacy). */
+function findVariantByProduct(card: ScrydexCard, tcgplayerId: number | null, variant?: string | null): ScrydexVariant | undefined {
   if (tcgplayerId == null) return undefined;
   const want = String(tcgplayerId);
-  return (card.variants ?? []).find((v) =>
+  const candidates = (card.variants ?? []).filter((v) =>
     (v.marketplaces ?? []).some((m) => m.product_id != null && String(m.product_id) === want),
   );
+  if (candidates.length <= 1 || !variant) return candidates[0];
+  const ours = normVariant(variant) ?? '';
+  const exact = candidates.find((v) => normVariant(v.name) === ours);
+  if (exact) return exact;
+  const foil = ours.includes('foil');
+  return candidates.find((v) => (normVariant(v.name) ?? '').includes('foil') === foil) ?? candidates[0];
 }
 
-export function extractRaw(card: ScrydexCard, tcgplayerId: number | null): ScrydexRaw | null {
-  const v = findVariantByProduct(card, tcgplayerId);
+export function extractRaw(card: ScrydexCard, tcgplayerId: number | null, variant?: string | null): ScrydexRaw | null {
+  const v = findVariantByProduct(card, tcgplayerId, variant);
   if (!v) return null;
   // This variant's positive raw rungs, best grade first.
   const rungs = RAW_CONDITION_ORDER.map((cond) => ({
@@ -267,8 +302,8 @@ export function extractRaw(card: ScrydexCard, tcgplayerId: number | null): Scryd
  *  so isBrokenRaw isn't applied here. We DO drop an inverted PSA-10 (top grade priced below a lower-grade
  *  PSA of the same card — impossible), so the displayed ladder AND the scrydexPsa10E6 anchor stay
  *  consistent and the anchor falls back to the tcgpl PSA-10. */
-export function scrydexGradedLadder(card: ScrydexCard, tcgplayerId: number | null, fxJpyUsd: number | null): GradeRow[] {
-  const variant = findVariantByProduct(card, tcgplayerId);
+export function scrydexGradedLadder(card: ScrydexCard, tcgplayerId: number | null, fxJpyUsd: number | null, marketVariant?: string | null): GradeRow[] {
+  const variant = findVariantByProduct(card, tcgplayerId, marketVariant);
   if (!variant) return [];
   const ranged = (p: ScrydexPrice) => typeof p.low === 'number' && typeof p.high === 'number' && p.low < p.high;
   const best = new Map<string, ScrydexPrice>();
@@ -376,7 +411,15 @@ export function toUsd(sx: ScrydexRaw, fxJpyUsd: number | null): ScrydexRaw | nul
  *  keep-last live in ingestCard). **eBay never sets the price.** */
 export function combinePrice(sx: ScrydexRaw | null, x: CrossCheck, fxJpyUsd: number | null): Combined {
   const sxUsd = sx ? toUsd(sx, fxJpyUsd) : null;
-  const tcgp = x.tcgpMarket != null && x.tcgpMarket > 0 ? x.tcgpMarket : null;
+  let tcgp = x.tcgpMarket != null && x.tcgpMarket > 0 ? x.tcgpMarket : null;
+  // The tcgpl fallback gets placeholder scrutiny too — unchecked, it adopted $1 / $0.99 / $0.03 placeholders
+  // (Entei ☆, Mox Pearl in an index basket, Lugia). A tcgpl rung far below the card's OTHER tcgpl rungs is
+  // already dropped by tplCrossCheck; here, a fallback under half of Scrydex's surviving rung is rejected too
+  // (Scrydex rungs are banded and trustworthy, unlike tcgpl's per-condition single-listing asks — Lugia $500 vs
+  // Scrydex $4,500). Rejected → Scrydex keeps the price. eBay deliberately plays NO part: it's routinely matched
+  // to a pricier sibling printing (measured: Overgrown Tomb Retro $20 vs eBay $1,845 = the Serial Numbered one),
+  // so an eBay veto would halt correct cards.
+  if (tcgp != null && sxUsd && sxUsd.market > 0 && tcgp < BROKEN_RATIO * sxUsd.market) tcgp = null;
   // A broken best-grade rung (§④) means Scrydex has no trustworthy top-grade price: skip the (downgraded)
   // Scrydex anchor and let the EXISTING tcgpl fallback supply the same-grade price — but only when a tcgpl
   // market actually exists (else keep the Scrydex rung rather than halt).
@@ -411,6 +454,7 @@ export interface ScrydexTracked {
   game: string;
   tcgplayer_id: number | null; // the join key: Scrydex variant marketplace product_id == this
   featured: boolean;
+  variant?: string | null; // OUR market's variant — disambiguates a TCGplayer product shared by several printings
 }
 
 export const EMPTY_CROSS: CrossCheck = { tcgpMarket: null, ebay1d: null }; // "no tcgpl cross-check" sentinel
@@ -421,7 +465,7 @@ export const EMPTY_CROSS: CrossCheck = { tcgpMarket: null, ebay1d: null }; // "n
  *  the combined price/tier. */
 export function fromScrydexCard(c: ScrydexCard, t: ScrydexTracked): OracleCard {
   const front = (c.images ?? []).find((i) => i.type === 'front') ?? (c.images ?? [])[0];
-  const variant = findVariantByProduct(c, t.tcgplayer_id);
+  const variant = findVariantByProduct(c, t.tcgplayer_id, t.variant);
   return {
     game: t.game,
     symbol: t.symbol,
@@ -437,6 +481,7 @@ export function fromScrydexCard(c: ScrydexCard, t: ScrydexTracked): OracleCard {
     confident: false, // overwritten by the fetcher
     observedAt: null, // no per-card Scrydex price timestamp here → pass wall-clock (hybrid dedup re-stamps moves)
     featured: t.featured,
+    productType: productTypeOf(c.rarity, c.number),
   };
 }
 
@@ -457,7 +502,7 @@ export async function fetchScrydexTrackedCards(
     // Full tracked universe: Scrydex-matched cards price off Scrydex; tcgpl-only cards (no scrydex_card_id —
     // e.g. most of One Piece) have no anchor but still price off the tcgpl TCGplayer market via combinePrice's
     // fallback. Without this OR, those markets get no print under scrydex-primary and go stale.
-    `SELECT scrydex_card_id, provider_card_id, symbol, card_id, game, tcgplayer_id, featured FROM markets
+    `SELECT scrydex_card_id, provider_card_id, symbol, card_id, game, tcgplayer_id, featured, variant FROM markets
       WHERE kind = 'card' AND (scrydex_card_id IS NOT NULL OR provider_card_id IS NOT NULL) AND status != 'delisted'
       ${expansionIds ? 'AND scrydex_expansion_id = ANY($1)' : ''}`,
     expansionIds ? [expansionIds] : [],
@@ -491,7 +536,7 @@ export async function fetchScrydexTrackedCards(
   return tracked.rows.flatMap((t) => {
     const sxCard = t.scrydex_card_id ? sxById.get(t.scrydex_card_id) : undefined;
     const tplCard = t.provider_card_id ? tplById.get(t.provider_card_id) : undefined;
-    const sxRaw = sxCard ? extractRaw(sxCard, t.tcgplayer_id) : null;
+    const sxRaw = sxCard ? extractRaw(sxCard, t.tcgplayer_id, t.variant) : null;
     // Align the cross-check to the anchor's grade; a broken best grade ⇒ undefined ⇒ tcgpl NM-first (we
     // price off tcgpl's best grade instead of a downgraded Scrydex rung) (build spec §④ #3).
     const xCond = sxRaw && !sxRaw.bestGradeBroken ? SX_TO_TPL_CONDITION[sxRaw.condition] : undefined;
@@ -511,7 +556,7 @@ export async function fetchScrydexTrackedCards(
 
     // Graded: Scrydex full ladder first (richer + free of the tcgpl eBay-median garbage); tcgpl's eBay
     // PSA-10 (carried on `base` when it came from fromTplCard) is the fallback for the index anchor.
-    const sxGradedLadder = sxCard ? scrydexGradedLadder(sxCard, t.tcgplayer_id, fxJpyUsd) : [];
+    const sxGradedLadder = sxCard ? scrydexGradedLadder(sxCard, t.tcgplayer_id, fxJpyUsd, t.variant) : [];
     const gradedE6 = scrydexPsa10E6(sxGradedLadder) ?? base.gradedE6;
 
     return [

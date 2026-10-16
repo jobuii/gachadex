@@ -181,6 +181,18 @@ export const config = {
   liqFeeBps: num('LIQ_FEE_BPS', 100), // 1% liquidation penalty -> insurance fund
   liquidationSweepMs: num('LIQUIDATION_SWEEP_MS', 5_000),
   oracleStaleMs: num('ORACLE_STALE_MS', 36 * 60 * 60 * 1000), // halt a market if no fresh print
+  // Index construction (index-weighting.ts). A card enters a basket only if its price is FRESH (an accepted
+  // print within INDEX_FRESH_MS — the same rule that halts a market for staleness) and the market isn't
+  // halted/delisted: an index must not hold a frozen price no one can trade. A single-pass card move of
+  // ≥ INDEX_OUTLIER_FACTOR× (or ≤ 1/×) is excluded from that pass's return (measured: most such moves are
+  // mis-mapped prints). A per-game Sealed basket needs SEALED_INDEX_MIN_CONSTITUENTS products to be built.
+  indexFreshMs: num('INDEX_FRESH_MS', num('ORACLE_STALE_MS', 36 * 60 * 60 * 1000)), // defaults to the halt window
+  indexOutlierFactor: num('INDEX_OUTLIER_FACTOR', 2),
+  sealedIndexMinConstituents: num('SEALED_INDEX_MIN_CONSTITUENTS', 5),
+  // Build the per-game Sealed baskets. OFF: measured 2026-10, not one of the 130 featured sealed products has
+  // EVER changed price (every sealed price is a frozen single listing) — a Sealed index would be a flat 1000
+  // line. Sealed is still kept OUT of the card tiers either way. Turn on once a moving sealed price source exists.
+  sealedIndexEnabled: process.env.SEALED_INDEX_ENABLED === 'true',
 
   // Resting orders (limit / SL / TP — docs/limit-stop-orders-spec.md). OFF by default: ships dark, the
   // routes + the trigger loop both no-op until RESTING_ORDERS_ENABLED=true. The sweep runs on its OWN
@@ -270,6 +282,7 @@ export const config = {
   // unset to skip it. This is the missing piece behind a silent RPC outage: the exchange keeps trading
   // (off-chain), but deposits/withdrawals/PoR stall, and nothing told the operator until now.
   custodyAlertFailStreak: num('CUSTODY_ALERT_FAIL_STREAK', 3), // consecutive failed passes before an incident alert
+  oracleAlertFailStreak: num('ORACLE_ALERT_FAIL_STREAK', 2), // consecutive failed PRICE-FEED passes (each ORACLE_REFRESH_MS apart, 6h) before an alert — 2 ≈ 12h, so one transient blip doesn't page
   custodyStaleMs: num('CUSTODY_STALE_MS', 10 * 60_000), // last-OK older than this → admin flags the component degraded (display only)
   withdrawalStallMs: num('WITHDRAWAL_STALL_MS', 20 * 60_000), // a queued withdrawal older than this counts as "stalled" (a symptom surfaced in admin + alerts)
   // Telegram: create a bot via @BotFather → token; ALERT_TELEGRAM_CHAT_ID is the operator chat/channel id.

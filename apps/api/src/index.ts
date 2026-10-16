@@ -7,6 +7,7 @@ import { scanDeposits } from './services/custody/deposits.ts';
 import { recoverInFlight, processAllRequested } from './services/custody/withdrawals.ts';
 import { treasuryPass } from './services/custody/treasury.ts';
 import { trackPass, checkAndAlert } from './services/worker-health.ts';
+import { alertingEnabled } from './services/notify.ts';
 import { loadLimits } from './services/custody/limits.ts';
 import {
   loadFee,
@@ -28,7 +29,7 @@ import { settleExpiredDuels } from './services/games-duel.ts';
 import { settleExpiredLeagues } from './services/games-fantasy.ts';
 import { settleExpiredArenas } from './services/games-arena.ts';
 import { loadWithdrawalAutoProcess, getWithdrawalAutoProcess } from './services/withdrawal-config.ts';
-import { tryAcquireLease, releaseLease } from './services/lease.ts';
+import { tryAcquireLease, releaseLease, ORACLE_INGEST_LEASE } from './services/lease.ts';
 import { getDefaultClient } from './services/providers/tcgpricelookup.ts';
 import { discoverGame, dueForRebalance, markRebalanced, retireDeadMarkets } from './services/providers/discovery.ts';
 import { countMissingHistory, seedMissingHistory } from './services/providers/history.ts';
@@ -53,22 +54,52 @@ function startOracleLoop(db: Db, log: FastifyBaseLogger) {
     // instances ever ingest at once, and a deploy/crash never blocks the next ingest for long. With
     // N staggered instances each may still run its own scheduled pass — harmless: tcgpricelookup
     // prints dedup on the provider timestamp, and the budget cost is bounded by the limiter.
-    if (!(await tryAcquireLease(db, 'oracle-ingest', INSTANCE_ID, 15 * 60_000))) {
-      log.info('oracle ingest: another instance is mid-pass — skipped');
-      return;
-    }
     try {
-      const r = await ingest(db);
-      log.info(r, 'oracle ingest complete');
+      // The lease query is inside the try too: `void run()` would otherwise turn a DB blip into an unhandled
+      // rejection (a process crash).
+      if (!(await tryAcquireLease(db, ORACLE_INGEST_LEASE, INSTANCE_ID, 15 * 60_000))) {
+        log.info('oracle ingest: another instance is mid-pass — skipped');
+        return;
+      }
+      try {
+        // Health-tracked (oracle_ingest): a failing pass — e.g. a provider 402 — is recorded and alerted on
+        // instead of only logged (it ran silently for 9 days once). trackPass swallows + logs the error.
+        await trackPass(db, 'oracle_ingest', log, () => ingest(db), (r) => log.info(r, 'oracle ingest complete'));
+      } finally {
+        await releaseLease(db, ORACLE_INGEST_LEASE, INSTANCE_ID).catch(() => {});
+      }
     } catch (e) {
-      log.error(e, 'oracle ingest failed (will retry)');
-    } finally {
-      await releaseLease(db, 'oracle-ingest', INSTANCE_ID).catch(() => {});
+      log.error(e, 'oracle ingest: lease check failed (will retry next interval)');
     }
   };
   // initial run shortly after boot, then on the configured interval
   setTimeout(() => void run(), 1500);
   setInterval(() => void run(), config.oracleRefreshMs);
+}
+
+/** Health alerting (both fund modes): one lease-guarded pass a minute reads worker_health and pushes an
+ *  edge-triggered incident/recovery alert (price feed + custody). The single driver — trackPass only records —
+ *  so the oracle/custody loops can't race on the shared alert state, even with several instances. */
+function startHealthAlertLoop(db: Db, log: FastifyBaseLogger) {
+  if (!alertingEnabled()) return; // no ALERT_* channel configured → nothing to push (the admin strip reads the DB directly)
+  chainLoop(
+    async () => {
+      // Everything inside the try — incl. the lease query: chainLoop has no catch, so an escaped rejection (a DB
+      // blip) would be unhandled and crash the process.
+      try {
+        if (!(await tryAcquireLease(db, 'health-alert', INSTANCE_ID, 2 * 60_000))) return;
+        try {
+          await checkAndAlert(db, log);
+        } finally {
+          await releaseLease(db, 'health-alert', INSTANCE_ID).catch(() => {});
+        }
+      } catch (e) {
+        log.error(e, 'health alert check failed');
+      }
+    },
+    30_000,
+    60_000,
+  );
 }
 
 /** Weekly featured rebalance (P4 discovery, P5 wiring). Inert until the tcgpricelookup cutover: the
@@ -281,12 +312,9 @@ function startTreasuryWorker(db: Db, log: FastifyBaseLogger) {
   const chain = solanaTreasuryChain();
   chainLoop(
     () =>
-      // The treasury pass is the SINGLE alert driver: after recording its own health it runs checkAndAlert,
-      // which reads the whole worker_health table — so it alerts on deposit/withdrawal degradation too,
-      // without those loops racing on the shared alert state. Runs even if treasuryPass threw (RPC down).
       trackPass(db, 'treasury_por', log, () => treasuryPass(db, chain, log), (r) => {
         if (r.sweptE6 > 0n) log.info({ sweptE6: r.sweptE6.toString() }, 'hot-wallet excess swept to cold');
-      }).then(() => checkAndAlert(db, log).catch((e) => log.error(e, 'custody health alert check failed'))),
+      }),
     config.treasuryPassMs,
     config.treasuryPassMs,
   );
@@ -340,6 +368,7 @@ async function main() {
     await app.listen({ port: config.port, host: config.host });
     app.log.info(`GachaDex api listening on :${config.port} (REAL_FUNDS=${config.realFunds})`);
     startOracleLoop(db, app.log);
+    startHealthAlertLoop(db, app.log); // price-feed + custody outage alerts (no-op until an ALERT_* channel is set)
     startDiscoveryLoop(db, app.log); // no-op until ORACLE_PRIMARY=tcgpricelookup
     // Card release years: seed the committed static set→year table once on boot. No provider calls
     // (the oracle has no release dates); idempotent + multi-instance safe. Non-fatal — a hiccup here

@@ -4,6 +4,7 @@ import type { Db } from '../../db/client.ts';
 import type { OracleCard } from '../oracle.ts';
 import { ProviderLimiter, sleep, type ProviderPriority } from './limiter.ts';
 import { formatDisplayName } from './display.ts';
+import { productTypeOf } from '../product-type.ts';
 
 /**
  * tcgpricelookup provider (Trader plan; spec in docs/data-providers.md). Two layers in this module:
@@ -177,7 +178,7 @@ export class TcgPriceLookupClient {
 // ---------------------------------------------------------------------------
 
 // Condition preference for the raw price (plan section E fallback chain).
-const CONDITION_ORDER = ['near_mint', 'lightly_played'];
+export const CONDITION_ORDER = ['near_mint', 'lightly_played'];
 
 /** Creatability gate (P6 search-and-bet, plan "Decisions & defaults"): NM TCGplayer market >= $10
  *  AND the eBay 7d average agrees within ~25% — a liquidity/agreement proxy that rejects
@@ -186,6 +187,18 @@ const CONDITION_ORDER = ['near_mint', 'lightly_played'];
  *  gate's agreement check that makes that smoothed price trustworthy at listing time. */
 export const MIN_LIST_PRICE_USD = 10;
 const PRICE_AGREEMENT_TOLERANCE = 0.25;
+
+/** Liquidity signal for INDEX eligibility (discovery's featured set): evidence of a real market, not one
+ *  static listing — eBay sales in the last 7 days, OR a TCGplayer spread (a mid AND low < high, i.e. more
+ *  than one listing) on any condition. The 2026-10 audit found 120 of 232 featured MTG cards were single
+ *  listings (low == market, no mid, no eBay) whose price never changed after listing — they froze the index. */
+export function hasLiquiditySignal(c: Pick<TplCard, 'prices'>): boolean {
+  return Object.values(c.prices?.raw ?? {}).some((r) => {
+    if ((r?.ebay?.avg_7d ?? 0) > 0) return true;
+    const t = r?.tcgplayer;
+    return (t?.mid ?? 0) > 0 && typeof t?.low === 'number' && typeof t?.high === 'number' && t.low < t.high;
+  });
+}
 
 export function isListable(c: TplCard): boolean {
   const nm = c.prices?.raw?.near_mint;
@@ -240,6 +253,21 @@ export function rawPriceUsd(card: Pick<TplCard, 'prices'>): number {
   return priceCard(card).usd;
 }
 
+/** A tcgpl rung below this fraction of the card's best rung is a placeholder (tplCrossCheck). */
+const TPL_PLACEHOLDER_RATIO = 0.1;
+
+/** The lowest tcgpl rung market that is still a real price, given every condition rung's market for the card
+ *  (the placeholder rule — shared by the live cross-check and the history backfill). The reference is the MEDIAN
+ *  rung, not the max: one absurd single-listing ask on a low grade (a $5,000 "damaged") must not poison good NM/LP
+ *  prices, while a 1000×-low placeholder (Entei ☆ NM $0.99 vs LP $990) still falls far below it. */
+export function tplPlaceholderFloor(rungMarkets: Iterable<number | null | undefined>): number {
+  const ms = [...rungMarkets].filter((m): m is number => typeof m === 'number' && m > 0).sort((a, b) => a - b);
+  if (!ms.length) return 0;
+  const mid = ms.length >> 1;
+  const median = ms.length % 2 ? ms[mid] : (ms[mid - 1] + ms[mid]) / 2;
+  return TPL_PLACEHOLDER_RATIO * median;
+}
+
 /** The cross-check signals for the Scrydex combine (NOT a price source): the TCGplayer market (same
  *  venue as the Scrydex anchor — a freshness/agreement check) and the eBay 1-day average (the only
  *  genuinely independent venue). Read from the best available raw condition; either may be null. */
@@ -252,14 +280,25 @@ export function tplCrossCheck(
   // tcgpl's NM and wrongly flagged (build spec §④ fix #3).
   const order =
     preferCondition == null ? CONDITION_ORDER : [preferCondition, ...CONDITION_ORDER.filter((c) => c !== preferCondition)];
+  // A rung an ORDER OF MAGNITUDE below the card's best tcgpl market (over every condition it lists) is a
+  // placeholder — Entei ☆: NM $0.99 vs LP $990 (1000×), Mox Pearl $0.03. NOT 2×: on thin rare cards each rung is
+  // one listing's ask and 2–4× inversions are ordinary noise (measured live 2026-10: Tundra NM $500 / LP $1,200,
+  // Torchic ☆ NM $1,200 / HP $4,500) — a 0.5× rule halted those genuine prices. Skip it, read the next condition.
+  const floor = tplPlaceholderFloor(Object.values(card.prices?.raw ?? {}).map((c) => c?.tcgplayer?.market));
+  let placeholderEbay: number | null = null;
   for (const cond of order) {
     const c = card.prices?.raw?.[cond];
     if (!c) continue;
-    const tcgpMarket = c.tcgplayer?.market != null && c.tcgplayer.market > 0 ? c.tcgplayer.market : null;
+    const m = c.tcgplayer?.market;
     const ebay1d = c.ebay?.avg_1d != null && c.ebay.avg_1d > 0 ? c.ebay.avg_1d : null;
+    if (m != null && m > 0 && m < floor) {
+      placeholderEbay ??= ebay1d; // a placeholder rung: skip it entirely and read the next condition
+      continue;
+    }
+    const tcgpMarket = m != null && m > 0 ? m : null;
     if (tcgpMarket != null || ebay1d != null) return { tcgpMarket, ebay1d };
   }
-  return { tcgpMarket: null, ebay1d: null };
+  return { tcgpMarket: null, ebay1d: placeholderEbay };
 }
 
 /** The provider serializes tcgplayer_id as a STRING (verified live) — normalize in ONE place. */
@@ -268,7 +307,7 @@ export function tplTcgplayerId(c: TplCard): number | null {
 }
 
 /** The one graded-price chain: ebay avg_7d (stable) -> avg_1d -> avg_30d -> null. */
-function ebayAvgUsd(e: { avg_1d?: number; avg_7d?: number; avg_30d?: number } | undefined): number | null {
+export function ebayAvgUsd(e: { avg_1d?: number; avg_7d?: number; avg_30d?: number } | undefined): number | null {
   const v = e?.avg_7d ?? e?.avg_1d ?? e?.avg_30d;
   return v != null && v > 0 ? v : null;
 }
@@ -360,6 +399,7 @@ export function fromTplCard(c: TplCard, t: TrackedMarket): OracleCard {
     observedAt: priceFreshnessAt(c),
     payload: { tcgpricelookup: { prices: c.prices ?? null, last_price_update: c.last_price_update ?? null, updated_at: c.updated_at ?? null } },
     featured: t.featured,
+    productType: productTypeOf(c.rarity, c.number),
   };
 }
 

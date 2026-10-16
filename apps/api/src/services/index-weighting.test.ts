@@ -1,29 +1,90 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { equalWeightLevel, cappedWeightLevel, cappedWeights, BASE_VALUE_E6 } from './index-weighting.ts';
+import { chainStep, cappedWeights, BASE_VALUE_E6, type IndexWeighting } from './index-weighting.ts';
 
 const e6 = (n: number) => BigInt(Math.round(n * 1_000_000));
 const pmap = (o: Record<string, number>) => new Map(Object.entries(o).map(([k, v]) => [k, e6(v)] as const));
-const mem = (o: Record<string, number>) => Object.entries(o).map(([cardId, v]) => ({ cardId, priceE6: e6(v) }));
+const OPTS = { outlierFactor: 2, capBps: 500 };
+const step = (w: IndexWeighting, level: number, prev: Record<string, number>, cur: Record<string, number>) =>
+  chainStep(e6(level), pmap(prev), pmap(cur), w, OPTS);
+const ALL: IndexWeighting[] = ['price', 'equal', 'capped'];
 
-// --- equal-weight (G&P) -----------------------------------------------------
-
-test('equal-weight: launches at the 1000 base with no prior pass', () => {
-  assert.equal(equalWeightLevel(0n, new Map(), mem({ A: 100 })), BASE_VALUE_E6);
+test('launches at the 1000 base with no prior level or snapshot', () => {
+  for (const w of ALL) {
+    assert.equal(chainStep(0n, new Map(), pmap({ A: 100 }), w, OPTS).levelE6, BASE_VALUE_E6);
+    assert.equal(chainStep(e6(1500), new Map(), pmap({ A: 100 }), w, OPTS).launched, true);
+  }
 });
 
-test('equal-weight: a flat pass is exact (no drift)', () => {
-  assert.equal(equalWeightLevel(e6(1000), pmap({ A: 100, B: 5 }), mem({ A: 100, B: 5 })), e6(1000));
+test('a flat pass is exact for every method (no drift)', () => {
+  for (const w of ALL) assert.equal(step(w, 1000, { A: 100, B: 5, C: 0.5 }, { A: 100, B: 5, C: 0.5 }).levelE6, e6(1000));
 });
 
-test('equal-weight: +10%/-10% cancel regardless of price level (no single-card domination)', () => {
-  // GJ would be dragged by the $100 card; equal-weight averages the % moves -> unchanged.
-  assert.equal(equalWeightLevel(e6(1000), pmap({ A: 100, B: 1 }), mem({ A: 110, B: 0.9 })), e6(1000));
+test('many flat passes never wander off the level (the frozen-feed case)', () => {
+  for (const w of ALL) {
+    let lvl = e6(1000);
+    for (let i = 0; i < 200; i++) lvl = chainStep(lvl, pmap({ A: 9000, b: 50, c: 50 }), pmap({ A: 9000, b: 50, c: 50 }), w, OPTS).levelE6;
+    assert.equal(lvl, e6(1000));
+  }
 });
 
-test('equal-weight: chains only over common names (composition change is continuous)', () => {
-  // B leaves, C joins -> only A has a prior price, so the return is A's alone; no jump from C entering.
-  assert.equal(equalWeightLevel(e6(1000), pmap({ A: 100, B: 100 }), mem({ A: 120, C: 50 })), e6(1200));
+test('G&P is geometric (Jevons): a bounce that returns to start ends EXACTLY flat — the Carli drift is gone', () => {
+  // A 100→150→100, B 100→80→100 (all within the outlier guard). The old arithmetic chain gave
+  // (1.5+0.8)/2 = 1.15 then (0.667+1.25)/2 = 0.958 → +10.2% on prices that went nowhere.
+  let lvl = step('equal', 1000, { A: 100, B: 100 }, { A: 150, B: 80 }).levelE6;
+  lvl = chainStep(lvl, pmap({ A: 150, B: 80 }), pmap({ A: 100, B: 100 }), 'equal', OPTS).levelE6;
+  assert.equal(lvl, e6(1000));
+});
+
+test('G&P is the geometric mean of the price relatives', () => {
+  // +21% and −1%… → sqrt(1.21 · 0.81) = 0.99 → 990
+  assert.equal(step('equal', 1000, { A: 100, B: 100 }, { A: 121, B: 81 }).levelE6, e6(990));
+});
+
+test('GJ is the Σ-price ratio over the previous basket (the correct divisor adjustment)', () => {
+  // 100+50 → 110+40: 150 → 150 = flat, even though one card is up 10% and the other down 20%
+  assert.equal(step('price', 1000, { A: 100, B: 50 }, { A: 110, B: 40 }).levelE6, e6(1000));
+  assert.equal(step('price', 1000, { A: 100, B: 100 }, { A: 120, B: 100 }).levelE6, e6(1100));
+});
+
+test('leavers count: a card that fell out of the basket still contributes its fall', () => {
+  // B dropped (and so left the top-N) but still has a price this pass → its −40% is measured, not dropped.
+  const r = step('price', 1000, { A: 100, B: 100 }, { A: 100, B: 60, C: 500 });
+  assert.equal(r.levelE6, e6(800)); // (100+60)/(100+100)
+  assert.equal(r.used, 2);
+  // C is a new entrant: no prior price, contributes nothing this pass (it counts from the next).
+});
+
+test('a card with no price this pass is imputed (left out), never forced to a zero return', () => {
+  const r = step('equal', 1000, { A: 100, B: 100 }, { A: 110 });
+  assert.equal(r.levelE6, e6(1100)); // the pass move comes from A alone
+  assert.equal(r.missing, 1);
+});
+
+test('outlier guard: a ≥2× single-pass move is excluded (the $0.99 → $1,067 mis-print)', () => {
+  for (const w of ALL) {
+    const r = step(w, 1000, { A: 100, B: 100, ENTEI: 0.99 }, { A: 100, B: 100, ENTEI: 1067 });
+    assert.equal(r.levelE6, e6(1000), `${w}: the bad print moves nothing`);
+    assert.deepEqual(r.outliers, ['ENTEI']);
+  }
+  // …and a crash to below half is excluded too
+  assert.deepEqual(step('equal', 1000, { A: 100, B: 100 }, { A: 100, B: 40 }).outliers, ['B']);
+  // a big but plausible move (+80%) is kept
+  assert.equal(step('equal', 1000, { A: 100 }, { A: 180 }).levelE6, e6(1800));
+});
+
+test('a flip-flopping print (19 → 3960 → 19) leaves the index untouched in BOTH passes', () => {
+  for (const w of ALL) {
+    let lvl = step(w, 1000, { A: 100, BIRDS: 19 }, { A: 100, BIRDS: 3960 }).levelE6;
+    lvl = chainStep(lvl, pmap({ A: 100, BIRDS: 3960 }), pmap({ A: 100, BIRDS: 19 }), w, OPTS).levelE6;
+    assert.equal(lvl, e6(1000), w);
+  }
+});
+
+test('nothing measurable this pass → the level carries forward', () => {
+  const r = step('equal', 1234, { A: 100 }, {});
+  assert.equal(r.levelE6, e6(1234));
+  assert.equal(r.launched, false);
 });
 
 // --- capped weights (Pokedaq) -----------------------------------------------
@@ -42,30 +103,11 @@ test('capped-weights: a dominant card is pinned at 5%, the excess redistributed'
   assert.equal(w.get('A'), capE6); // the giant sits exactly at the cap (was ~90% uncapped)
 });
 
-test('capped-weight: a flat pass is exact even when the cap cannot fully bind', () => {
-  assert.equal(cappedWeightLevel(e6(1000), pmap({ A: 9000, b: 50, c: 50 }), mem({ A: 9000, b: 50, c: 50 }), 500), e6(1000));
-});
-
-test('chained series do not drift over many flat passes (the frozen-feed case)', () => {
-  // The live feed can sit unchanged for days; re-pricing every pass must NOT wander the level off its base.
-  const prev = pmap(giant());
-  const same = mem(giant());
-  let eq = e6(1000);
-  let cap = e6(1000);
-  for (let i = 0; i < 50; i++) {
-    eq = equalWeightLevel(eq, prev, same);
-    cap = cappedWeightLevel(cap, prev, same, 500);
-  }
-  assert.equal(eq, e6(1000));
-  assert.equal(cap, e6(1000));
-});
-
-test('capped vs equal diverge from price-weight on a giant move (concentration killed)', () => {
+test('the three methods diverge as designed on a giant +10% move', () => {
   const base = giant();
-  const moved = { ...base, A: 9900 }; // the giant +10%, the rest flat
-  // Pokedaq (capped 5%): A contributes only 5% -> +0.5% -> 1005.000
-  assert.equal(cappedWeightLevel(e6(1000), pmap(base), mem(moved), 500), e6(1005));
-  // G&P (equal): (1.1 + 20·1.0) / 21 -> +0.4761% -> 1004.761
-  assert.equal(equalWeightLevel(e6(1000), pmap(base), mem(moved)), 1004761000n);
-  // (GJ price-weighted, by contrast, would be 10,900 / 10,000 = +9% -> 1090 — the divisor method in oracle.ts.)
+  const moved = { ...base, A: 9900 };
+  assert.equal(step('capped', 1000, base, moved).levelE6, e6(1005)); // A capped at 5% → +0.5%
+  assert.equal(step('price', 1000, base, moved).levelE6, e6(1090)); // 10,900 / 10,000
+  // equal: (1.1 · 1^20)^(1/21) → +0.4549%
+  assert.equal(step('equal', 1000, base, moved).levelE6, BigInt(Math.round(1e9 * Math.pow(1.1, 1 / 21))));
 });

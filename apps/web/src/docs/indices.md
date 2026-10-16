@@ -21,21 +21,36 @@ moves) or grind up broadly (G&P leads). Trading the spread between methodologies
 ## How each is computed
 
 All three run over the **same baskets** and the **same canonical card price** (see [Pricing &
-Oracle](#oracle)), so the only variable is the weighting:
+Oracle](#oracle)), so the only variable is the weighting. Every series is **chain-linked**: each oracle pass
+multiplies the previous level by that pass's return, measured over the **previous** basket — then the basket
+rebalances. Base value **1000**.
 
-- **GJ — price-weighted (Dow-style).** `value = Σ(constituent prices) × SCALE / divisor`. The divisor is
-  chosen for a base of **1000** and **re-anchored** whenever the basket changes, so the print stays
-  continuous across rebalances.
-- **G&P — equal-weight (S&P-EW-style).** A chained average of each constituent's per-period return — every
-  card contributes equally regardless of its price.
-- **Pokedaq — capped-weight (Nasdaq-100-style).** Chained return with each name **capped at 5%**
-  (iteratively redistributed), normalized so a flat pass is exactly flat (no drift).
+- **GJ — price-weighted (Dow-style).** Pass return = Σ(today's prices) ÷ Σ(previous prices) over the previous
+  basket — the price-weighted move, exactly continuous across rebalances (the classic divisor adjustment).
+- **G&P — equal-weight (S&P-EW-style).** Pass return = the **geometric mean** of each card's price change, so
+  every card counts the same. (Geometric, not arithmetic: an arithmetic chain drifts upward when prices bounce —
+  a card going $100 → $200 → $100 would wrongly leave it higher.)
+- **Pokedaq — capped-weight (Nasdaq-100-style).** Pass return = the price-weighted average change with each
+  name **capped at 5%** (iteratively redistributed), normalized so a flat pass is exactly flat.
+
+Three rules keep every series honest:
+
+- **Fresh prices only.** A card sits in a basket only while its price is live (refreshed within the last 36h —
+  the same rule that halts a stale market). A frozen single-listing price can't move, so it never dampens an index.
+- **Leavers count.** A card that leaves a basket — dropping out of the top-N (usually because its price fell),
+  losing its featured slot, or going stale — still contributes its move on the way out, as long as it's priced
+  that pass.
+- **Outlier guard.** A card whose price moves 2× or more (up or down) in a single pass is left out of that
+  pass's return — such jumps are almost always data errors (a mis-mapped printing, a placeholder listing). Its
+  new price becomes its base, so a genuine re-price counts from the next pass on.
 
 ## What's listed
 
 Baskets are published per game — **Top 100** and **Top 250** for Pokémon, One Piece, and Magic — plus
-**Pokémon Graded (PSA-10)**. Each appears in all three series (GJ / G&P / Pokedaq). **Sealed** indices are
-defined but gated until a sealed-product price feed is wired.
+**Pokémon Graded (PSA-10)**. Each appears in all three series (GJ / G&P / Pokedaq). Card baskets hold **single
+cards only**: sealed product (booster boxes, displays, ETBs, bundles) is kept out of them. A **Sealed** basket
+per game (in all three series) is defined but gated until a moving sealed-product price feed is wired — today's sealed prices
+are static single listings.
 
 An index is **listed but close-only** until its data flows, then auto-lights — no flag flip. Because indices
 aggregate many cards, they're robust by construction and are **never price-gated** the way a thin single-card

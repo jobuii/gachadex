@@ -11,6 +11,9 @@ import type { Db } from '../db/client.ts';
  */
 
 /** Acquire or renew `key` for ttlMs. True = this process may run the pass. */
+/** The oracle ingest pass's lease key — also held by the history rebuild so no live pass interleaves. */
+export const ORACLE_INGEST_LEASE = 'oracle-ingest';
+
 export async function tryAcquireLease(db: Db, key: string, holder: string, ttlMs: number): Promise<boolean> {
   const r = await db.query<{ key: string }>(
     `INSERT INTO worker_leases(key, holder, expires_at)

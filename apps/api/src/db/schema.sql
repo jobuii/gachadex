@@ -316,6 +316,16 @@ ALTER TABLE markets ADD COLUMN IF NOT EXISTS provider_card_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_provider_card ON markets(provider_card_id) WHERE provider_card_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_tcgplayer ON markets(tcgplayer_id) WHERE tcgplayer_id IS NOT NULL;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS featured BOOLEAN NOT NULL DEFAULT false;
+-- What the product is (services/product-type.ts): 'single' | 'sealed' | 'other' (e.g. Pokémon Code Card).
+-- Card indices hold singles only; sealed gets its own per-game basket. Set on every provider upsert from the
+-- structured fields; this one-time backfill (NULL rows only — idempotent) applies the SAME rule to stored rows:
+-- sealed ⇔ no rarity AND no collector number (display_name carries the number as a trailing " #…").
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS product_type TEXT;
+UPDATE markets SET product_type = CASE
+    WHEN lower(trim(coalesce(metadata->>'rarity', ''))) = 'code card' THEN 'other'
+    WHEN lower(trim(coalesce(metadata->>'rarity', ''))) IN ('', 'none') AND display_name !~ ' #[^#]+$' THEN 'sealed'
+    ELSE 'single' END
+  WHERE kind = 'card' AND product_type IS NULL;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS low_confidence BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS mark_clamped BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS clamped_since TIMESTAMPTZ;
@@ -362,6 +372,23 @@ CREATE TABLE IF NOT EXISTS index_divisors (
   divisor_e6   BIGINT NOT NULL,
   base_value_e6 BIGINT NOT NULL,
   as_of        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- History-repair backups (services/index-rebuild.ts, price-cleanup.ts, price-backfill.ts): every value a repair
+-- run changes, keyed by run id, so `revertHistoryRepair(runId)` restores it exactly — rewritten values come back,
+-- inserted rows (flagged) are deleted, rejected prints are re-accepted.
+CREATE TABLE IF NOT EXISTS history_repair_backup (
+  run_id       TEXT NOT NULL,
+  tbl          TEXT NOT NULL,              -- 'oracle_prices' | 'marks'
+  row_id       TEXT NOT NULL,
+  market_id    TEXT NOT NULL,
+  old_index_e6 BIGINT,
+  old_mark_e6  BIGINT,
+  old_payload  JSONB,                          -- a rewritten print's raw_payload before the run (revert restores it as-is)
+  inserted     BOOLEAN NOT NULL DEFAULT false, -- true = the run created this row (revert deletes it)
+  old_accepted BOOLEAN,                        -- set when the run REJECTED a print (revert re-accepts it)
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (run_id, tbl, row_id)
 );
 
 -- =========================================================================

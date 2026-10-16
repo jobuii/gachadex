@@ -543,3 +543,29 @@ test('repriceExpansions is gated on ORACLE_PRIMARY=scrydex (webhook re-price ine
 
   await db.query(`DELETE FROM markets WHERE id=$1`, [id]);
 });
+
+test('extractRaw: a TCGplayer product shared by Normal AND Foil prices OUR variant, never the other printing', () => {
+  // MTG Birds of Paradise #231: product 2831 lists both printings — the Foil market was priced off Normal ($19).
+  const c = card([
+    { name: 'normal', marketplaces: [{ name: 'tcgplayer', product_id: '2831' }], prices: [raw('NM', 19, { low: 15, high: 25 })] },
+    { name: 'foil', marketplaces: [{ name: 'tcgplayer', product_id: '2831' }], prices: [raw('NM', 1500, { low: 1300, high: 1700 })] },
+  ]);
+  assert.equal(extractRaw(c, 2831, 'Foil')!.market, 1500, 'Foil market → the foil variant');
+  assert.equal(extractRaw(c, 2831, 'Normal')!.market, 19);
+  assert.equal(extractRaw(c, 2831)!.market, 19, 'no market variant → first match (legacy behaviour)');
+  const rh = card([
+    { name: 'holofoil', marketplaces: [{ name: 'tcgplayer', product_id: '7' }], prices: [raw('NM', 50)] },
+    { name: 'reverseHolofoil', marketplaces: [{ name: 'tcgplayer', product_id: '7' }], prices: [raw('NM', 9)] },
+  ]);
+  assert.equal(extractRaw(rh, 7, 'Reverse Holofoil')!.market, 9, 'exact name match wins over foil-ness');
+});
+
+test('combinePrice: a tcgpl fallback under half of Scrydex\'s surviving rung is rejected; eBay never vetoes', () => {
+  // Lugia: Scrydex NM broken, surviving LP rung $4,500; tcgpl $500 is below half of it → keep Scrydex.
+  assert.equal(combinePrice(sx({ market: 4500, condition: 'LP', bestGradeBroken: true }), { tcgpMarket: 500, ebay1d: null }, null).priceUsd, 4500);
+  // eBay mis-matched to a pricier sibling printing must NOT halt a correct tcgpl price (measured live):
+  // Overgrown Tomb (Retro Frame) $19.99 vs eBay $1,845 (the Serial Numbered printing).
+  assert.equal(combinePrice(null, { tcgpMarket: 19.99, ebay1d: 1845 }, null).priceUsd, 19.99);
+  // …nor the other way (Krenko serial: tcgpl $1,500 vs eBay $3.98).
+  assert.equal(combinePrice(null, { tcgpMarket: 1500, ebay1d: 3.98 }, null).priceUsd, 1500);
+});

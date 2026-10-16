@@ -23,12 +23,15 @@ export const MARKET_STATUS = ['active', 'reduce_only', 'halted', 'delisted'];
 //   Pokedaq — capped price-weight (Nasdaq-100): price-weighted, every card capped at 5%.
 // Constituent price = the canonical per-card price (same value the card market uses); eBay is never a
 // price input. `weighting` selects the math in the oracle; `tradeable:false` is listed-but-gated until
-// the basket's data flows (the ingest flips it live once constituents exist; Sealed has no feed).
+// the basket's data flows (the ingest flips it live once constituents exist) — except `gated` tiers (Sealed),
+// which the ingest builds and lists but never makes tradeable on its own.
 const INDEX_TIERS = [
   { tier: 'top-100', topN: 100, top: 'Top 100', num: '100', tracks: 'Top 100 cards by market price' },
   { tier: 'top-250', topN: 250, top: 'Top 250', num: '250', tracks: 'Top 250 cards by market price' },
   { tier: 'graded', topN: null, top: 'Graded (PSA 10)', num: 'Graded (PSA 10)', tracks: 'PSA 10 graded cards', pokemonOnly: true },
-  { tier: 'sealed', topN: null, top: 'Sealed', num: 'Sealed', tracks: 'Sealed product', pokemonOnly: true, gjOnly: true, gated: true },
+  // Sealed (booster boxes, displays, ETBs, bundles…) — its own basket per game, never mixed into the card tiers.
+  // gated: built + listed by the ingest once enough sealed products price, but only an operator makes it tradeable.
+  { tier: 'sealed', topN: null, top: 'Sealed', num: 'Sealed', tracks: 'Sealed product (booster boxes, displays, ETBs)', gated: true },
 ];
 /** Pokedaq per-card weight cap (Nasdaq-100 style), in basis points — the single source of truth. */
 export const DEFAULT_CAP_BPS = 500; // 5%
@@ -64,6 +67,7 @@ export const INDEX_CATALOG = GAMES.flatMap((game) =>
       ...(s.capBps ? { capBps: s.capBps } : {}),
       // gated by default unless it's a Pokémon top-N basket (live today); the rest light up via the ingest.
       tradeable: !t.gated && game === 'pokemon' && (t.tier === 'top-100' || t.tier === 'top-250'),
+      gated: !!t.gated,
       topN: t.topN,
     })),
   ),

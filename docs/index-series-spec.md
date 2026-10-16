@@ -5,6 +5,27 @@ Replaces the single price-weighted index family with a branded three-series line
 on branch `feat/index-series` (`services/index-weighting.ts`, the `oracle.ts` buildIndex split, the
 generated 22-market `INDEX_CATALOG`, and the sidebar series grouping).
 
+## 0. v2 methodology (2026-10 audit) — SUPERSEDES the §2 math below
+
+A live audit (2026-10-16) found the v1 series could not show a downturn: Pokémon Top-100 never fell more than
+1% from a peak while a JP PSA-10 index fell 19% and our own day-one Pokémon basket fell 2.6%. Causes, each
+measured on live data, and the fix for each (code: `apps/api/src/services/index-weighting.ts` `chainStep`,
+`oracle.ts` `ingest`/`buildIndex`, `product-type.ts`):
+
+| v1 defect | Evidence | v2 rule |
+|---|---|---|
+| G&P was a **Carli** index (chained arithmetic mean of relatives) — drifts up when prices bounce | same-basket replay: Pokémon Top-100 Carli +11.7% vs geometric −7.5%; MTG +95.9% vs −15.3% | G&P = **Jevons** (geometric mean) |
+| GJ re-anchored the divisor to the **previous** level on any basket change → that pass's moves discarded | Pokémon Top-100: correct −1.5% → as-coded +6.5% | GJ = chained **Dutot** (Σ P₁ / Σ P₀ over the previous basket) — the correct divisor adjustment |
+| Only cards present in **both** passes counted → a card that fell out of a top-N was never measured | survivorship ≈ 6–8 pts | the link is measured over the **previous basket**; leavers count |
+| No guard on a single bad print | Entei ☆ $0.99 → $1,067 → G&P-250 ×6.1 in one pass; MTG G&P-250 reached 61,125 | **outlier guard**: a ≥ `INDEX_OUTLIER_FACTOR` (2×) single-pass move is left out of that pass |
+| Frozen single-listing prices sat in baskets (halted for trading, still in the index) | 120 of 232 featured MTG cards had one print ever | **fresh-only**: an accepted print within `INDEX_FRESH_MS` (36h), market not halted/delisted |
+| Sealed product counted as "cards" | 71% of Pokémon Top-100 by weight | card tiers = **singles** only; a per-game **Sealed** basket in all three series (9 markets; gated; building behind `SEALED_INDEX_ENABLED` — no sealed price has ever moved). The catalog is now 30 markets (the §3 "22" is v1) |
+
+Cards with no usable price in a pass (missing or outlier) are imputed from the rest of the basket (left out of
+Rₜ), never forced to a zero return. Discovery's featured set now requires a liquidity signal (eBay 7d sales or a
+TCGplayer spread) and selects singles and sealed separately (`discovery.ts` `featuredSelection`). History is
+recomputed under v2 by `apps/api/scripts/rebuild-index-history.ts` (reversible; see the script header).
+
 ## 1. Goal & scope
 
 Today every index is price-weighted (`Index = Σ Pᵢ / divisor`) — methodologically a **Dow Jones**, which

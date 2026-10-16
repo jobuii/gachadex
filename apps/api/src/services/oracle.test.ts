@@ -38,9 +38,9 @@ test('ingest seeds card markets, indices, oracle prints and marks', async () => 
   assert.equal(r.indices, 6); // (top-100 + top-250) × 3 series (GJ/G&P/Pokedaq); graded/sealed gated (no graded data here)
 
   const markets = await listMarketsWithData(db);
-  // 4 cards + 22 indices: Pokémon top-100/top-250 live ×3 series (6) + Pokémon graded ×3 + GJ sealed (4)
-  // + One Piece top-100/top-250 ×3 (6) + MTG top-100/top-250 ×3 (6), all gated until their data flows.
-  assert.equal(markets.length, 26);
+  // 4 cards + 30 indices: Pokémon top-100/top-250 live ×3 series (6) + Pokémon graded ×3 + sealed ×3 (6)
+  // + One Piece top-100/top-250/sealed ×3 (9) + MTG top-100/top-250/sealed ×3 (9), all gated until their data flows.
+  assert.equal(markets.length, 34);
 
   const chari = markets.find((m) => m.symbol === 'sv-1')!;
   assert.equal(chari.kind, 'card');
@@ -59,7 +59,7 @@ test('ingest seeds card markets, indices, oracle prints and marks', async () => 
   // game dimension: One Piece / MTG indices are listed but gated until scrydex card data lands
   for (const game of ['onepiece', 'mtg']) {
     const gameIdx = markets.filter((m) => m.game === game);
-    assert.equal(gameIdx.length, 6, `${game} lists top-100 + top-250 across GJ/G&P/Pokedaq`);
+    assert.equal(gameIdx.length, 9, `${game} lists top-100 + top-250 + sealed across GJ/G&P/Pokedaq`);
     assert.ok(gameIdx.every((m) => m.kind === 'index' && !m.tradeable && m.markE6 === null), `${game} indices are gated`);
   }
 });
