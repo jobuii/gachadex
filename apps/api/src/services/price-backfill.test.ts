@@ -7,7 +7,7 @@ process.env.DATABASE_URL = '';
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
 const { upsertCardMarket } = await import('./markets.ts');
-const { dayWindows, scrydexDayPrice, tcgplDayPrice, planBackfill, applyBackfill } = await import('./price-backfill.ts');
+const { dayWindows, scrydexDayPrice, tcgplDayPrice, planBackfill, applyBackfill, serializeBackfillPlan, parseBackfillPlan } = await import('./price-backfill.ts');
 const { revertHistoryRepair } = await import('./history-repair.ts');
 
 await initDb();
@@ -77,7 +77,9 @@ test('plan + apply: Scrydex cards use price_history, others tcgpl; prints + mark
   assert.equal(row(sxM).priceE6, 1_450_000_000n, 'the FOIL history row, never the normal printing');
   assert.equal(row(tpM).priceE6, 3_000_000_000n);
 
-  const r = await applyBackfill(db, plan);
+  const saved = parseBackfillPlan(serializeBackfillPlan(plan));
+  assert.deepEqual(saved, plan, 'a saved plan round-trips exactly (bigints included)');
+  const r = await applyBackfill(db, saved); // --apply --plan: the reviewed rows, no second provider fetch
   assert.equal(r.points, 2);
   const at = await db.query<{ t: string }>(`SELECT ingested_at::text AS t FROM oracle_prices WHERE market_id = $1`, [sxM]);
   assert.ok(at.rows[0].t.startsWith('2026-09-25 06:00:00'));
@@ -96,4 +98,19 @@ test('a market with NO mark after the gap day is not backfilled — the backfill
   }, ['2026-09-25']);
   assert.equal(plan.rows.filter((r) => r.marketId === m).length, 0);
   assert.ok(plan.misses.some((x) => x.symbol === 'mtg:frozen' && /would become the live mark/.test(x.reason)));
+});
+
+test('a saved plan never writes over a market pinned since it was made', async () => {
+  const m = await upsertCardMarket(db, { game: 'mtg', symbol: 'mtg:pinned-later', cardId: 'pinned-later', displayName: 'P #1', variant: null, imageSmall: null, providerCardId: 'tpl-p', featured: true });
+  await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES ($1, 1, 1, '2026-10-05')`, [m]);
+  const plan = await planBackfill(db, {
+    scrydexCards: async () => [],
+    scrydexHistory: async () => [],
+    tcgplHistory: async () => [{ date: '2026-09-24', prices: [{ source: 'tcgplayer', condition: 'near_mint', price_market: 50 }] }] as any,
+    fxJpyUsd: async () => null,
+  }, ['2026-09-25']);
+  assert.equal(plan.rows.filter((r) => r.marketId === m).length, 1);
+  await db.query(`UPDATE markets SET price_pinned = true WHERE id = $1`, [m]);
+  await applyBackfill(db, plan);
+  assert.equal((await db.query(`SELECT count(*)::int AS n FROM oracle_prices WHERE market_id = $1`, [m])).rows[0].n, 0);
 });

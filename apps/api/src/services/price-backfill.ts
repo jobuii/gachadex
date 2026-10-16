@@ -179,14 +179,39 @@ export async function planBackfill(q: Queryer, deps: BackfillDeps, days: string[
   return plan;
 }
 
-/** Write the planned prints + card marks (06:00 UTC on the gap day), reversible by run id. */
+/**
+ * A plan as JSON (bigints as strings). The dry run saves it and --apply --plan writes exactly the reviewed rows — no
+ * second paid fetch (one fetch of every featured card's history is ~710 Scrydex requests; two don't fit the
+ * discovery tier's daily ceiling).
+ */
+export const serializeBackfillPlan = (plan: BackfillPlan): string =>
+  JSON.stringify(plan, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 1);
+
+export function parseBackfillPlan(json: string): BackfillPlan {
+  const plan = JSON.parse(json) as BackfillPlan;
+  plan.rows = plan.rows.map((r) => ({ ...r, priceE6: BigInt(r.priceE6), gradedE6: r.gradedE6 == null ? null : BigInt(r.gradedE6) }));
+  return plan;
+}
+
+/**
+ * Write the planned prints + card marks (06:00 UTC on the gap day), reversible by run id. A market pinned or delisted
+ * since the plan (a saved plan can be hours old) is skipped.
+ */
 export async function applyBackfill(db: Db, plan: BackfillPlan): Promise<{ runId: string; points: number }> {
   const runId = newRepairRunId('backfill');
+  const skip = new Set(
+    (
+      await db.query<{ id: string }>(
+        `SELECT id FROM markets WHERE id = ANY($1::text[]) AND (price_pinned OR status = 'delisted')`,
+        [[...new Set(plan.rows.map((r) => r.marketId))]],
+      )
+    ).rows.map((r) => r.id),
+  );
   const points = await db.tx((q) =>
     insertHistoricalPoints(
       q,
       runId,
-      plan.rows.map((r) => ({
+      plan.rows.filter((r) => !skip.has(r.marketId)).map((r) => ({
         marketId: r.marketId,
         valueE6: r.priceE6,
         at: new Date(`${r.day}T06:00:00.000Z`),

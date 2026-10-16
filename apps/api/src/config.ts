@@ -66,6 +66,9 @@ export const config = {
   // Database. Empty => use embedded PGlite (local dev, zero deps).
   // In prod set DATABASE_URL to a managed Postgres (Neon/Supabase).
   databaseUrl: process.env.DATABASE_URL ?? '',
+  // Client-side cap on one pg query; 0 = off (the server). The history-repair scripts set it: over Railway's public
+  // TCP proxy a query can be lost in flight, and without a cap the script then waits forever (2026-10-16 backfill).
+  dbQueryTimeoutMs: num('DB_QUERY_TIMEOUT_MS', 0),
   pgliteDir: process.env.PGLITE_DIR ?? './.pglite',
 
   // Auth

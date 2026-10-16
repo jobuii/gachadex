@@ -83,7 +83,11 @@ async function createPglite(): Promise<Db> {
 async function createPg(): Promise<Db> {
   const pgmod = await import('pg');
   const Pool = pgmod.default.Pool;
-  const pool = new Pool({ connectionString: config.databaseUrl, max: 10 });
+  const pool = new Pool({
+    connectionString: config.databaseUrl,
+    max: 10,
+    ...(config.dbQueryTimeoutMs > 0 ? { query_timeout: config.dbQueryTimeoutMs } : {}),
+  });
   return {
     driver: 'pg',
     query: (text, params) => pool.query(text, params as any[]) as any,
