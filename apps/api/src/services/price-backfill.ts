@@ -14,8 +14,13 @@
  *   - otherwise: tcgpl /history (one call per card; tcgpl's own cadence is ~weekly) — the latest TCGplayer market
  *     on or up to 6 days before the gap day, live condition order + placeholder floor; PSA-10 from the eBay row.
  * JPY prices use the CURRENT FX rate (historical FX isn't available) — the only approximation; JP printings are few.
+ *
+ * A filled price must agree with the card's own history around the gap: a row `outlierFactor`× or more off every
+ * accepted print on either side (screenBackfillPlan) is dropped. Provider history is labelled as of its date, and
+ * our variant match is today's — measured 2026-10-17: Scrydex's OP05-074 history swaps altArt/mangaAltArt vs today's
+ * card ($5.52 vs a live $957), and the 7ED Foils' history is the Foil printing our pre-2026-10-16 marks never priced.
  */
-import { toE6 } from '@pokex/pricing';
+import { fromE6, toE6 } from '@pokex/pricing';
 import type { Db, Queryer } from '../db/client.ts';
 import { insertHistoricalPoints, newRepairRunId } from './history-repair.ts';
 import {
@@ -50,6 +55,7 @@ export interface BackfillPlan {
 
 const TPL_MAX_LAG_DAYS = 6;
 const DAY_MS = 86_400_000;
+const atOf = (day: string) => new Date(`${day}T06:00:00.000Z`); // a filled print's timestamp
 const PROVIDER_CONCURRENCY = 4; // the provider clients' limiter still paces every request + enforces the credit caps
 
 /** Contiguous runs of days → [start, end] windows (one history call per window per card). */
@@ -146,7 +152,7 @@ export async function planBackfill(q: Queryer, deps: BackfillDeps, days: string[
     const slug = c.scrydex_card_id ? scrydexSlug(c.game) : null;
     const sxCard = c.scrydex_card_id ? sxCards.get(c.scrydex_card_id) : undefined;
     const add = (day: string, raw: number | null, psa10: number | null, source: BackfillRow['source'], sourceDate: string | null, miss: string) => {
-      if (!c.last_mark || c.last_mark.getTime() <= Date.parse(`${day}T06:00:00Z`)) {
+      if (!c.last_mark || c.last_mark.getTime() <= atOf(day).getTime()) {
         plan.misses.push({ symbol: c.symbol, reason: `no mark after ${day} — a backfilled mark would become the live mark` });
         return;
       }
@@ -194,10 +200,51 @@ export function parseBackfillPlan(json: string): BackfillPlan {
 }
 
 /**
- * Write the planned prints + card marks (06:00 UTC on the gap day), reversible by run id. A market pinned or delisted
- * since the plan (a saved plan can be hours old) is skipped.
+ * Drop each row at least `outlierFactor`× off EVERY accepted print of its market on either side of its timestamp
+ * (the nearest before, the nearest after) — the index chain guard's own bound (chainStep) — as it would be a spike in
+ * the card's chart and the index rebuild. A row with no such neighbour is kept; a real move across the gap matches one
+ * side and is kept. Earlier backfill prints are never neighbours, or a re-run would chain a row it dropped off one it
+ * kept. Only the raw price is screened: a kept row's PSA-10 rides along (a ≥2× graded jump is the chain guard's job).
+ * Read-only.
  */
-export async function applyBackfill(db: Db, plan: BackfillPlan): Promise<{ runId: string; points: number }> {
+export async function screenBackfillPlan(q: Queryer, plan: BackfillPlan, outlierFactor: number): Promise<{ plan: BackfillPlan; dropped: BackfillPlan['misses'] }> {
+  if (!plan.rows.length) return { plan, dropped: [] };
+  const nb = await q.query<{ i: number; prev: string | null; prev_at: Date | null; next: string | null; next_at: Date | null }>(
+    `SELECT u.i::int AS i, p.v AS prev, p.t AS prev_at, n.v AS next, n.t AS next_at
+       FROM unnest($1::text[], $2::timestamptz[]) WITH ORDINALITY AS u(m, t, i)
+       LEFT JOIN LATERAL (SELECT index_price_e6::text AS v, source_observed_at AS t FROM oracle_prices
+                           WHERE market_id = u.m AND is_accepted AND raw_payload->'backfill' IS NULL AND source_observed_at < u.t
+                           ORDER BY source_observed_at DESC LIMIT 1) p ON true
+       LEFT JOIN LATERAL (SELECT index_price_e6::text AS v, source_observed_at AS t FROM oracle_prices
+                           WHERE market_id = u.m AND is_accepted AND raw_payload->'backfill' IS NULL AND source_observed_at > u.t
+                           ORDER BY source_observed_at LIMIT 1) n ON true
+      ORDER BY u.i`,
+    [plan.rows.map((r) => r.marketId), plan.rows.map((r) => atOf(r.day).toISOString())],
+  );
+  const rows: BackfillRow[] = [];
+  const dropped: BackfillPlan['misses'] = [];
+  for (const n of nb.rows) {
+    const r = plan.rows[n.i - 1];
+    const v = fromE6(r.priceE6);
+    const sides = [
+      n.prev != null ? { usd: fromE6(BigInt(n.prev)), at: n.prev_at! } : null,
+      n.next != null ? { usd: fromE6(BigInt(n.next)), at: n.next_at! } : null,
+    ].filter((x) => x != null);
+    if (sides.length && sides.every((x) => Math.max(v / x.usd, x.usd / v) >= outlierFactor)) {
+      const fmt = (x: { usd: number; at: Date }) => `$${x.usd} on ${x.at.toISOString().slice(0, 10)}`;
+      dropped.push({ symbol: r.symbol, reason: `${r.day}: ${r.source} $${v} is ≥${outlierFactor}× off its neighbours (${sides.map(fmt).join(' / ')})` });
+    } else rows.push(r);
+  }
+  return { plan: { ...plan, rows }, dropped };
+}
+
+/**
+ * Write the planned prints + card marks (06:00 UTC on the gap day), reversible by run id. The plan is screened again
+ * against the DB as it is now (screenBackfillPlan), and a market pinned or delisted since the plan (a saved plan can
+ * be hours old) is skipped.
+ */
+export async function applyBackfill(db: Db, saved: BackfillPlan, outlierFactor: number): Promise<{ runId: string; points: number; screenedOut: number }> {
+  const { plan, dropped } = await screenBackfillPlan(db, saved, outlierFactor);
   const runId = newRepairRunId('backfill');
   const skip = new Set(
     (
@@ -214,11 +261,11 @@ export async function applyBackfill(db: Db, plan: BackfillPlan): Promise<{ runId
       plan.rows.filter((r) => !skip.has(r.marketId)).map((r) => ({
         marketId: r.marketId,
         valueE6: r.priceE6,
-        at: new Date(`${r.day}T06:00:00.000Z`),
+        at: atOf(r.day),
         // PSA-10 rides as the provider-neutral gradedE6 the index rebuild reads.
         payload: { backfill: { runId, source: r.source, sourceDate: r.sourceDate }, ...(r.gradedE6 != null ? { gradedE6: r.gradedE6.toString() } : {}) },
       })),
     ),
   );
-  return { runId, points };
+  return { runId, points, screenedOut: dropped.length };
 }

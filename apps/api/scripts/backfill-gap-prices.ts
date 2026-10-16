@@ -5,16 +5,18 @@
  *
  *   DATABASE_URL=<prod> SCRYDEX_API_KEY=… SCRYDEX_TEAM_ID=… TCGPRICELOOKUP_API_KEY=… npx tsx scripts/backfill-gap-prices.ts --probe
  *   … npx tsx scripts/backfill-gap-prices.ts --out plan.json            # plan: fetch + report + save (spends credits, writes nothing)
+ *   … npx tsx scripts/backfill-gap-prices.ts --plan plan.json           # re-report a saved plan against the DB now (no calls)
  *   … npx tsx scripts/backfill-gap-prices.ts --apply --plan plan.json   # write the SAVED plan (no provider calls; prints the run id)
  *   … npx tsx scripts/backfill-gap-prices.ts --apply                    # fetch + write in one go
  *     --days 2026-09-24,2026-09-25   override the gap days (default: every day with no pass)
  * Undo: npx tsx scripts/revert-history-repair.ts <runId>
  */
 import fs from 'node:fs';
+import { config } from '../src/config.ts';
 import { getDb, closeDb } from '../src/db/client.ts';
 import { initDb } from '../src/db/init.ts';
 import { missingPassDays } from '../src/services/index-rebuild.ts';
-import { planBackfill, applyBackfill, serializeBackfillPlan, parseBackfillPlan } from '../src/services/price-backfill.ts';
+import { planBackfill, screenBackfillPlan, applyBackfill, serializeBackfillPlan, parseBackfillPlan } from '../src/services/price-backfill.ts';
 import { getDefaultScrydexClient, scrydexSlug } from '../src/services/providers/scrydex.ts';
 import { getDefaultClient } from '../src/services/providers/tcgpricelookup.ts';
 import { getJpyUsd } from '../src/services/providers/fx.ts';
@@ -67,13 +69,22 @@ const plan = planPath
     );
 if (planPath) console.log(`loaded saved plan ${planPath} — gap days ${plan.days.join(', ')} (no provider calls)`);
 if (outPath) fs.writeFileSync(outPath, serializeBackfillPlan(plan));
-const bySource = plan.rows.reduce<Record<string, number>>((a, r) => ((a[r.source] = (a[r.source] ?? 0) + 1), a), {});
-console.log(`\nprints planned: ${plan.rows.length} ${JSON.stringify(bySource)}   misses: ${plan.misses.length}`);
+// The report shows the plan as apply will screen it (apply screens again against the DB as it is then).
+const { plan: kept, dropped } = await screenBackfillPlan(db, plan, config.indexOutlierFactor);
+const count = <T,>(xs: T[], key: (x: T) => string) => xs.reduce<Record<string, number>>((a, x) => {
+  const k = key(x);
+  a[k] = (a[k] ?? 0) + 1;
+  return a;
+}, {});
+console.log(`\nprints planned: ${kept.rows.length} ${JSON.stringify(count(kept.rows, (r) => r.source))}   misses: ${plan.misses.length}   dropped: ${dropped.length}`);
 console.log(`provider calls: ${JSON.stringify(plan.calls)}`);
-for (const m of plan.misses.slice(0, 30)) console.log(`  miss ${m.symbol}: ${m.reason}`);
+console.log('misses by reason:');
+console.table(count(plan.misses, (m) => m.reason.replace(/\d{4}-\d\d-\d\d/g, '<day>').replace(/ no \S+ raw price/, ' no <variant> raw price')));
+console.log(`dropped — ≥${config.indexOutlierFactor}× off every neighbouring print of the card: ${dropped.length}`);
+for (const m of dropped) console.log(`  ${m.symbol} ${m.reason}`);
 if (outPath) console.log(`\nplan saved to ${outPath} — review, then: --apply --plan ${outPath}`);
 if (apply) {
-  const r = await applyBackfill(db, plan);
-  console.log(`\nwrote ${r.points} prints (+ a card mark each) — run id: ${r.runId}`);
+  const r = await applyBackfill(db, plan, config.indexOutlierFactor);
+  console.log(`\nwrote ${r.points} prints (+ a card mark each; ${r.screenedOut} dropped off-neighbours) — run id: ${r.runId}`);
 }
 await closeDb();

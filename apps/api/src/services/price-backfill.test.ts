@@ -7,7 +7,7 @@ process.env.DATABASE_URL = '';
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
 const { upsertCardMarket } = await import('./markets.ts');
-const { dayWindows, scrydexDayPrice, tcgplDayPrice, planBackfill, applyBackfill, serializeBackfillPlan, parseBackfillPlan } = await import('./price-backfill.ts');
+const { dayWindows, scrydexDayPrice, tcgplDayPrice, planBackfill, screenBackfillPlan, applyBackfill, serializeBackfillPlan, parseBackfillPlan } = await import('./price-backfill.ts');
 const { revertHistoryRepair } = await import('./history-repair.ts');
 
 await initDb();
@@ -79,11 +79,11 @@ test('plan + apply: Scrydex cards use price_history, others tcgpl; prints + mark
 
   const saved = parseBackfillPlan(serializeBackfillPlan(plan));
   assert.deepEqual(saved, plan, 'a saved plan round-trips exactly (bigints included)');
-  const r = await applyBackfill(db, saved); // --apply --plan: the reviewed rows, no second provider fetch
+  const r = await applyBackfill(db, saved, 2); // --apply --plan: the reviewed rows, no second provider fetch
   assert.equal(r.points, 2);
   const at = await db.query<{ t: string }>(`SELECT ingested_at::text AS t FROM oracle_prices WHERE market_id = $1`, [sxM]);
   assert.ok(at.rows[0].t.startsWith('2026-09-25 06:00:00'));
-  assert.equal((await applyBackfill(db, plan)).points, 0, 'idempotent');
+  assert.equal((await applyBackfill(db, plan, 2)).points, 0, 'idempotent');
   await revertHistoryRepair(db, r.runId);
   assert.equal((await db.query(`SELECT count(*)::int AS n FROM oracle_prices`)).rows[0].n, 0);
   assert.equal((await db.query(`SELECT count(*)::int AS n FROM marks`)).rows[0].n, 2, 'only the two pre-existing later marks remain');
@@ -111,6 +111,35 @@ test('a saved plan never writes over a market pinned since it was made', async (
   }, ['2026-09-25']);
   assert.equal(plan.rows.filter((r) => r.marketId === m).length, 1);
   await db.query(`UPDATE markets SET price_pinned = true WHERE id = $1`, [m]);
-  await applyBackfill(db, plan);
+  await applyBackfill(db, plan, 2);
   assert.equal((await db.query(`SELECT count(*)::int AS n FROM oracle_prices WHERE market_id = $1`, [m])).rows[0].n, 0);
+});
+
+test('a filled price ≥2× off every neighbouring print is dropped (Scrydex history labels variants as of its date)', async () => {
+  const m = await upsertCardMarket(db, { game: 'onepiece', symbol: 'onepiece:kid', cardId: 'kid', displayName: 'Kid #OP05-074', variant: 'Foil', imageSmall: null, providerCardId: 'tpl-kid', featured: true });
+  const print = (usd: number, at: string) =>
+    db.query(`INSERT INTO oracle_prices(market_id, index_price_e6, source_observed_at, ingested_at) VALUES ($1, $2, $3, $3)`, [m, usd * 1e6, at]);
+  await print(957, '2026-09-12T12:00:00Z');
+  await print(957, '2026-10-02T12:00:00Z');
+  await db.query(`INSERT INTO oracle_prices(market_id, index_price_e6, source_observed_at, ingested_at, is_accepted) VALUES ($1, 5000000, '2026-09-27T12:00:00Z', '2026-09-27T12:00:00Z', false)`, [m]);
+  const row = (day: string, usd: number) => ({ marketId: m, symbol: 'onepiece:kid', day, priceE6: BigInt(usd * 1e6), gradedE6: null, source: 'scrydex' as const, sourceDate: day });
+  const plan = { days: [], misses: [], calls: { scrydexBatch: 0, scrydexHistory: 0, tcgplHistory: 0 },
+    rows: [row('2026-09-25', 5.52), row('2026-09-26', 940), row('2026-09-28', 1900), row('2026-09-29', 1915)] };
+  const s = await screenBackfillPlan(db, plan, 2);
+  assert.deepEqual(s.plan.rows.map((r) => r.day), ['2026-09-26', '2026-09-28'], '$940 and $1,900 are within 2× of $957; $5.52 and $1,915 are not');
+  assert.equal(s.dropped.length, 2);
+  assert.match(s.dropped[0].reason, /^2026-09-25: scrydex \$5\.52 is ≥2× off its neighbours \(\$957 on 2026-09-12 \/ \$957 on 2026-10-02\)$/, 'a rejected print is never a neighbour');
+
+  const only = await upsertCardMarket(db, { game: 'onepiece', symbol: 'onepiece:new', cardId: 'new', displayName: 'New #1', variant: null, imageSmall: null, providerCardId: 'tpl-new', featured: true });
+  await db.query(`INSERT INTO oracle_prices(market_id, index_price_e6, source_observed_at, ingested_at) VALUES ($1, 100000000, '2026-10-05', '2026-10-05')`, [only]);
+  const lone = (usd: number) => ({ ...row('2026-09-25', usd), marketId: only, symbol: 'onepiece:new' });
+  assert.equal((await screenBackfillPlan(db, { ...plan, rows: [lone(300)] }, 2)).plan.rows.length, 0, 'one neighbour, 3× off → dropped');
+  assert.equal((await screenBackfillPlan(db, { ...plan, rows: [lone(150)] }, 2)).plan.rows.length, 1, 'one neighbour, within 2× → kept');
+
+  await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES ($1, 1, 1, '2026-10-05')`, [m]);
+  const r = await applyBackfill(db, plan, 2); // apply screens the saved plan again itself
+  assert.deepEqual([r.points, r.screenedOut], [2, 2]);
+  // A re-run must not chain a dropped row off a kept one ($1,915 is within 2× of the $1,900 just written).
+  assert.deepEqual([(await applyBackfill(db, plan, 2)).points], [0], 'a second apply writes nothing');
+  await revertHistoryRepair(db, r.runId);
 });
