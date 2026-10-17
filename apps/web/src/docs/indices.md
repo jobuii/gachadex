@@ -30,8 +30,10 @@ rebalances. Base value **1000**.
 - **G&P — equal-weight (S&P-EW-style).** Pass return = the **geometric mean** of each card's price change, so
   every card counts the same. (Geometric, not arithmetic: an arithmetic chain drifts upward when prices bounce —
   a card going $100 → $200 → $100 would wrongly leave it higher.)
-- **Pokedaq — capped-weight (Nasdaq-100-style).** Pass return = the price-weighted average change with each
-  name **capped at 5%** (iteratively redistributed), normalized so a flat pass is exactly flat. A basket with
+- **Pokedaq — capped-weight (Nasdaq-100-style).** Pass return = the price-weighted **geometric** average change
+  with each name **capped at 5%** (iteratively redistributed). Each card's weight is the average of its weight before
+  and after the move (the Törnqvist method behind chained CPI), so a price that moves and comes straight back on the
+  next update leaves the index where it was, and noisy back-and-forth doesn't build up drift. A basket with
   fewer than 20 priced cards can't meet a 5% cap, so for that pass every card counts equally.
 
 Three rules keep every series honest:

@@ -80,8 +80,13 @@ practice) → carry forward (`R = 1`).
 ```
 raw weights:   uᵢ = Pᵢ,ₜ₋₁ / Σ_{j∈Cₜ} Pⱼ,ₜ₋₁
 capped:        wᵢ = cap(u, 5%)        # iterative, below
-Iₜ = Iₜ₋₁ · Σ_{i∈Cₜ} wᵢ · ( Pᵢ,ₜ / Pᵢ,ₜ₋₁ )
+w̄ᵢ = ( cap(u at Pₜ₋₁)ᵢ + cap(u at Pₜ)ᵢ ) / 2   # Törnqvist (2026-10-17)
+Iₜ = Iₜ₋₁ · Π_{i∈Cₜ} ( Pᵢ,ₜ / Pᵢ,ₜ₋₁ ) ^ ( w̄ᵢ / Σ w̄ )
 ```
+Not Σ wᵢ·(Pᵢ,ₜ/Pᵢ,ₜ₋₁) with Pₜ₋₁ weights: that arithmetic chain drifts UP wherever the cap binds (Carli), and the
+geometric mean with Pₜ₋₁ weights drifts DOWN wherever it doesn't. Averaging the start and end weights makes a move
+undone on the next pass cancel exactly (time reversal), capped or not — the chained-CPI method. Longer cycles aren't
+exactly circular (review sim: ≤0.3% over a 5-pass ±15% cycle) but carry no systematic drift (mean ≈0 over 600 passes).
 `cap(u, 0.05)` — the standard Nasdaq-style redistribution:
 ```
 loop:

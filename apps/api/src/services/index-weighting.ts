@@ -4,14 +4,17 @@ import { SCALE } from '@pokex/pricing';
  * Index level math (docs/index-series-spec.md). The same per-game baskets are turned into three index levels:
  *   - GJ      (price-weighted / Dow):           period return = Σ P₁ / Σ P₀            (Dutot)
  *   - G&P     (equal-weight / S&P EW):          period return = geometric mean of P₁/P₀ (Jevons)
- *   - Pokedaq (capped / Nasdaq-100):            period return = capped-price-weighted mean of P₁/P₀
+ *   - Pokedaq (capped / Nasdaq-100):            period return = Törnqvist: geometric mean of P₁/P₀, each card weighted
+ *                                               by the average of its capped weight at P₀ and at P₁
  *
  * All three are CHAIN-LINKED: Iₜ = Iₜ₋₁ · Rₜ, with Rₜ measured over the PREVIOUS pass's basket (its snapshot
  * prices P₀) at this pass's prices P₁ — then the basket rebalances to the new top-N. Three rules make that
  * honest (each fixes a measured defect, 2026-10 audit):
  *   1. Leavers count. A card that drops out of a top-N basket usually dropped in price; measuring Rₜ over the
  *      previous basket (not just the cards present in both passes) keeps that fall in the index.
- *   2. Geometric, not arithmetic, for equal weight. The chained arithmetic mean of price relatives (Carli)
+ *   2. Time-reversible means. Equal weight is geometric (Jevons); capped weight is Törnqvist — with weights from P₀
+ *      alone, either mean drifts (arithmetic up wherever the cap binds, geometric down wherever it doesn't), and
+ *      averaging the P₀ and P₁ weights makes a move undone on the next pass cancel exactly (2026-10-17 review). The chained arithmetic mean of price relatives (Carli)
  *      drifts upward whenever prices bounce: A 100→200→100 and B 100→50→100 end flat but chain to +56%. It
  *      fails the time-reversal test; Jevons passes it (why official CPIs use it).
  *   3. Outlier guard. A card whose price moves ≥ outlierFactor× (or ≤ 1/outlierFactor×) in ONE pass is a data
@@ -90,15 +93,16 @@ export function chainStep(
   } else if (weighting === 'equal') {
     r = Math.exp(used.reduce((a, u) => a + Math.log(u.rel), 0) / used.length);
   } else {
-    const w = cappedWeights(used.map((u) => ({ cardId: u.cardId, prevE6: u.p0 })), opts.capBps);
+    const w0 = cappedWeights(used.map((u) => ({ cardId: u.cardId, prevE6: u.p0 })), opts.capBps);
+    const w1 = cappedWeights(used.map((u) => ({ cardId: u.cardId, prevE6: u.p1 })), opts.capBps);
     let num = 0;
     let den = 0;
     for (const u of used) {
-      const wi = Number(w.get(u.cardId) ?? 0n);
-      num += wi * u.rel;
+      const wi = Number(w0.get(u.cardId) ?? 0n) + Number(w1.get(u.cardId) ?? 0n);
+      num += wi * Math.log(u.rel);
       den += wi;
     }
-    r = den > 0 ? num / den : 1;
+    r = den > 0 ? Math.exp(num / den) : 1;
   }
   return { levelE6: BigInt(Math.round(Number(prevLevelE6) * r)), used: used.length, missing, outliers, launched: false };
 }

@@ -110,7 +110,7 @@ test('a basket too small for the cap (N × 5% ≤ 100%) is equal-weighted — ne
   assert.equal(w.size, 10);
   assert.deepEqual(new Set(w.values()), new Set([50_000n]), 'every name at the 5% cap');
   const level = step('capped', 1000, prev, { ...prev, ring: 1304.2 }).levelE6;
-  assert.equal(level, BigInt(Math.round(1e9 * (9 + 1304.2 / 685) / 10)), 'the equal-weight mean (+9%), not +42.7%');
+  assert.equal(level, BigInt(Math.round(1e9 * Math.pow(1304.2 / 685, 1 / 10))), 'equal weight at both ends → the geometric mean, +6.6% — not +42.7%');
   // 20 names is exactly feasible (20 × 5% = 100%) → also all at the cap; 21 → price weights, capped.
   const n = (k: number) => Array.from({ length: k }, (_, j) => ({ cardId: `n${j}`, prevE6: e6(j + 1) }));
   assert.deepEqual(new Set(cappedWeights(n(20), 500).values()), new Set([50_000n]));
@@ -127,10 +127,30 @@ test('no name is left over the cap, even when the cheap names are < 1 ppm of the
   assert.equal(w.get('giant'), 50_000n);
 });
 
+test('Pokedaq (Törnqvist) is time-reversible: a member that bounces and returns leaves the level unchanged (review 2026-10-17)', () => {
+  // A capped giant + 20 uncapped names (the case where P₀-only weights drift: arithmetic up when capped, geometric down
+  // when not), and a 40-name basket with no cap binding.
+  const giantBasket = giant();
+  const wide = Object.fromEntries(Array.from({ length: 40 }, (_, j) => [`w${j}`, 10 + 7 * j]));
+  for (const [base, moves] of [
+    [giantBasket, { s0: 75, A: 12000 }],
+    [giantBasket, { s0: 30 }],
+    [wide, { w0: 15 }],
+    [wide, { w5: 30, w30: 300 }],
+  ] as [Record<string, number>, Record<string, number>][]) {
+    const there = { ...base, ...moves };
+    const up = step('capped', 1000, base, there);
+    const back = chainStep(up.levelE6, pmap(there), pmap(base), 'capped', OPTS);
+    assert.ok(up.levelE6 !== e6(1000), 'the move registers');
+    assert.ok(Math.abs(Number(back.levelE6) - 1e9) <= 2, `round trip ${JSON.stringify(moves)} ends at ${Number(back.levelE6) / 1e6}`);
+  }
+});
+
 test('the three methods diverge as designed on a giant +10% move', () => {
   const base = giant();
   const moved = { ...base, A: 9900 };
-  assert.equal(step('capped', 1000, base, moved).levelE6, e6(1005)); // A capped at 5% → +0.5%
+  // A capped at 5% at both ends → 1.1^0.05 = +0.48% (± the e6 water-fill residue)
+  assert.ok(Math.abs(Number(step('capped', 1000, base, moved).levelE6) - 1e9 * Math.pow(1.1, 0.05)) < 100);
   assert.equal(step('price', 1000, base, moved).levelE6, e6(1090)); // 10,900 / 10,000
   // equal: (1.1 · 1^20)^(1/21) → +0.4549%
   assert.equal(step('equal', 1000, base, moved).levelE6, BigInt(Math.round(1e9 * Math.pow(1.1, 1 / 21))));
