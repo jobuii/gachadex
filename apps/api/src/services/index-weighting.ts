@@ -106,30 +106,37 @@ export function chainStep(
 /**
  * Price weights (from period-start prices) iteratively capped at `capBps`: any weight above the cap is
  * pinned to the cap and the excess redistributed pro-rata to the under-cap names, repeated until none
- * exceed it. Returns cardId -> weight (e6-scaled). Only the RATIOS matter — chainStep normalizes by the
- * weight sum — so the integer-division residual is harmless. Exposed for tests.
+ * exceed it. A basket too small to meet the cap (N × cap ≤ 100%, i.e. < 20 names at 5%) is equal-weighted:
+ * every name sits at the cap. Returns cardId -> weight (e6-scaled). Only the RATIOS matter — chainStep
+ * normalizes by the weight sum. Exposed for tests.
  */
 export function cappedWeights(items: { cardId: string; prevE6: bigint }[], capBps: number): Map<string, bigint> {
   const w = new Map<string, bigint>();
   const total = items.reduce((a, i) => a + i.prevE6, 0n);
   if (total <= 0n || items.length === 0) return w;
-  const capE6 = (BigInt(capBps) * SCALE) / 10_000n;
-  for (const i of items) w.set(i.cardId, (i.prevE6 * SCALE) / total);
-  // Redistribute the over-cap excess until everyone is at/under the cap. Each iteration pins at least one
-  // more name to the cap, so it converges in ≤ N iterations.
+  // Water-fill at 1e18 resolution, so a cheap name's weight never floors to 0 mid-loop; e6 on the way out.
+  const P = 10n ** 18n;
+  const capP = (BigInt(capBps) * P) / 10_000n;
+  // Too few names to meet the cap: the loop below can't reach "all at the cap" — it ended with the cheapest names
+  // holding all the excess (found 2026-10-17: on 2026-06-25 MTG Pokedaq put 47% on one $685 card of a 10-card basket).
+  if (BigInt(items.length) * capP <= P) {
+    for (const i of items) w.set(i.cardId, (capP * SCALE) / P);
+    return w;
+  }
+  const wp = new Map(items.map((i) => [i.cardId, (i.prevE6 * P) / total]));
+  // Each iteration pins at least one more name to the cap, so it converges in ≤ N iterations.
   for (let iter = 0; iter <= items.length; iter++) {
     let excess = 0n;
     let underSum = 0n;
-    for (const [, wi] of w) {
-      if (wi > capE6) excess += wi - capE6;
-      else if (wi < capE6) underSum += wi;
+    for (const [, wi] of wp) {
+      if (wi > capP) excess += wi - capP;
+      else if (wi < capP) underSum += wi;
     }
     if (excess === 0n) break;
-    if (underSum <= 0n) break; // every name already at the cap (basket too small for the cap) — leave as-is
-    for (const [id, wi] of w) {
-      if (wi > capE6) w.set(id, capE6);
-      else if (wi < capE6) w.set(id, wi + (excess * wi) / underSum);
-    }
+    for (const [id, wi] of wp) if (wi > capP) wp.set(id, capP); // pin first: no name is ever left over the cap
+    if (underSum <= 0n) break;
+    for (const [id, wi] of wp) if (wi < capP) wp.set(id, wi + (excess * wi) / underSum);
   }
+  for (const [id, wi] of wp) w.set(id, (wi * SCALE) / P);
   return w;
 }

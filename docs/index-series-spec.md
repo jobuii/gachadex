@@ -91,8 +91,9 @@ loop:
   under = { i : wᵢ < 0.05 };  underSum = Σ_{i∈under} wᵢ
   redistribute: for i∈under:  wᵢ += excess · (wᵢ / underSum)
 ```
-Converges in a few passes; feasible for every basket (a 5% cap needs ≥20 names; the smallest basket,
-Graded, has ≈78). First pass → `I = 1000`.
+Converges in a few passes. A 5% cap needs ≥20 names: a pass with fewer priced names (MTG's early
+history had 2–10 fresh cards) can't meet it, so every name gets the cap — equal weight (2026-10-17 fix; the
+loop above used to end with the cheapest names holding the excess). First pass → `I = 1000`.
 
 **Worked sanity check (Pokémon Top 100, live numbers):** GJ divisor = 100.2638, Σ Pᵢ ≈ \$100,018, GJ ≈
 997.55. Under Pokedaq, any card worth > 5% of \$100,018 (≈ \$5,000) is capped to 5% and its excess spread

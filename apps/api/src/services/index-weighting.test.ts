@@ -103,6 +103,30 @@ test('capped-weights: a dominant card is pinned at 5%, the excess redistributed'
   assert.equal(w.get('A'), capE6); // the giant sits exactly at the cap (was ~90% uncapped)
 });
 
+test('a basket too small for the cap (N × 5% ≤ 100%) is equal-weighted — never the cheapest names holding the excess', () => {
+  // MTG Pokedaq on 2026-06-25 (found 2026-10-17): 9 flat cards + one cheap card at 1.904× (under the 2× outlier guard).
+  const prev = { a: 3600, b: 3200, c: 2501, d: 2108, e: 1796, f: 1765, g: 1675, h: 1447, ring: 685, i: 186 };
+  const w = cappedWeights(Object.entries(prev).map(([cardId, p]) => ({ cardId, prevE6: e6(p) })), 500);
+  assert.equal(w.size, 10);
+  assert.deepEqual(new Set(w.values()), new Set([50_000n]), 'every name at the 5% cap');
+  const level = step('capped', 1000, prev, { ...prev, ring: 1304.2 }).levelE6;
+  assert.equal(level, BigInt(Math.round(1e9 * (9 + 1304.2 / 685) / 10)), 'the equal-weight mean (+9%), not +42.7%');
+  // 20 names is exactly feasible (20 × 5% = 100%) → also all at the cap; 21 → price weights, capped.
+  const n = (k: number) => Array.from({ length: k }, (_, j) => ({ cardId: `n${j}`, prevE6: e6(j + 1) }));
+  assert.deepEqual(new Set(cappedWeights(n(20), 500).values()), new Set([50_000n]));
+  const w21 = cappedWeights(n(21), 500);
+  assert.equal(w21.size, 21);
+  assert.ok(w21.get('n0')! < w21.get('n10')!, '21 names: price-weighted again');
+});
+
+test('no name is left over the cap, even when the cheap names are < 1 ppm of the basket (review 2026-10-17)', () => {
+  const items = [{ cardId: 'giant', prevE6: e6(1_000_000) }, { cardId: 'tiny', prevE6: e6(2) },
+    ...Array.from({ length: 19 }, (_, j) => ({ cardId: `c${j}`, prevE6: e6(0.5) }))];
+  const w = cappedWeights(items, 500);
+  for (const [id, wi] of w) assert.ok(wi <= 50_000n, `${id} at ${wi} is over the 5% cap`);
+  assert.equal(w.get('giant'), 50_000n);
+});
+
 test('the three methods diverge as designed on a giant +10% move', () => {
   const base = giant();
   const moved = { ...base, A: 9900 };

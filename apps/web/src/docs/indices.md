@@ -13,7 +13,7 @@ weight them.
 |---|---|---|---|
 | **GJ** | Price-weighted | Dow Jones | Higher-priced cards move the index more. |
 | **G&P** | Equal-weight | S&P 500 (EW) | Every card counts the same — breadth, not whales. |
-| **Pokedaq** | Capped-weight | Nasdaq-100 | Price-weighted, but no single card exceeds **5%** — the megacaps can't dominate. |
+| **Pokedaq** | Capped-weight | Nasdaq-100 | Price-weighted, but no single card exceeds **5%** (in baskets of 20+ cards) — the megacaps can't dominate. |
 
 Why three? Because they tell different stories. A set can rip on its top chase card (GJ flies, G&P barely
 moves) or grind up broadly (G&P leads). Trading the spread between methodologies is its own game.
@@ -31,7 +31,8 @@ rebalances. Base value **1000**.
   every card counts the same. (Geometric, not arithmetic: an arithmetic chain drifts upward when prices bounce —
   a card going $100 → $200 → $100 would wrongly leave it higher.)
 - **Pokedaq — capped-weight (Nasdaq-100-style).** Pass return = the price-weighted average change with each
-  name **capped at 5%** (iteratively redistributed), normalized so a flat pass is exactly flat.
+  name **capped at 5%** (iteratively redistributed), normalized so a flat pass is exactly flat. A basket with
+  fewer than 20 priced cards can't meet a 5% cap, so for that pass every card counts equally.
 
 Three rules keep every series honest:
 
