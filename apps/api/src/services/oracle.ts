@@ -286,6 +286,17 @@ export async function ingest(
       }
     }
   }
+  // PSA-10 history (schema: graded_prints): the PSA-10 every priced single carries into this pass's Graded baskets
+  // (members AND leavers; null = none) — a row only when it changed, so the history rebuild replays exactly this.
+  const singles = basketCards.filter((c) => c.productType === 'single');
+  await db.query(
+    `INSERT INTO graded_prints(market_id, graded_e6)
+     SELECT m.id, u.g FROM unnest($1::text[], $2::bigint[]) AS u(card_id, g)
+       JOIN markets m ON m.card_id = u.card_id AND m.kind = 'card'
+      WHERE u.g IS DISTINCT FROM (SELECT p.graded_e6 FROM graded_prints p WHERE p.market_id = m.id ORDER BY p.id DESC LIMIT 1)
+         OR NOT EXISTS (SELECT 1 FROM graded_prints p WHERE p.market_id = m.id)`,
+    [singles.map((c) => c.cardId), singles.map((c) => (c.gradedE6 != null && c.gradedE6 > 0n ? c.gradedE6.toString() : null))],
+  );
 
   let indices = 0;
   const baskets = buildBaskets(basketCards, {

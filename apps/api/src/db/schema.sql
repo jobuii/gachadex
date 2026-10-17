@@ -406,6 +406,19 @@ CREATE TABLE IF NOT EXISTS oracle_prices (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_oracle_market_observed ON oracle_prices(market_id, source_observed_at);
 
+-- PSA-10 history for the Graded indices: the PSA-10 each priced single carried into a live pass's Graded baskets
+-- (NULL = none), one row each time it changes. A card print records on a RAW move only, so the history rebuild used
+-- to miss PSA-10-only moves (2026-10-17: the first live pass after a rebuild jumped Pokémon Graded +6.5%); from its
+-- first row on, the rebuild replays this table alone. Kept apart from oracle_prices so it never counts as a fresh
+-- raw price (index eligibility, the stale-market halt).
+CREATE TABLE IF NOT EXISTS graded_prints (
+  id          BIGSERIAL PRIMARY KEY,
+  market_id   TEXT NOT NULL REFERENCES markets(id),
+  graded_e6   BIGINT,
+  observed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_graded_prints_market ON graded_prints(market_id, id);
+
 CREATE TABLE IF NOT EXISTS marks (
   id             BIGSERIAL PRIMARY KEY,
   market_id      TEXT NOT NULL REFERENCES markets(id),

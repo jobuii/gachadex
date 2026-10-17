@@ -14,9 +14,10 @@
  * Known approximations (the history needed for exactness was never stored): eligibility uses each card's CURRENT
  * `featured` flag and stored product type (no history of either), and only freshness — not the market's status at
  * the time (live also drops halted/delisted markets); a pass's prices are each card's latest accepted print as of
- * that pass. PSA-10 values come from each print's stored `gradedE6`, or — for prints that predate it — a replay of
+ * that pass. PSA-10 values come from graded_prints (what each live pass used) once it exists; before it, from each
+ * print's stored `gradedE6`, or — for prints that predate it — a replay of
  * the live choice from the provider fields (Scrydex ladder PSA 10, else tcgpl's eBay PSA-10; JustTCG can't be
- * replayed).
+ * replayed before graded_prints).
  */
 import { fromE6, toE6 } from '@pokex/pricing';
 import { DEFAULT_CAP_BPS } from '@pokex/shared-types';
@@ -159,6 +160,18 @@ async function loadCompactPrints(q: Queryer, marketIds: string[], exclude: Set<s
   return out.sort((a, b) => a.ing.getTime() - b.ing.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
+/** The PSA-10 history (graded_prints) of these markets, oldest first; `since` = when tracking began (its first row). */
+async function loadGradedPrints(q: Queryer, marketIds: string[]): Promise<{ since: Date | null; rows: { marketId: string; at: Date; graded: bigint | null }[] }> {
+  const since = (await q.query<{ t: Date | null }>(`SELECT min(observed_at) AS t FROM graded_prints`)).rows[0]?.t ?? null;
+  const rows = (
+    await q.query<{ market_id: string; at: Date; g: string | null }>(
+      `SELECT market_id, observed_at AS at, graded_e6::text AS g FROM graded_prints WHERE market_id = ANY($1) ORDER BY observed_at, id`,
+      [marketIds],
+    )
+  ).rows;
+  return { since, rows: rows.map((r) => ({ marketId: r.market_id, at: r.at, graded: r.g == null ? null : BigInt(r.g) })) };
+}
+
 /** Read-only: the rebuilt series for every index (existing + catalog series that would exist). */
 export async function planIndexRebuild(q: Queryer, o: RebuildOptions): Promise<RebuildSeries[]> {
   const sched = await loadPassSchedule(q);
@@ -184,22 +197,32 @@ export async function planIndexRebuild(q: Queryer, o: RebuildOptions): Promise<R
     cards.map((c) => [c.id, { game: c.game, cardId: c.card_id, productType: (c.product_type as ProductType | null) ?? productTypeOfMarket(c.display_name, c.rarity) }]),
   );
   const prints = await loadCompactPrints(q, [...cardById.keys()], o.excludePrintIds ?? new Set());
+  const graded = await loadGradedPrints(q, [...cardById.keys()]);
 
   type State = RebuildSeries & { level: bigint; snap: Map<string, bigint> };
   const series = new Map<string, State>();
   const last = new Map<string, { price: bigint; ing: Date; graded: bigint | null }>();
+  const lastGraded = new Map<string, bigint | null>(); // graded_prints, as of the pass
   let pi = 0;
+  let gi = 0;
   for (const pass of schedule) {
     while (pi < prints.length && prints[pi].ing <= pass.cutoff) {
       const p = prints[pi++];
       last.set(p.marketId, { price: p.price, ing: p.ing, graded: p.graded });
     }
+    while (gi < graded.rows.length && graded.rows[gi].at <= pass.cutoff) {
+      const g = graded.rows[gi++];
+      lastGraded.set(g.marketId, g.graded);
+    }
+    // From the first graded_prints row on, it is the record of what each live pass used (no row = no PSA-10).
+    const tracked = graded.since != null && graded.since <= pass.cutoff;
     // Every card's last-known price goes in (leavers are measured); only fresh ones (the live INDEX_FRESH_MS rule)
     // may be members.
     const cards: BasketCard[] = [];
     for (const [mid, l] of last) {
       const c = cardById.get(mid)!;
-      cards.push({ game: c.game, cardId: c.cardId, priceE6: l.price, gradedE6: l.graded, productType: c.productType, eligible: pass.cutoff.getTime() - l.ing.getTime() < o.freshMs });
+      const gradedE6 = tracked ? (lastGraded.get(mid) ?? null) : l.graded;
+      cards.push({ game: c.game, cardId: c.cardId, priceE6: l.price, gradedE6, productType: c.productType, eligible: pass.cutoff.getTime() - l.ing.getTime() < o.freshMs });
     }
     const k = pass.t.getTime();
     for (const { idx, members, cur } of buildBaskets(cards, o)) {
