@@ -14,7 +14,8 @@ const { usdc } = await import('../money.ts');
 const { getDb, closeDb } = await import('../db/client.ts');
 const { initDb } = await import('../db/init.ts');
 const { getOrCreateDepositAddress, deriveDepositKeypair } = await import('./custody/wallet.ts');
-const { scanDeposits, creditDeposit } = await import('./custody/deposits.ts');
+const { scanDeposits, depositScanPass, creditDeposit } = await import('./custody/deposits.ts');
+const { trackPass } = await import('./worker-health.ts');
 const { getUserBalances } = await import('./faucet.ts');
 const { getOrCreateSystemAccount, getBalance } = await import('./ledger.ts');
 const { reconcile } = await import('./reconcile.ts');
@@ -54,6 +55,7 @@ function fakeChain() {
     solSweeps: [] as { from: string; lamports: bigint }[],
     usdcUntils: new Map<string, (string | null)[]>(), // per address: the cursor passed on each USDC scan
     failSweeps: false,
+    failInbound: new Set<string>(), // addresses whose signature lookup throws (a dead RPC)
     /** queue an inbound USDC transfer + land the funds on the simulated deposit wallet */
     deposit(address: string, sig: string, amountE6: bigint) {
       chain.inbound.set(address, [...(chain.inbound.get(address) ?? []), { sig, amountE6 }]);
@@ -65,6 +67,7 @@ function fakeChain() {
       chain.solBalances.set(address, (chain.solBalances.get(address) ?? 0n) + lamports);
     },
     async inboundUsdc(address: string, _known: Set<string>, until: string | null) {
+      if (chain.failInbound.has(address)) throw new Error('401 Unauthorized: Unauthorized');
       chain.usdcUntils.set(address, [...(chain.usdcUntils.get(address) ?? []), until]);
       return pageSince(chain.inbound.get(address) ?? [], until);
     },
@@ -397,6 +400,31 @@ test('SOL deposits are parked (not retry-spammed) on networks without a swap rou
   const expected = ((LAMPORTS_PER_SOL - FEE_RESERVE) * FAKE_RATE_E6_PER_SOL) / LAMPORTS_PER_SOL;
   assert.equal((await getUserBalances(db, u)).availableUusdc, expected);
   assert.equal((await reconcile(db)).ok, true);
+});
+
+test('deposit_scan fails only when no address can be read from the chain (dead RPC); one address\'s sweep failure does not', async () => {
+  const u = await newUser();
+  const addr = await getOrCreateDepositAddress(db, u);
+  const chain = fakeChain();
+  const quiet = { info() {}, warn() {}, error() {} };
+  const health = async () => (await db.query<{ fail_streak: number; last_err: string | null }>(`SELECT fail_streak, last_err FROM worker_health WHERE component = 'deposit_scan'`)).rows[0];
+  const all = (await db.query<{ address: string }>(`SELECT address FROM deposit_addresses`)).rows.map((r) => r.address);
+
+  for (const a of all) chain.failInbound.add(a); // the 2026-10-16 Helius 401: every read fails
+  await trackPass(db, 'deposit_scan', quiet, () => depositScanPass(db, chain, quiet));
+  let h = await health();
+  assert.equal(h.fail_streak, 1, 'recorded as a failed pass, not OK');
+  assert.match(h.last_err ?? '', new RegExp(`^none of the ${all.length} deposit addresses could be read from the chain — first: \\S+: 401 Unauthorized`));
+
+  // Reads work for all but one; the funded address's sweep fails → still a healthy pass, and the deposit is credited.
+  chain.failInbound.clear();
+  chain.failInbound.add(all.find((a) => a !== addr.address)!);
+  chain.failSweeps = true;
+  chain.deposit(addr.address, 'sig-sweep-stuck', 10n * 1_000_000n);
+  await trackPass(db, 'deposit_scan', quiet, () => depositScanPass(db, chain, quiet));
+  h = await health();
+  assert.equal(h.fail_streak, 0, 'per-address problems are log errors, not an RPC incident');
+  assert.equal((await getUserBalances(db, u)).availableUusdc, 10n * 1_000_000n);
 });
 
 after(async () => {

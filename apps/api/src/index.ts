@@ -3,7 +3,7 @@ import { initDb } from './db/init.ts';
 import { ingest } from './services/oracle.ts';
 import { accrueFunding } from './services/funding.ts';
 import { liquidateAllEligible, haltStaleMarkets, autoDeleverage, checkRestingOrderTriggers } from './services/engine.ts';
-import { scanDeposits } from './services/custody/deposits.ts';
+import { depositScanPass } from './services/custody/deposits.ts';
 import { recoverInFlight, processAllRequested } from './services/custody/withdrawals.ts';
 import { treasuryPass } from './services/custody/treasury.ts';
 import { trackPass, checkAndAlert } from './services/worker-health.ts';
@@ -275,7 +275,7 @@ function startDepositScanner(db: Db, log: FastifyBaseLogger) {
   const chain = solanaDepositChain();
   chainLoop(
     () =>
-      trackPass(db, 'deposit_scan', log, () => scanDeposits(db, chain, log), (r) => {
+      trackPass(db, 'deposit_scan', log, () => depositScanPass(db, chain, log), (r) => {
         if (r.credited > 0) log.info(r, 'deposits credited');
       }),
     3000,

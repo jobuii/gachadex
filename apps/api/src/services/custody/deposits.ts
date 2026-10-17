@@ -157,19 +157,23 @@ async function saveCursor(db: Db, address: string, asset: string, sig: string | 
  *      entirely on networks without a swap route, parking the rows instead of retry-spamming);
  *   3. credit every detected USDC row (re-entrant: also resumes rows stranded by a crash);
  *   4. sweep the wallet's USDC to the treasury (retried next pass on failure).
- * Per-address failures are logged and don't stop the pass; everything is safe to re-run.
+ * Per-address failures are logged and don't stop the pass; everything is safe to re-run. Addresses whose chain
+ * read failed are counted for worker health (depositScanPass).
  */
 export async function scanDeposits(
   db: Db,
   chain: DepositChain,
   log?: CustodyLog,
-): Promise<{ credited: number }> {
+): Promise<{ credited: number; addresses: number; unread: number; firstReadError: string | null }> {
   const addrs = await db.query<{ user_id: string; address: string; derivation_index: number }>(
     `SELECT user_id, address, derivation_index FROM deposit_addresses`,
   );
   let credited = 0;
+  let unread = 0;
+  let firstReadError: string | null = null;
 
   for (const a of addrs.rows) {
+    let read = false;
     try {
       // 1) detect (signatures already recorded for this user are skipped per asset; the persisted
       //    high-water mark bounds how far back the chain impl must page)
@@ -190,6 +194,7 @@ export async function scanDeposits(
         chain.inboundUsdc(a.address, knownUsdc, cursor('USDC')),
         chain.inboundSol(a.address, knownSol, cursor('SOL')),
       ]);
+      read = true;
 
       for (const t of usdcPage.transfers) {
         if (knownUsdc.has(t.sig)) continue; // redundant-by-contract (impls filter knownSigs) — belt and suspenders
@@ -295,7 +300,23 @@ export async function scanDeposits(
       }
     } catch (e) {
       log?.error(e, `deposit scan failed for ${a.address} (will retry next pass)`);
+      if (!read) {
+        unread++;
+        firstReadError ??= `${a.address}: ${e instanceof Error ? e.message : String(e)}`;
+      }
     }
   }
-  return { credited };
+  return { credited, addresses: addrs.rows.length, unread, firstReadError };
+}
+
+/**
+ * The deposit worker's pass for worker health: FAILED when not one address could be read from the chain — a dead RPC
+ * (the 2026-10-16 Helius 401) used to read as healthy. One address's sweep/swap failure stays a logged error.
+ */
+export async function depositScanPass(db: Db, chain: DepositChain, log?: CustodyLog): Promise<{ credited: number }> {
+  const r = await scanDeposits(db, chain, log);
+  if (r.addresses > 0 && r.unread === r.addresses) {
+    throw new Error(`none of the ${r.addresses} deposit addresses could be read from the chain — first: ${r.firstReadError}`);
+  }
+  return { credited: r.credited };
 }
