@@ -9,6 +9,7 @@ import { useAuth } from '../auth/AuthContext';
 import { useTheme } from '../store/theme';
 import { BottomPanel } from './BottomPanel';
 import { MarketThumb } from './MarketThumb';
+import { IndexChangeChip, IndexBasketDrawer } from './IndexBasket.jsx';
 import * as api from '../lib/api.js';
 
 const TIMEFRAMES = ['1D', '1W', '1M', '3M', '1Y'];
@@ -87,6 +88,7 @@ export function TradingView({ market, mobile = false, onGoToMarket }) {
   const [seriesVersion, setSeriesVersion] = useState(0); // bumped when the main series is rebuilt
   const [panelHeight, setPanelHeight] = useState(() => (mobile ? 0 : clampPanel(Number(localStorage.getItem('gachadex_panel_h')) || 210)));
   const [dragging, setDragging] = useState(false);
+  const [basketTab, setBasketTab] = useState(null); // index members drawer (index markets only), opened from the header chip
 
   const marks = useRealtime((s) => s.marks);
   const oi = useRealtime((s) => s.oi);
@@ -310,6 +312,10 @@ export function TradingView({ market, mobile = false, onGoToMarket }) {
               <div className="card-header-set">{market ? (market.kind === 'index' ? 'GachaDex Index' : market.symbol) : ''}</div>
             </div>
           </div>
+        )}
+        <IndexChangeChip market={market} onOpen={(tab) => setBasketTab({ marketId: market?.id, tab })} />
+        {basketTab && basketTab.marketId === market?.id && (
+          <IndexBasketDrawer market={market} initialTab={basketTab.tab} onClose={() => setBasketTab(null)} />
         )}
 
         <div className="card-header-stats">

@@ -327,6 +327,9 @@ export interface IndexOverviewRow {
   changeYtdPct: number | null; // an index launched this year has YTD = since-launch (correct year-to-date)
   high52wE6: string | null; // high/low over AVAILABLE history (<= 1y), micro-USD; full-year once it accrues
   low52wE6: string | null;
+  // index rules v3: the basket has an open member list (else the old every-pass top-N), and its next announced change
+  governed: boolean;
+  nextChange: { changeDate: string; effectiveAt: string; adds: number; removes: number } | null;
 }
 
 /** Time-windowed stats for the Markets "Indices" overview table — per index market: 1w / 1m / YTD % change
@@ -345,7 +348,7 @@ export async function indexOverview(db: Db): Promise<IndexOverviewRow[]> {
     return new Map(r.rows.map((x) => [x.market_id, BigInt(x.v)]));
   };
 
-  const [latest, earliest, ref1w, ref1m, refYtd, hl] = await Promise.all([
+  const [latest, earliest, ref1w, ref1m, refYtd, hl, rules] = await Promise.all([
     db.query<{ market_id: string; v: string }>(
       `SELECT DISTINCT ON (mk.market_id) mk.market_id, mk.mark_price_e6::text AS v
          FROM marks mk ${J} ORDER BY mk.market_id, mk.computed_at DESC`),
@@ -359,8 +362,22 @@ export async function indexOverview(db: Db): Promise<IndexOverviewRow[]> {
       `SELECT mk.market_id, max(mk.mark_price_e6)::text AS hi, min(mk.mark_price_e6)::text AS lo
          FROM marks mk ${J} WHERE mk.computed_at >= now() - interval '365 days'
          GROUP BY mk.market_id`),
+    // index rules v3, per index market via its basket ('game:tier'; the gp-/pdq- slug prefixes are INDEX_SERIES'):
+    // an open member list? + the earliest pending change (the one applyIfDue applies next)
+    db.query<{ id: string; governed: boolean; change_date: string | null; effective_at: Date | null; adds: number | null; removes: number | null }>(
+      `SELECT m.id, EXISTS (SELECT 1 FROM index_members im WHERE im.basket = b.k AND im.left_at IS NULL) AS governed,
+              c.change_date::text, c.effective_at, cardinality(c.adds) AS adds, jsonb_array_length(c.removes) AS removes
+         FROM markets m
+        CROSS JOIN LATERAL (SELECT m.game || ':' || regexp_replace(m.index_slug, '^(gp|pdq)-', '') AS k) b
+         LEFT JOIN LATERAL (SELECT * FROM index_changes c WHERE c.basket = b.k AND c.applied_at IS NULL AND NOT c.cancelled
+                             ORDER BY c.change_date LIMIT 1) c ON true
+        WHERE m.kind = 'index'`),
   ]);
 
+  const rulesMap = new Map(rules.rows.map((r) => [r.id, {
+    governed: r.governed,
+    nextChange: r.change_date ? { changeDate: r.change_date, effectiveAt: new Date(r.effective_at!).toISOString(), adds: Number(r.adds), removes: Number(r.removes) } : null,
+  }]));
   const curMap = new Map(latest.rows.map((r) => [r.market_id, BigInt(r.v)]));
   const firstMap = new Map(earliest.rows.map((r) => [r.market_id, BigInt(r.v)]));
   const hlMap = new Map(hl.rows.map((r) => [r.market_id, { hi: r.hi, lo: r.lo }]));
@@ -377,6 +394,7 @@ export async function indexOverview(db: Db): Promise<IndexOverviewRow[]> {
       changeYtdPct: pctChange(cur, ytdRef),
       high52wE6: hilo?.hi ?? null,
       low52wE6: hilo?.lo ?? null,
+      ...(rulesMap.get(marketId) ?? { governed: false, nextChange: null }),
     };
   });
 }

@@ -212,6 +212,37 @@ test('indexOverview: 1w / 1m change + 52w high/low off the index marks series', 
   assert.equal(BigInt(r.low52wE6!), 50_000_000n);
 });
 
+test('indexOverview: nextChange = the earliest pending change of the basket, on every series; applied/cancelled ignored', async () => {
+  const ids = await Promise.all(['ovw-tier', 'gp-ovw-tier', 'pdq-ovw-tier'].map((slug) =>
+    db.tx((q) => upsertIndexMarket(q, { game: 'pokemon', slug, name: slug, tradeable: true }))));
+  const other = await db.tx((q) => upsertIndexMarket(q, { game: 'pokemon', slug: 'ovw-other', name: 'Other', tradeable: true }));
+  for (const id of [...ids, other]) {
+    await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES($1, 1000000, 1000000, now())`, [id]); // the overview lists marked indices
+  }
+  const chg = (date: string, applied: boolean, cancelled: boolean, adds: string[], removes: number) =>
+    db.query(
+      `INSERT INTO index_changes(basket, change_date, reference_at, effective_at, applied_at, adds, removes, reserves, cancelled)
+       VALUES('pokemon:ovw-tier', $1, $1::date, $1::date + interval '3 days', $2, $3, $4, '{}', $5)`,
+      [date, applied ? new Date() : null, adds, JSON.stringify(Array.from({ length: removes }, (_, i) => ({ marketId: `r${i}`, reason: 'rank' }))), cancelled],
+    );
+  await chg('2026-09-01', true, false, ['x'], 1); // applied
+  await chg('2026-10-01', false, true, ['y'], 0); // cancelled
+  await chg('2026-12-01', false, false, ['z'], 0); // a later pending change
+  await chg('2026-11-01', false, false, ['a', 'b'], 3); // the next one
+  // an open member list → governed; a member who left doesn't count
+  await db.query(`INSERT INTO index_members(basket, market_id, joined_at, join_reason) VALUES('pokemon:ovw-tier', $1, now(), 'launch')`, [ids[0]]);
+  await db.query(`INSERT INTO index_members(basket, market_id, joined_at, left_at, join_reason, leave_reason) VALUES('pokemon:ovw-other', $1, now(), now(), 'launch', 'rules-off')`, [other]);
+  const rows = await indexOverview(db);
+  for (const id of ids) {
+    const r = rows.find((x) => x.marketId === id);
+    assert.equal(r?.governed, true);
+    assert.deepEqual(r?.nextChange, { changeDate: '2026-11-01', effectiveAt: '2026-11-04T00:00:00.000Z', adds: 2, removes: 3 });
+  }
+  const o = rows.find((x) => x.marketId === other);
+  assert.equal(o?.governed, false);
+  assert.equal(o?.nextChange, null);
+});
+
 test('indexOverview: a window shorter than the index history yields null', async () => {
   const id = await db.tx((q) => upsertIndexMarket(q, { game: 'pokemon', slug: 'ovw-young', name: 'Overview Young', tradeable: true }));
   await db.query(`INSERT INTO marks(market_id, mark_price_e6, index_price_e6, computed_at) VALUES($1, 90000000, 90000000, now() - interval '3 days')`, [id]);

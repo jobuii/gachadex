@@ -41,6 +41,21 @@ test('GET /markets/index-basket: members after launch; 400 on a bad symbol, 404 
   assert.deepEqual(v.members.map((m: { name: string }) => m.name), ['a #1', 'b #1']);
   assert.equal(v.governed, true);
   assert.equal(v.upcoming, null);
+  // weights from each series' snapshot (a $101, b $50): GJ price share, G&P equal, Pokedaq capped (2 names < 20 → equal)
+  const weights = async (sym: string) =>
+    (await app.inject({ method: 'GET', url: `/markets/index-basket?symbol=${sym}` })).json().members
+      .map((m: { name: string; priceE6: string | null; weightBps: number | null }) => [m.name, m.priceE6, m.weightBps]);
+  assert.deepEqual(await weights('INDEX:top-100'), [['a #1', '101000000', 6688], ['b #1', '50000000', 3311]]);
+  assert.deepEqual(await weights('INDEX:gp-top-100'), [['a #1', '101000000', 5000], ['b #1', '50000000', 5000]]);
+  assert.deepEqual(await weights('INDEX:pdq-top-100'), [['a #1', '101000000', 5000], ['b #1', '50000000', 5000]]);
+  // two pending changes (an apply delayed past the next publish): upcoming = the earliest, the one applied next
+  for (const d of ['2027-02-01', '2027-01-01']) {
+    await db.query(
+      `INSERT INTO index_changes(basket, change_date, reference_at, effective_at, adds, removes, reserves) VALUES('pokemon:top-100', $1, $1::date, $1::date + interval '3 days', '{}', '[]', '{}')`,
+      [d],
+    );
+  }
+  assert.equal((await app.inject({ method: 'GET', url: '/markets/index-basket?symbol=INDEX:top-100' })).json().upcoming.changeDate, '2027-01-01');
   assert.equal((await app.inject({ method: 'GET', url: '/markets/index-basket?symbol=nope' })).statusCode, 400);
   assert.equal((await app.inject({ method: 'GET', url: '/markets/index-basket?symbol=INDEX:missing' })).statusCode, 404);
 });

@@ -14,12 +14,13 @@
  * Everything is idempotent: one change per basket per month (unique key), applied_at claimed atomically, at most one
  * open membership per basket and market (partial unique index).
  */
-import { INDEX_CATALOG } from '@pokex/shared-types';
+import { INDEX_CATALOG, DEFAULT_CAP_BPS } from '@pokex/shared-types';
 import type { Db, Queryer } from '../db/client.ts';
 import { config } from '../config.ts';
 import { indexSymbol } from './markets.ts';
 import { productTypeOfMarket, type ProductType } from './product-type.ts';
 import { basketKey, mayJoin, reconstitute, tierRules, type Candidate, type TierRules } from './index-rules.ts';
+import { cappedWeights, weightingOf } from './index-weighting.ts';
 
 const DAY_MS = 86_400_000;
 
@@ -328,24 +329,38 @@ export function membershipAsOf(rows: MembershipRow[], at: Date): Map<string, Set
 export interface BasketView {
   basket: string;
   governed: boolean; // false = the old rule (v3 not on for this basket yet)
-  members: { marketId: string; symbol: string; name: string; joinedAt: string; joinReason: string }[];
+  members: { marketId: string; symbol: string; name: string; joinedAt: string; joinReason: string; priceE6: string | null; weightBps: number | null }[];
   upcoming: { changeDate: string; effectiveAt: string; adds: { marketId: string; name: string }[]; removes: { marketId: string; name: string; reason: string }[] } | null;
   log: { changeDate: string; appliedAt: string; adds: { marketId: string; name: string }[]; removes: { marketId: string; name: string; reason: string }[] }[];
 }
 
 /** R9: the public member list, upcoming change and change log of the basket behind an index market symbol. */
 export async function indexBasketView(q: Queryer, symbol: string): Promise<BasketView | null> {
-  const idx = (await q.query<{ game: string; index_slug: string }>(`SELECT game, index_slug FROM markets WHERE kind = 'index' AND symbol = $1`, [symbol])).rows[0];
+  const idx = (await q.query<{ id: string; game: string; index_slug: string }>(`SELECT id, game, index_slug FROM markets WHERE kind = 'index' AND symbol = $1`, [symbol])).rows[0];
   if (!idx) return null;
   const key = basketKey(idx.game, idx.index_slug.replace(/^(gp|pdq)-/, ''));
   const members = (
-    await q.query<{ market_id: string; symbol: string; display_name: string; joined_at: Date; join_reason: string }>(
-      `SELECT im.market_id, m.symbol, m.display_name, im.joined_at, im.join_reason
+    await q.query<{ market_id: string; card_id: string; symbol: string; display_name: string; joined_at: Date; join_reason: string }>(
+      `SELECT im.market_id, m.card_id, m.symbol, m.display_name, im.joined_at, im.join_reason
          FROM index_members im JOIN markets m ON m.id = im.market_id
         WHERE im.basket = $1 AND im.left_at IS NULL ORDER BY m.display_name`,
       [key],
     )
   ).rows;
+  // this series' weights over its latest basket snapshot (weight_e6 holds each card's price — what the next pass
+  // chains off): GJ price share, G&P equal, Pokedaq capped (index-weighting.ts); a member not in it shows "—"
+  const snap = (await q.query<{ card_id: string; p: string }>(`SELECT card_id, weight_e6::text AS p FROM index_constituents WHERE market_id = $1`, [idx.id])).rows;
+  const px = new Map(snap.map((r) => [r.card_id, BigInt(r.p)]));
+  const cat = INDEX_CATALOG.find((c) => c.game === idx.game && c.slug === idx.index_slug);
+  const weighting = weightingOf(cat ?? {});
+  const w = weighting === 'capped'
+    ? cappedWeights(snap.map((r) => ({ cardId: r.card_id, prevE6: BigInt(r.p) })), cat?.capBps ?? DEFAULT_CAP_BPS)
+    : new Map(snap.map((r) => [r.card_id, weighting === 'equal' ? 1n : BigInt(r.p)]));
+  const wSum = [...w.values()].reduce((a, x) => a + x, 0n);
+  const weightBps = (cardId: string): number | null => {
+    const x = w.get(cardId);
+    return x == null || wSum <= 0n ? null : Number((x * 10_000n) / wSum);
+  };
   const changes = (
     await q.query<{ change_date: string; effective_at: Date; applied_at: Date | null; adds: string[]; removes: { marketId: string; reason: string }[] }>(
       `SELECT change_date::text, effective_at, applied_at, adds, removes FROM index_changes WHERE basket = $1 AND NOT cancelled ORDER BY change_date DESC LIMIT 13`,
@@ -360,11 +375,14 @@ export async function indexBasketView(q: Queryer, symbol: string): Promise<Baske
     adds: c.adds.map((id) => ({ marketId: id, name: names.get(id) ?? id })),
     removes: c.removes.map((r) => ({ marketId: r.marketId, name: names.get(r.marketId) ?? r.marketId, reason: r.reason })),
   });
-  const pending = changes.find((c) => c.applied_at == null);
+  const pending = changes.filter((c) => c.applied_at == null).at(-1); // the earliest (rows are newest first) — applyIfDue's next
   return {
     basket: key,
     governed: members.length > 0, // the rules govern it now (an open member list)
-    members: members.map((m) => ({ marketId: m.market_id, symbol: m.symbol, name: m.display_name, joinedAt: new Date(m.joined_at).toISOString(), joinReason: m.join_reason })),
+    members: members.map((m) => ({
+      marketId: m.market_id, symbol: m.symbol, name: m.display_name, joinedAt: new Date(m.joined_at).toISOString(), joinReason: m.join_reason,
+      priceE6: px.get(m.card_id)?.toString() ?? null, weightBps: weightBps(m.card_id),
+    })),
     upcoming: pending ? { changeDate: pending.change_date, effectiveAt: new Date(pending.effective_at).toISOString(), ...named(pending) } : null,
     log: changes.filter((c) => c.applied_at != null).slice(0, 12).map((c) => ({ changeDate: c.change_date, appliedAt: new Date(c.applied_at!).toISOString(), ...named(c) })),
   };

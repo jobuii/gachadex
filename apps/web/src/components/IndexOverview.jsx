@@ -5,10 +5,13 @@ import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { GAME_ORDER, gameBrand } from '../lib/games.js';
 import { TrendSpark } from './TrendSpark';
 import * as api from '../lib/api.js';
+import { IndexBasketDrawer } from './IndexBasket.jsx';
+import { shortDate } from '../lib/indexBasket.js';
 
 // The Markets "Indices" sub-tab: a financial-style overview of every index. Top-level sections are the GAMES
 // (Pokémon → One Piece → Magic), each enclosed in its own panel; within a panel, rows are grouped by series
-// (GJ / G&P / Pokedaq). Per index: price, 1D/1W/1M/YTD change, 52-week low & high, and View → Exchange.
+// (GJ / G&P / Pokedaq). Per index: price, 1D/1W/1M/YTD change, 52-week low & high, and View → Exchange — plus, once
+// index rules v3 govern its basket, a Members button (or the date of an announced change) that opens the members drawer.
 // Price + 1D come live from the markets feed; the slower windows come from /markets/index-overview.
 
 const fmtE6 = (e6) => (e6 ? formatUsd(BigInt(e6)) : '—');
@@ -31,8 +34,9 @@ function ChangeCell({ pct }) {
 }
 
 export function IndexOverview({ markets, loading, onTradeMarket }) {
-  const [stats, setStats] = useState({}); // marketId -> { change1wPct, change1mPct, changeYtdPct, high52wE6, low52wE6 }
+  const [stats, setStats] = useState({}); // marketId -> { change1wPct, change1mPct, changeYtdPct, high52wE6, low52wE6, governed, nextChange }
   const [gameFilter, setGameFilter] = useState('all'); // All / Pokémon / One Piece / Magic — mirrors the Cards screener
+  const [basket, setBasket] = useState(null); // { market, tab } — the members drawer (index rules v3)
 
   // the slower windows (1w/1m/ytd/52w) are computed server-side; poll while this sub-tab is mounted
   useEffect(() => {
@@ -158,6 +162,7 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
                 <tbody>
                   {list.map((m, i) => {
                     const s = stats[m.id] || {};
+                    const nc = s.nextChange; // an announced member change of this index's basket (rules v3)
                     const series = indexSeries(m.indexSlug);
                     const head = i === 0 || indexSeries(list[i - 1].indexSlug) !== series;
                     return (
@@ -183,6 +188,13 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
                           <td className="num io-range">{fmtE6(s.low52wE6)}</td>
                           <td className="num io-range">{fmtE6(s.high52wE6)}</td>
                           <td className="num io-action">
+                            {s.governed && (
+                              <button className={`io-members${nc ? ' live' : ''}`}
+                                title={nc ? `Member change ${shortDate(nc.effectiveAt)}: +${nc.adds} / −${nc.removes}` : undefined}
+                                onClick={(e) => { e.stopPropagation(); setBasket({ market: m, tab: nc ? 'upcoming' : 'members' }); }}>
+                                {nc ? `● ${shortDate(nc.effectiveAt)}` : 'Members'}
+                              </button>
+                            )}
                             {m.tradeable ? <span className="io-cta">View →</span> : <span className="muted">—</span>}
                           </td>
                         </tr>
@@ -195,6 +207,7 @@ export function IndexOverview({ markets, loading, onTradeMarket }) {
           </section>
         );
       })}
+      {basket && <IndexBasketDrawer market={basket.market} initialTab={basket.tab} onClose={() => setBasket(null)} />}
     </div>
   );
 }
