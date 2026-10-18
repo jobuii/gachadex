@@ -434,6 +434,28 @@ test('fetchScrydexTrackedCards scopes to the given Scrydex expansions (the webho
   await db.query(`DELETE FROM markets WHERE id IN ($1,$2)`, [a1, b1]);
 });
 
+test('fetchScrydexTrackedCards: a webhook pass scoped to ONE sibling still matches it strictly (siblings counted from the DB)', async () => {
+  const { config } = await import('../../config.ts');
+  const { applyMarketGuards } = await import('../../db/market-guards.ts');
+  const cfg = config as { printingMarketsEnabled: boolean };
+  cfg.printingMarketsEnabled = true;
+  try {
+    await applyMarketGuards(db);
+    const holo = await upsertCardMarket(db, { symbol: 'pm-holo', cardId: 'pm-holo', displayName: 'H', variant: 'Holofoil', imageSmall: 'i', providerCardId: 'tpl-pm-h', tcgplayerId: 950 });
+    const rev = await upsertCardMarket(db, { symbol: 'pm-rev', cardId: 'pm-rev', displayName: 'R', variant: 'Reverse Holofoil', imageSmall: 'i', providerCardId: 'tpl-pm-r', tcgplayerId: 950 });
+    await db.query(`UPDATE markets SET scrydex_card_id = 'sx-pm', scrydex_expansion_id = CASE id WHEN $1 THEN 'expH' ELSE 'expR' END WHERE id IN ($1, $2)`, [holo, rev]);
+    // Scrydex lists only the holofoil printing on product 950 ($40); the pass sees only the Reverse market
+    const sxStub = { getCardsByIds: async () => [sxFullCard('sx-pm', 950, 40)] } as unknown as Parameters<typeof fetchScrydexTrackedCards>[1];
+    const tplStub = { getCardsByIds: async () => [] } as unknown as Parameters<typeof fetchScrydexTrackedCards>[2];
+    const cards = await fetchScrydexTrackedCards(db, sxStub, tplStub, async () => null, ['expR']);
+    assert.deepEqual(cards, [], 'the Reverse market never takes the Holo\'s $40 — no Scrydex anchor, no tcgpl price → no print');
+    await db.query(`DELETE FROM markets WHERE id IN ($1, $2)`, [holo, rev]);
+  } finally {
+    cfg.printingMarketsEnabled = false;
+    await applyMarketGuards(db);
+  }
+});
+
 // --- verifyScrydexSignature (Stripe-style HMAC, spec §8) ---
 const SECRET = 'whsec_test_secret_value';
 const NOW = 1_700_000_000;

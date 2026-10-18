@@ -470,6 +470,7 @@ export interface ScrydexTracked {
   tcgplayer_id: number | null; // the join key: Scrydex variant marketplace product_id == this
   featured: boolean;
   variant?: string | null; // OUR market's variant — disambiguates a TCGplayer product shared by several printings
+  product_markets?: number; // markets on this TCGplayer product, any status (> 1 = printing markets → exact-name matching)
 }
 
 export const EMPTY_CROSS: CrossCheck = { tcgpMarket: null, ebay1d: null }; // "no tcgpl cross-check" sentinel
@@ -517,7 +518,11 @@ export async function fetchScrydexTrackedCards(
     // Full tracked universe: Scrydex-matched cards price off Scrydex; tcgpl-only cards (no scrydex_card_id —
     // e.g. most of One Piece) have no anchor but still price off the tcgpl TCGplayer market via combinePrice's
     // fallback. Without this OR, those markets get no print under scrydex-primary and go stale.
-    `SELECT scrydex_card_id, provider_card_id, symbol, card_id, game, tcgplayer_id, featured, variant FROM markets
+    // product_markets counts every market on the product, live or not and in any expansion — a webhook pass scoped to
+    // one expansion still knows a sibling printing exists (P5)
+    `SELECT scrydex_card_id, provider_card_id, symbol, card_id, game, tcgplayer_id, featured, variant,
+            (SELECT count(*)::int FROM markets s WHERE s.kind = 'card' AND s.tcgplayer_id = markets.tcgplayer_id) AS product_markets
+       FROM markets
       WHERE kind = 'card' AND (scrydex_card_id IS NOT NULL OR provider_card_id IS NOT NULL) AND status != 'delisted'
       ${expansionIds ? 'AND scrydex_expansion_id = ANY($1)' : ''}`,
     expansionIds ? [expansionIds] : [],
@@ -548,14 +553,10 @@ export async function fetchScrydexTrackedCards(
   // 3. FX once per pass — only JP (JPY) Scrydex prices use it (decision #3).
   const fxJpyUsd = await fx();
 
-  // printing markets (P5): a product tracked as 2+ markets matches Scrydex by exact printing name only
-  const perProduct = new Map<number, number>();
-  for (const t of tracked.rows) if (t.tcgplayer_id != null) perProduct.set(t.tcgplayer_id, (perProduct.get(t.tcgplayer_id) ?? 0) + 1);
-
   return tracked.rows.flatMap((t) => {
     const sxCard = t.scrydex_card_id ? sxById.get(t.scrydex_card_id) : undefined;
     const tplCard = t.provider_card_id ? tplById.get(t.provider_card_id) : undefined;
-    const strict = t.tcgplayer_id != null && (perProduct.get(t.tcgplayer_id) ?? 0) > 1;
+    const strict = (t.product_markets ?? 0) > 1; // printing markets (P5): match Scrydex by exact printing name only
     const sxRaw = sxCard ? extractRaw(sxCard, t.tcgplayer_id, t.variant, strict) : null;
     // Align the cross-check to the anchor's grade; a broken best grade ⇒ undefined ⇒ tcgpl NM-first (we
     // price off tcgpl's best grade instead of a downgraded Scrydex rung) (build spec §④ #3).

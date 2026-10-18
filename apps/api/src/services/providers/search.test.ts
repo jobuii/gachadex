@@ -203,6 +203,26 @@ test('[tcgpl/OP] ensure with printing markets on: another printing of a listed p
   }
 });
 
+test('[tcgpl/OP] ensure for another printing of a RETIRED product revives that market — never creates one past the gate', async () => {
+  const { config } = await import('../../config.ts');
+  const { applyMarketGuards } = await import('../../db/market-guards.ts');
+  const cfg = config as { printingMarketsEnabled: boolean };
+  const a = await ensureMarketFromCard(db, clientsOf({ tcgpl: fakeTpl([tplCard('rv-a', { spot: 30, ebay7d: 30, tid: 777300 })]) }), 'rv-a', 'onepiece', FX);
+  await db.query(`UPDATE markets SET status = 'delisted', tradeable = false WHERE id = $1`, [a.marketId]);
+  cfg.printingMarketsEnabled = true;
+  try {
+    await applyMarketGuards(db);
+    // a $4 printing with no eBay corroboration: unlistable on its own
+    const r = await ensureMarketFromCard(db, clientsOf({ tcgpl: fakeTpl([tplCard('rv-b', { spot: 4, tid: 777300 })]) }), 'rv-b', 'onepiece', FX);
+    assert.deepEqual(r, { marketId: a.marketId, created: false });
+    assert.equal((await db.query(`SELECT 1 FROM markets WHERE provider_card_id = 'rv-b'`)).rows.length, 0, 'no market for the other printing');
+    assert.equal((await db.query<{ status: string }>(`SELECT status FROM markets WHERE id = $1`, [a.marketId])).rows[0].status, 'active');
+  } finally {
+    cfg.printingMarketsEnabled = false;
+    await applyMarketGuards(db);
+  }
+});
+
 test('[tcgpl/OP] ensure on a retired market whose card label is live elsewhere returns that live market', async () => {
   const old = await ensureMarketFromCard(db, clientsOf({ tcgpl: fakeTpl([tplCard('lbl-old', { spot: 30, ebay7d: 30, tid: 777200 })]) }), 'lbl-old', 'onepiece', FX);
   await db.query(`UPDATE markets SET status = 'delisted', tradeable = false WHERE id = $1`, [old.marketId]);
@@ -287,6 +307,51 @@ test('[scrydex] ensureMarketFromCard: creates with scrydex_card_id + tcgplayer_i
     [first.marketId],
   );
   assert.deepEqual(back.rows[0], { status: 'active', fresh: true }, 'revived on a fresh activation marker');
+});
+
+// a Scrydex card whose printings sit on given TCGplayer products: [variant name, product id, NM market]
+const sxMulti = (id: string, variants: [string, number, number][]): ScrydexCardT => ({
+  ...sxCard(id),
+  variants: variants.map(([name, tid, market]) => ({
+    name, marketplaces: [{ name: 'tcgplayer', product_id: tid }],
+    prices: [{ type: 'raw', condition: 'NM', market, low: market * 0.9, high: market * 1.1, currency: 'USD' }],
+  })),
+} as ScrydexCardT);
+const lastMarkUsd = async (marketId: string) =>
+  Number((await db.query<{ m: string }>(`SELECT mark_price_e6::text AS m FROM marks WHERE market_id = $1 ORDER BY computed_at DESC LIMIT 1`, [marketId])).rows[0]?.m ?? 0) / 1e6;
+
+test('[scrydex] reviving a retired market reprices ITS OWN product — never lists or moves onto the card\'s dearest product', async () => {
+  // the card's 1st Edition ($60) sits on another TCGplayer product than our retired Unlimited market ($12)
+  const id = await upsertCardMarket(db, { game: 'pokemon', symbol: 'pokemon:sx-multi', cardId: 'sx-multi', displayName: 'Multi', variant: 'holofoil', imageSmall: null, tcgplayerId: 8801 });
+  await db.query(`UPDATE markets SET scrydex_card_id = 'sx-multi', status = 'delisted', tradeable = false WHERE id = $1`, [id]);
+  const c = sxMulti('sx-multi', [['holofoil', 8801, 12], ['firstEditionHolofoil', 8802, 60]]);
+  const r = await ensureMarketFromCard(db, clientsOf({ scrydex: fakeScrydex([c]) }), 'sx-multi', 'pokemon', FX);
+  assert.deepEqual(r, { marketId: id, created: false });
+  const row = (await db.query<{ tid: string; printing: string; status: string }>(`SELECT tcgplayer_id::text AS tid, printing, status FROM markets WHERE id = $1`, [id])).rows[0];
+  assert.deepEqual([row.tid, row.printing, row.status], ['8801', 'holofoil', 'active'], 'still its own product and printing');
+  assert.equal(await lastMarkUsd(id), 12, 'priced off its own printing');
+  assert.equal((await db.query(`SELECT 1 FROM markets WHERE tcgplayer_id = 8802`)).rows.length, 0, 'nothing listed on the other product');
+});
+
+test('[scrydex] printing markets on: a revive never adds a market for another Scrydex printing of the product', async () => {
+  const { config } = await import('../../config.ts');
+  const { applyMarketGuards } = await import('../../db/market-guards.ts');
+  const cfg = config as { printingMarketsEnabled: boolean };
+  cfg.printingMarketsEnabled = true;
+  try {
+    await applyMarketGuards(db);
+    const holo = await upsertCardMarket(db, { game: 'pokemon', symbol: 'pokemon:tp-holo-b', cardId: 'tp-holo-b', displayName: 'B', variant: 'Holofoil', imageSmall: null, tcgplayerId: 7001, providerCardId: 'tp-holo-b' });
+    const rev = await upsertCardMarket(db, { game: 'pokemon', symbol: 'pokemon:tp-rev-b', cardId: 'tp-rev-b', displayName: 'B', variant: 'Reverse Holofoil', imageSmall: null, tcgplayerId: 7001, providerCardId: 'tp-rev-b' });
+    await db.query(`UPDATE markets SET scrydex_card_id = 'sx-b', status = 'delisted', tradeable = false WHERE id IN ($1, $2)`, [holo, rev]);
+    const c = sxMulti('sx-b', [['staffStamp', 7001, 2], ['holofoil', 7001, 40], ['reverseHolofoil', 7001, 8]]);
+    const r = await ensureMarketFromCard(db, clientsOf({ scrydex: fakeScrydex([c]) }), 'sx-b', 'pokemon', FX);
+    assert.ok([holo, rev].includes(r.marketId));
+    assert.equal((await db.query(`SELECT 1 FROM markets WHERE tcgplayer_id = 7001`)).rows.length, 2, 'no $2 staffStamp market past the listing gate');
+    assert.equal(await lastMarkUsd(r.marketId), r.marketId === holo ? 40 : 8, 'priced off its own printing, by exact name');
+  } finally {
+    cfg.printingMarketsEnabled = false;
+    await applyMarketGuards(db);
+  }
 });
 
 test('[scrydex] ranks variants in USD — a JPY printing\'s larger native number does not win the listing', async () => {

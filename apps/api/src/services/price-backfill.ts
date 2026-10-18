@@ -117,8 +117,9 @@ export async function planBackfill(q: Queryer, deps: BackfillDeps, days: string[
   const plan: BackfillPlan = { days, rows: [], misses: [], calls: { scrydexBatch: 0, scrydexHistory: 0, tcgplHistory: 0 } };
   if (!days.length) return plan;
   const cards = (
-    await q.query<{ id: string; symbol: string; game: string; variant: string | null; tcgplayer_id: number | null; scrydex_card_id: string | null; provider_card_id: string | null; last_mark: Date | null }>(
+    await q.query<{ id: string; symbol: string; game: string; variant: string | null; tcgplayer_id: number | null; scrydex_card_id: string | null; provider_card_id: string | null; last_mark: Date | null; product_markets: number }>(
       `SELECT m.id, m.symbol, m.game, m.variant, m.tcgplayer_id, m.scrydex_card_id, m.provider_card_id,
+              (SELECT count(*)::int FROM markets s WHERE s.kind = 'card' AND s.tcgplayer_id = m.tcgplayer_id) AS product_markets,
               (SELECT max(k.computed_at) FROM marks k WHERE k.market_id = m.id) AS last_mark
          FROM markets m
         WHERE m.kind = 'card' AND m.featured AND m.status != 'delisted' AND NOT m.price_pinned
@@ -160,7 +161,8 @@ export async function planBackfill(q: Queryer, deps: BackfillDeps, days: string[
       else plan.misses.push({ symbol: c.symbol, reason: miss });
     };
     if (slug && sxCard) {
-      const variant = extractRaw(sxCard, c.tcgplayer_id, c.variant)?.variant ?? null;
+      // as the live fetch: a product with 2+ printing markets (P5) resolves our printing by exact name only
+      const variant = extractRaw(sxCard, c.tcgplayer_id, c.variant, c.product_markets > 1)?.variant ?? null;
       const byDay = new Map<string, ScrydexHistoryDay>();
       for (const [a, b] of windows) {
         for (const d of await deps.scrydexHistory(slug, sxCard.id, a, b)) byDay.set(d.date, d);

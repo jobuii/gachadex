@@ -296,10 +296,14 @@ async function findExistingTcgpl(db: Db, providerCardId: string, tcgplayerId: nu
 }
 
 /** Re-list a delisted market on a FRESH provider price (never the stale pre-retirement one): reactivate
- *  first (resets the activation marker), then ingest the just-fetched card so its new mark beats it. */
+ *  first (resets the activation marker), then ingest the just-fetched card so its new mark beats it — only when `c`
+ *  IS that market's card. Another printing of its product (P5) must never be written under it, nor create a market
+ *  past the listing gate: that market just waits, un-openable, for the next oracle pass to price its own card. */
 async function reviveTcgpl(db: Db, marketId: string, c: TplCard): Promise<string> {
   const use = await reactivate(db, marketId);
   if (use !== marketId) return use;
+  const own = await db.query(`SELECT 1 FROM markets WHERE id = $1 AND provider_card_id = $2`, [marketId, c.id]);
+  if (!own.rows.length) return marketId;
   const card = fromTplCard(c, {
     provider_card_id: c.id,
     symbol: cardSymbol(c.game?.slug ?? '', c.id),
@@ -369,17 +373,8 @@ async function ensureFromTcgpl(db: Db, client: TcgPriceLookupClient, providerCar
  *  price/display from Scrydex. provider_card_id is null (no tcgpl id), so the oracle prices it off the
  *  Scrydex anchor (extractRaw needs the tcgplayer_id) — combinePrice gains the tcgpl cross-check only
  *  if/when the card is later matched to a tcgpl id. */
-function buildScrydexCard(c: ScrydexCard, best: { tcgplayerId: number; raw: ScrydexRaw }, priceUsd: number, tradeable: boolean, game: string): OracleCard {
-  const tracked: ScrydexTracked = {
-    scrydex_card_id: c.id,
-    provider_card_id: null,
-    symbol: cardSymbol(game, c.id),
-    card_id: c.id,
-    game,
-    tcgplayer_id: best.tcgplayerId,
-    featured: false, // long-tail: tradeable but NEVER an index constituent
-  };
-  const card = fromScrydexCard(c, tracked);
+function buildScrydexCard(c: ScrydexCard, tracked: ScrydexTracked, priceUsd: number, tradeable: boolean, strict = false): OracleCard {
+  const card = fromScrydexCard(c, tracked, strict);
   card.rawE6 = toE6(priceUsd);
   card.confident = tradeable;
   // Stamp the Scrydex ids on the card so the CREATE upsert sets them ATOMICALLY with the row — no window
@@ -402,25 +397,32 @@ async function stampScrydexIds(db: Db, marketId: string, c: ScrydexCard): Promis
   ]);
 }
 
-async function reviveScrydex(
-  db: Db,
-  marketId: string,
-  c: ScrydexCard,
-  best: { tcgplayerId: number; raw: ScrydexRaw } | null,
-  game: string,
-  rate: number | null,
-): Promise<string> {
+/** Re-list a retired market from its Scrydex card: reactivate, stamp the Scrydex ids, and reprice THIS market off ITS
+ *  OWN TCGplayer product and printing, under its own identity (symbol, label, product, variant) — never the card's
+ *  dearest printing, which may sit on another product: written under the Scrydex symbol that would list a new market
+ *  past the listing gate, or move this one onto the other product. No own-printing price → the next oracle pass. */
+async function reviveScrydex(db: Db, marketId: string, c: ScrydexCard, game: string, rate: number | null): Promise<string> {
   const use = await reactivate(db, marketId);
   if (use !== marketId) return use; // its card label is live on another market — trade that one
   await stampScrydexIds(db, marketId, c); // symbol-independent — always anchors THIS row on Scrydex
-  if (!best) return marketId; // no usable price right now — the next oracle pass reprices it off the Scrydex anchor
-  const combined = combinePrice(best.raw, EMPTY_CROSS, rate); // no tcgpl cross-check at listing time; the oracle adds it on the next refresh
-  if (combined.priceUsd > 0) {
-    const card = buildScrydexCard(c, best, combined.priceUsd, combined.tier === 'tradeable', game);
-    // Best-effort fresh-mark reprice. A market created by the OLD tcgpl path carries a tcgpl symbol, so
-    // this scrydex-symbol upsert won't match it (it'd hit the tcgplayer_id unique index) — ignore that;
-    // the row is already reactivated + scrydex-stamped, so the next oracle pass reprices it.
-    await ingestCard(db, card, new Date()).catch(() => {});
+  const m = (await db.query<{ symbol: string; card_id: string; provider_card_id: string | null; tcgplayer_id: string | null; variant: string | null; product_markets: number }>(
+    `SELECT symbol, card_id, provider_card_id, tcgplayer_id::text AS tcgplayer_id, variant,
+            (SELECT count(*)::int FROM markets s WHERE s.kind = 'card' AND s.tcgplayer_id = markets.tcgplayer_id) AS product_markets
+       FROM markets WHERE id = $1`,
+    [marketId],
+  )).rows[0];
+  if (!m?.tcgplayer_id) return marketId;
+  const strict = m.product_markets > 1; // printing markets (P5): exact printing name only
+  const raw = extractRaw(c, Number(m.tcgplayer_id), m.variant, strict);
+  const combined = raw ? combinePrice(raw, EMPTY_CROSS, rate) : null; // no tcgpl cross-check here; the oracle adds it next pass
+  if (combined && combined.priceUsd > 0) {
+    const t: ScrydexTracked = {
+      scrydex_card_id: c.id, provider_card_id: m.provider_card_id, symbol: m.symbol, card_id: m.card_id, game,
+      tcgplayer_id: Number(m.tcgplayer_id), featured: false, variant: m.variant,
+    };
+    const card = buildScrydexCard(c, t, combined.priceUsd, combined.tier === 'tradeable', strict);
+    card.variant = m.variant ?? card.variant; // keep the market's own printing name (and key)
+    await ingestCard(db, card, new Date()).catch(() => {}); // best effort: the row is live + stamped either way
   }
   return marketId;
 }
@@ -444,7 +446,7 @@ async function ensureFromScrydex(
   const best = bestScrydexRaw(c, rate);
 
   // Retired market the user wants back: revive on a fresh price (the listing gate is for NEW markets).
-  if (pre) return { marketId: await reviveScrydex(db, pre.id, c, best, game, rate), created: false };
+  if (pre) return { marketId: await reviveScrydex(db, pre.id, c, game, rate), created: false };
 
   if (!best) {
     throw new HttpError(422, 'card not listable: no TCGplayer-priced printing on Scrydex', 'below_listing_threshold');
@@ -456,18 +458,21 @@ async function ensureFromScrydex(
 
   // Canonical dedup: a printing twin of an already-listed product shares its tcgplayer_id.
   const dup = await findByTcgplayerId(db, best.tcgplayerId);
-  if (dup) return { marketId: dup.status === 'delisted' ? await reviveScrydex(db, dup.id, c, best, game, rate) : dup.id, created: false };
+  if (dup) return { marketId: dup.status === 'delisted' ? await reviveScrydex(db, dup.id, c, game, rate) : dup.id, created: false };
 
   // buildScrydexCard carries scrydex_card_id/expansion_id, so the create upsert stamps them ATOMICALLY
   // with the row (no orphan window). provider_card_id stays null — the oracle anchors on scrydex_card_id.
-  const card = buildScrydexCard(c, best, combined.priceUsd, combined.tier === 'tradeable', game);
+  const card = buildScrydexCard(c, {
+    scrydex_card_id: c.id, provider_card_id: null, symbol: cardSymbol(game, c.id), card_id: c.id, game,
+    tcgplayer_id: best.tcgplayerId, featured: false, // long-tail: tradeable but NEVER an index constituent
+  }, combined.priceUsd, combined.tier === 'tradeable');
   let marketId: string;
   try {
     marketId = await ingestCard(db, card, new Date());
   } catch (e) {
     // Unique-index race (the tcgplayer_id unique index is the arbiter): the canonical market won.
     const lost = await findByTcgplayerId(db, best.tcgplayerId);
-    if (lost) return { marketId: lost.status === 'delisted' ? await reviveScrydex(db, lost.id, c, best, game, rate) : lost.id, created: false };
+    if (lost) return { marketId: lost.status === 'delisted' ? await reviveScrydex(db, lost.id, c, game, rate) : lost.id, created: false };
     throw e;
   }
   // No tcgpl provider_card_id and Scrydex has no daily-history endpoint → no chart seed; the hourly
