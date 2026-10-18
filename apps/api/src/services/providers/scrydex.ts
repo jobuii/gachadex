@@ -242,8 +242,11 @@ export interface ScrydexRaw {
 /** The card variant whose TCGplayer marketplace matches OUR product id (the per-printing join key). One
  *  TCGplayer product can carry SEVERAL Scrydex variants (MTG product 2831 = Birds of Paradise Normal AND
  *  Foil): then OUR market's variant decides — an exact name match first ("Reverse Holofoil" ≡
- *  reverseHolofoil), else the same foil-ness — so a Foil market is never priced off the Normal printing
- *  (that mismatch made Birds flip $19 ↔ $3,960). With no variant to go on, the first match (legacy). */
+ *  reverseHolofoil), else the ONE candidate with the same foil-ness — so a Foil market is never priced off
+ *  the Normal printing (that mismatch made Birds flip $19 ↔ $3,960). If neither picks exactly one, there is
+ *  no Scrydex anchor (undefined → the market prices off its own tcgpl printing) rather than a guess: One Piece
+ *  names never say "foil", and taking the first candidate priced Shanks OP09-004 SP Gold at the Wanted
+ *  Poster's $233 (tcgpl $1,522). With no variant to go on, the first match (legacy listing paths). */
 function findVariantByProduct(card: ScrydexCard, tcgplayerId: number | null, variant?: string | null): ScrydexVariant | undefined {
   if (tcgplayerId == null) return undefined;
   const want = String(tcgplayerId);
@@ -255,7 +258,8 @@ function findVariantByProduct(card: ScrydexCard, tcgplayerId: number | null, var
   const exact = candidates.find((v) => normVariant(v.name) === ours);
   if (exact) return exact;
   const foil = ours.includes('foil');
-  return candidates.find((v) => (normVariant(v.name) ?? '').includes('foil') === foil) ?? candidates[0];
+  const sameFoil = candidates.filter((v) => (normVariant(v.name) ?? '').includes('foil') === foil);
+  return sameFoil.length === 1 ? sameFoil[0] : undefined;
 }
 
 export function extractRaw(card: ScrydexCard, tcgplayerId: number | null, variant?: string | null): ScrydexRaw | null {
@@ -420,14 +424,22 @@ export function combinePrice(sx: ScrydexRaw | null, x: CrossCheck, fxJpyUsd: num
   // to a pricier sibling printing (measured: Overgrown Tomb Retro $20 vs eBay $1,845 = the Serial Numbered one),
   // so an eBay veto would halt correct cards.
   if (tcgp != null && sxUsd && sxUsd.market > 0 && tcgp < BROKEN_RATIO * sxUsd.market) tcgp = null;
+  // The mirror case, gated harder: a Scrydex anchor under half of OUR printing's tcgpl TCGplayer market is dropped only
+  // when eBay sides with tcgpl and NOT with Scrydex — two sources against one. That is the wrong-printing signature
+  // (Shanks OP09-004 SP Gold priced at the Wanted Poster's $233 vs tcgpl $1,522 / eBay $1,250). eBay still never SETS
+  // the price; it only picks between two TCGplayer numbers, and a lone eBay (Overgrown Tomb's serial sibling) can't.
+  const ebay = x.ebay1d != null && x.ebay1d > 0 ? x.ebay1d : null;
+  const sxWrongPrinting =
+    sxUsd != null && sxUsd.market > 0 && tcgp != null && sxUsd.market < BROKEN_RATIO * tcgp &&
+    ebay != null && ebayInBand(ebay, tcgp) && !ebayInBand(ebay, sxUsd.market);
   // A broken best-grade rung (§④) means Scrydex has no trustworthy top-grade price: skip the (downgraded)
   // Scrydex anchor and let the EXISTING tcgpl fallback supply the same-grade price — but only when a tcgpl
   // market actually exists (else keep the Scrydex rung rather than halt).
-  const preferCross = (sx?.bestGradeBroken ?? false) && tcgp != null;
+  const preferCross = ((sx?.bestGradeBroken ?? false) && tcgp != null) || sxWrongPrinting;
   let priceUsd = !preferCross && sxUsd && sxUsd.market > 0 ? sxUsd.market : 0;
   if (!(priceUsd > 0) && tcgp != null) priceUsd = tcgp; // fallback to tcgpl TCGplayer
   priceUsd = cents(priceUsd);
-  const ebayCorroborated = x.ebay1d != null && x.ebay1d > 0 && priceUsd > 0 && ebayInBand(x.ebay1d, priceUsd);
+  const ebayCorroborated = ebay != null && priceUsd > 0 && ebayInBand(ebay, priceUsd);
   // When a broken Scrydex anchor is discarded for tcgpl, the price is a tcgpl number — don't score it
   // against the broken raw; eBay (the independent venue) is the corroborator.
   return { priceUsd, tier: scoreConfidence(priceUsd, preferCross ? null : sxUsd, x), ebayCorroborated };

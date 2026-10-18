@@ -55,7 +55,8 @@ export function setsMatch(a: string | null | undefined, b: string | null | undef
 /** Printing variants normalize across providers: pokemontcg 'reverseHolofoil' ~ tpl 'Reverse Holofoil'. */
 export function normVariant(v: string | null | undefined): string | null {
   if (!v) return null;
-  const n = v.toLowerCase().replace(/[^a-z0-9]/g, '');
+  // '1st' ≡ 'first': tcgpl "1st Edition Holofoil" vs Scrydex firstEditionHolofoil.
+  const n = v.toLowerCase().replace(/[^a-z0-9]/g, '').replace(/1st/g, 'first');
   return n || null;
 }
 

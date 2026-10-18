@@ -569,6 +569,54 @@ test('extractRaw: a TCGplayer product shared by Normal AND Foil prices OUR varia
   assert.equal(extractRaw(rh, 7, 'Reverse Holofoil')!.market, 9, 'exact name match wins over foil-ness');
 });
 
+test('extractRaw: several printings on one product and none matches OUR printing → no Scrydex anchor, never a guess', () => {
+  // Live 2026-10-18: Shanks OP09-004 (SP)(Gold), product 657442, was priced at the Wanted Poster's $232.97
+  // (tcgpl $1,522). One Piece variant names never contain "foil", so the foil-ness tie-break fell to candidates[0].
+  const shanks = card([
+    { name: 'wantedPoster', marketplaces: [{ name: 'tcgplayer', product_id: '657442' }], prices: [raw('NM', 232.97, { low: 200, high: 260 })] },
+    { name: 'goldSpecialAltArt', marketplaces: [{ name: 'tcgplayer', product_id: '657442' }], prices: [raw('NM', 1500, { low: 1400, high: 1600 })] },
+  ]);
+  assert.equal(extractRaw(shanks, 657442, 'Foil'), null, 'ambiguous → no anchor');
+  assert.deepEqual(scrydexGradedLadder(shanks, 657442, null, 'Foil'), [], 'the graded ladder follows the same pick');
+  // two candidates share our foil-ness and neither is an exact match → also ambiguous
+  const twoFoils = card([
+    { name: 'firstEditionHolofoil', marketplaces: [{ name: 'tcgplayer', product_id: '9' }], prices: [raw('NM', 3000)] },
+    { name: 'unlimitedHolofoil', marketplaces: [{ name: 'tcgplayer', product_id: '9' }], prices: [raw('NM', 700)] },
+  ]);
+  assert.equal(extractRaw(twoFoils, 9, 'Holofoil'), null);
+  assert.equal(extractRaw(twoFoils, 9, 'Unlimited Holofoil')!.market, 700, 'an exact match still wins');
+  // a single printing on the product is used whatever its name (One Piece "Foil" ↔ specialAltArt)
+  const single = card([{ name: 'specialAltArt', marketplaces: [{ name: 'tcgplayer', product_id: '5' }], prices: [raw('NM', 400)] }]);
+  assert.equal(extractRaw(single, 5, 'Foil')!.market, 400);
+  // with no anchor the price comes from OUR printing's tcgpl market; eBay corroboration decides the tier
+  const c = combinePrice(extractRaw(shanks, 657442, 'Foil'), { tcgpMarket: 1522.2, ebay1d: 1250 }, null);
+  assert.equal(c.priceUsd, 1522.2);
+  assert.equal(c.tier, 'tradeable');
+  assert.equal(combinePrice(null, { tcgpMarket: 1522.2, ebay1d: null }, null).tier, 'reduce_only', 'no corroborator, no spread → reduce_only');
+});
+
+test('combinePrice: a Scrydex anchor under half of tcgpl is dropped only when eBay sides with tcgpl (wrong-printing signature)', () => {
+  // Shanks SP Gold even if Scrydex tags the product on ONE (wrong) variant: Scrydex $232.97, tcgpl $1,522.20, eBay $1,250.
+  const c = combinePrice(sx({ market: 232.97 }), { tcgpMarket: 1522.2, ebay1d: 1250 }, null);
+  assert.equal(c.priceUsd, 1522.2);
+  assert.equal(c.tier, 'tradeable');
+  // no eBay → Scrydex keeps the price (one source against one is not enough)
+  assert.equal(combinePrice(sx({ market: 232.97 }), { tcgpMarket: 1522.2, ebay1d: null }, null).priceUsd, 232.97);
+  // eBay sides with Scrydex → Scrydex keeps it
+  assert.equal(combinePrice(sx({ market: 232.97 }), { tcgpMarket: 1522.2, ebay1d: 240 }, null).priceUsd, 232.97);
+  // under the 2× gap → untouched
+  assert.equal(combinePrice(sx({ market: 900 }), { tcgpMarket: 1522.2, ebay1d: 1250 }, null).priceUsd, 900);
+});
+
+test('extractRaw: "1st Edition Holofoil" matches Scrydex firstEditionHolofoil exactly', () => {
+  const c = card([
+    { name: 'firstEditionHolofoil', marketplaces: [{ name: 'tcgplayer', product_id: '42' }], prices: [raw('NM', 9000)] },
+    { name: 'unlimitedHolofoil', marketplaces: [{ name: 'tcgplayer', product_id: '42' }], prices: [raw('NM', 900)] },
+  ]);
+  assert.equal(extractRaw(c, 42, '1st Edition Holofoil')!.market, 9000);
+  assert.equal(extractRaw(c, 42, 'Unlimited Holofoil')!.market, 900);
+});
+
 test('combinePrice: a tcgpl fallback under half of Scrydex\'s surviving rung is rejected; eBay never vetoes', () => {
   // Lugia: Scrydex NM broken, surviving LP rung $4,500; tcgpl $500 is below half of it → keep Scrydex.
   assert.equal(combinePrice(sx({ market: 4500, condition: 'LP', bestGradeBroken: true }), { tcgpMarket: 500, ebay1d: null }, null).priceUsd, 4500);
