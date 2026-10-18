@@ -1,3 +1,4 @@
+import { MAIN_MARKET_ORDER } from './markets.ts';
 import { randomUUID } from 'node:crypto';
 import type { Db, Queryer } from '../db/client.ts';
 import { config } from '../config.ts';
@@ -85,7 +86,9 @@ async function matchMarket(q: Queryer, cardName: string | null): Promise<string 
   if (!cardName) return null;
   const r = await q.query<{ id: string }>(
     `SELECT id FROM markets WHERE kind = 'card' AND status IN ('active','reduce_only') AND length(display_name) >= 4
-       AND position(lower(display_name) in lower($1)) > 0 ORDER BY length(display_name) DESC LIMIT 1`,
+       AND position(lower(display_name) in lower($1)) > 0
+     -- printings share a display name (P5): their main market, never an arbitrary pick
+     ORDER BY length(display_name) DESC, ${MAIN_MARKET_ORDER} LIMIT 1`,
     [cardName],
   );
   return r.rows[0]?.id ?? null;

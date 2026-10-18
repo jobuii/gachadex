@@ -200,6 +200,10 @@ export const config = {
   // FTSE-style buffer, removal between dates only for a cause, reserve replacements, public change log. OFF = the old
   // rule (re-slice top-N every pass). On launch the member lists start from the live baskets (no jump).
   indexRulesV3: process.env.INDEX_RULES_V3 === 'true',
+  // One market per printing (2026-10-18 plan, P5): discovery also lists the other printings (Normal / Reverse / Foil…)
+  // of featured cards, and the one-market-per-TCGplayer-product guard is relaxed to one per (product, printing) —
+  // db/market-guards.ts. OFF = today's one printing per product (the guard is restored when no siblings exist).
+  printingMarketsEnabled: process.env.PRINTING_MARKETS_ENABLED === 'true',
   indexSeasoningDays: num('INDEX_SEASONING_DAYS', 30), // R3: first live price at least this old to join
   indexStaleRemoveDays: num('INDEX_STALE_REMOVE_DAYS', 14), // R5: no fresh price (or Graded: no PSA-10) this long → removed
   indexNoticeHours: num('INDEX_NOTICE_HOURS', 72), // R1: a change takes effect at least this long after it is published

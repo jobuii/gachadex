@@ -1,6 +1,7 @@
 import { config } from '../../config.ts';
 import type { Db } from '../../db/client.ts';
-import { cardSymbol, upsertCardMarket, withFeaturedSource } from '../markets.ts';
+import { liveLabelFree } from '../../db/market-guards.ts';
+import { cardSymbol, copySiblingScrydexIds, upsertCardMarket, withFeaturedSource } from '../markets.ts';
 import { toCardUpsert } from '../oracle.ts';
 import { rawPriceUsd, fromTplCard, tplTcgplayerId, hasLiquiditySignal, MIN_LIST_PRICE_USD, type TcgPriceLookupClient, type TrackedMarket } from './tcgpricelookup.ts';
 import { productTypeOf, type ProductType } from '../product-type.ts';
@@ -26,7 +27,7 @@ import { productTypeOf, type ProductType } from '../product-type.ts';
 const PAGE_SIZE = 100;
 const CHECKPOINT_EVERY_PAGES = 20;
 
-interface Candidate {
+export interface Candidate {
   id: string;
   price: number;
   tid: number | null; // tcgplayer id (tiebreaker)
@@ -101,6 +102,34 @@ export function featuredSelection(kept: Candidate[], topN: number): Candidate[] 
     ...topCandidates(liquid.filter((c) => c.pt === 'sealed'), topN),
   ];
 }
+
+/** Printing markets (P5): the OTHER printings of the featured products — same TCGplayer product, a different provider
+ *  card (tcgpl lists each printing as its own card) — that pass the one listing rule for printings: the $10 floor (the
+ *  crawl only keeps those) AND a sales signal. Listed, never featured: only the product's top printing can be an index
+ *  member (D6/R12). */
+export function printingSiblings(kept: Candidate[], featured: Candidate[]): Candidate[] {
+  const tids = new Set(featured.map((c) => c.tid).filter((t): t is number => t != null));
+  const ids = new Set(featured.map((c) => c.id));
+  const seen = new Set<string>();
+  return kept.filter((c) => {
+    if (c.tid == null || !tids.has(c.tid) || ids.has(c.id) || c.liq !== true || seen.has(c.id)) return false;
+    seen.add(c.id); // a resumed crawl can hold a card twice
+    return true;
+  });
+}
+
+/** May a NEW market join a TCGplayer product that already has `onProduct` markets (their provider_card_ids)? An empty
+ *  product, always. Otherwise only as another printing (P5, switch on) and only when every market there is a tcgpl card:
+ *  tcgpl names printings consistently, while a Scrydex-only market (no provider id) names its printing in Scrydex's words
+ *  ('staffStamp' for tcgpl's 'Holofoil') — a new market there could be the SAME card under another name. Switched off,
+ *  one market per product, whatever the database index currently allows. */
+export function mayJoinProduct(onProduct: (string | null)[], printingMarkets: boolean): boolean {
+  return onProduct.length === 0 || (printingMarkets && onProduct.every((p) => p != null));
+}
+
+/** The printing siblings discovery listed on its latest run, per game — the only non-featured markets the retirement
+ *  sweep spares (a sibling that stops qualifying drops off the list and retires like any long-tail market). */
+const siblingsKey = (game: string) => `discovery_siblings:${game}`;
 
 // Global weekly-rebalance bookkeeping (read by the index.ts discovery loop): the interval is enforced
 // via a settings timestamp so N instances and restarts share ONE cadence (the lease only guards
@@ -180,19 +209,43 @@ export async function discoverGame(
 
   // 2) apply: upsert the featured set (existing markets keep their identity), then rebalance the flag
   const topIds = top.map((t) => t.id);
-  const full = await client.getCardsByIds(topIds, 'discovery');
+  // Printing markets (P5): also list the featured products' other printings (printingSiblings)
+  const sibs = config.printingMarketsEnabled ? printingSiblings(state.kept, top) : [];
+  const candidateIds = [...topIds, ...sibs.map((c) => c.id)];
   const existing = await db.query<TrackedMarket>(
     `SELECT provider_card_id, symbol, card_id, game, featured FROM markets WHERE provider_card_id = ANY($1)`,
-    [topIds],
+    [candidateIds],
   );
   const byId = new Map(existing.rows.map((t) => [t.provider_card_id, t]));
+  // every market already on these products (any status): a NEW market joins one only under mayJoinProduct
+  const onProduct = new Map<number, (string | null)[]>();
+  for (const r of (await db.query<{ tid: string; provider_card_id: string | null }>(
+    `SELECT tcgplayer_id::text AS tid, provider_card_id FROM markets WHERE kind = 'card' AND tcgplayer_id = ANY($1)`,
+    [[...new Set([...top, ...sibs].map((c) => c.tid).filter((t) => t != null))]],
+  )).rows) onProduct.set(Number(r.tid), [...(onProduct.get(Number(r.tid)) ?? []), r.provider_card_id]);
+  const mayCreate = (tid: number | null) => tid == null || mayJoinProduct(onProduct.get(tid) ?? [], config.printingMarketsEnabled);
+  const siblingIds = sibs.filter((c) => byId.has(c.id) || mayCreate(c.tid)).map((c) => c.id);
+  if (config.printingMarketsEnabled) log(`${siblingIds.length} other printings of featured cards (${sibs.length - siblingIds.length} wait on a Scrydex-only market)`);
+  await putSetting(db, siblingsKey(game), JSON.stringify(siblingIds));
+  const sibling = new Set(siblingIds);
+  const full = await client.getCardsByIds([...topIds, ...siblingIds], 'discovery');
   let conflicts = 0;
   for (const c of full) {
+    const isSibling = sibling.has(c.id);
+    if (!byId.has(c.id) && !mayCreate(tplTcgplayerId(c))) {
+      conflicts++; // another market already holds this product (switched off, or a Scrydex-only one) — never a twin
+      log(`✗ skipped (product already listed): ${c.name} [${c.id}]`);
+      continue;
+    }
     const t: TrackedMarket =
-      byId.get(c.id) ?? { provider_card_id: c.id, symbol: cardSymbol(game, c.id), card_id: c.id, game, featured: true };
+      byId.get(c.id) ?? { provider_card_id: c.id, symbol: cardSymbol(game, c.id), card_id: c.id, game, featured: !isSibling };
     const oc = fromTplCard(c, t);
     try {
-      await withFeaturedSource(db, 'discovery', (q) => upsertCardMarket(q, { ...toCardUpsert(oc), featured: true }));
+      await withFeaturedSource(db, 'discovery', async (q) => {
+        // a sibling leaves the stored flag alone (new → not featured); the drop-out step below un-features it if it was
+        const id = await upsertCardMarket(q, { ...toCardUpsert(oc), featured: isSibling ? undefined : true });
+        if (isSibling) await copySiblingScrydexIds(q, id);
+      });
       // no oracle print here — the refresh loop prices new markets on its next pass
     } catch {
       // unique-violation (identity already claimed by another market) — skip this card, never die
@@ -206,10 +259,15 @@ export async function discoverGame(
   // rose back into the top-250) must REJOIN the live set — a featured market may never be delisted,
   // or it gets no price and silently drops out of the index basket. created_at resets, so the engine
   // freshness gate keeps it un-openable until the next refresh prints (no stale-mark opens).
+  // Printing siblings come back the same way. At most one market per card label, and never onto a label a live market
+  // holds (liveLabelFree; the check reads the statement's snapshot, hence DISTINCT ON) — it stays delisted instead.
   await db.query(
-    `UPDATE markets SET status = 'active', tradeable = true, created_at = now()
-      WHERE game = $1 AND kind = 'card' AND featured AND status = 'delisted'`,
-    [game],
+    `UPDATE markets m SET status = 'active', tradeable = true, created_at = now()
+      WHERE m.id IN (SELECT DISTINCT ON (COALESCE(card_id, id)) id FROM markets
+                      WHERE game = $1 AND kind = 'card' AND status = 'delisted' AND (featured OR provider_card_id = ANY($2))
+                      ORDER BY COALESCE(card_id, id), featured DESC, id)
+        AND ${liveLabelFree('m')}`,
+    [game, siblingIds],
   );
   // drop-outs leave the basket but stay tracked + priced
   await withFeaturedSource(db, 'discovery', (q) =>
@@ -232,15 +290,19 @@ export async function discoverGame(
  *  delisted) so the long-tail can't grow the provider budget unboundedly. Markets with any open
  *  position are NEVER retired; featured markets are the discovery job's to manage, not this sweep's. */
 export async function retireDeadMarkets(db: Db, retireAfterDays = config.retireAfterDays): Promise<string[]> {
+  const listed = (await db.query<{ value: string }>(`SELECT value FROM settings WHERE key LIKE 'discovery_siblings:%'`)).rows
+    .flatMap((r) => JSON.parse(r.value) as string[]);
   const r = await db.query<{ id: string }>(
     `UPDATE markets m SET status = 'delisted', tradeable = false
       WHERE m.kind = 'card' AND m.featured = false AND m.status = 'active'
         AND m.created_at < now() - ($1 || ' days')::interval
+        -- a printing sibling discovery listed on its latest run stays listed (P5); one that stopped qualifying retires
+        AND (m.provider_card_id IS NULL OR m.provider_card_id <> ALL($2))
         AND NOT EXISTS (SELECT 1 FROM positions p WHERE p.market_id = m.id AND p.status = 'open')
         AND m.id NOT IN (SELECT market_id FROM index_locked_markets)
         AND NOT EXISTS (SELECT 1 FROM fills f WHERE f.market_id = m.id AND f.created_at > now() - ($1 || ' days')::interval)
       RETURNING m.id`,
-    [String(retireAfterDays)],
+    [String(retireAfterDays), listed],
   );
   return r.rows.map((x) => x.id);
 }

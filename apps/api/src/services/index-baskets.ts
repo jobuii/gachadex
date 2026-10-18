@@ -54,8 +54,16 @@ interface GameCards {
 }
 
 export function buildBaskets(cards: BasketCard[], o: BasketOptions): Basket[] {
-  const games = new Map<string, GameCards>();
+  // One entry per (game, card label) — every map below keys on it. Belt and braces: the live-label guard
+  // (db/market-guards.ts) already keeps it unique; if it didn't apply, never chain one constituent across two printings.
+  const byLabel = new Map<string, BasketCard>();
   for (const c of cards) {
+    const k = `${c.game}\u0000${c.cardId}`;
+    const was = byLabel.get(k);
+    if (!was || (c.eligible && !was.eligible) || (c.eligible === was.eligible && c.priceE6 > was.priceE6)) byLabel.set(k, c);
+  }
+  const games = new Map<string, GameCards>();
+  for (const c of byLabel.values()) {
     if (c.productType === 'other' || c.priceE6 <= 0n) continue;
     let g = games.get(c.game);
     if (!g) games.set(c.game, (g = { singles: [], sealed: [] }));

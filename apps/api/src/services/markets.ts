@@ -5,6 +5,7 @@ import { usdc } from '../money.ts';
 import { getFeeBps, getFundingFactorBps } from './fees.ts';
 import { gradeLadder, sortGradeRows, type GradeRow } from './providers/tcgpricelookup.ts';
 import type { ProductType } from './product-type.ts';
+import { normVariant } from './providers/backfill.ts';
 
 // Per-side open-interest caps (risk parameters). Indices are diversified -> deeper books.
 const CARD_OI_CAP = usdc(50_000).toString();
@@ -19,6 +20,8 @@ export interface MarketRow {
   display_name: string;
   card_id: string | null;
   variant: string | null;
+  printing: string | null; // the variant as a key (normVariant); with tcgplayer_id, the market's identity (one per pair)
+  tcgplayer_id: string | null;
   index_slug: string | null;
   image_small: string | null;
   set_logo: string | null;
@@ -44,7 +47,7 @@ export interface MarketRow {
   jpy: boolean; // Japanese-market card (the JPY>$threshold set) — drives the screener/sidebar JPY toggle
 }
 
-const COLS = `id, kind, game, symbol, display_name, card_id, variant, index_slug, image_small, set_logo, status, tradeable,
+const COLS = `id, kind, game, symbol, display_name, card_id, variant, printing, tcgplayer_id::text AS tcgplayer_id, index_slug, image_small, set_logo, status, tradeable,
   max_leverage_e2, init_margin_bps, maint_margin_bps,
   max_oi_long_uusdc::text AS max_oi_long_uusdc, max_oi_short_uusdc::text AS max_oi_short_uusdc,
   skew_k_e6::text AS skew_k_e6, premium_cap_e6::text AS premium_cap_e6, max_dev_bps,
@@ -87,6 +90,10 @@ export interface CardUpsert {
   scrydexExpansionId?: string | null;
 }
 
+/** ORDER BY for "the product's main market" among its printing markets (P5): live first, then featured, then the
+ *  oldest — wherever a lookup by product or Scrydex card could match several printings. */
+export const MAIN_MARKET_ORDER = "(status = 'delisted'), featured DESC, created_at, id";
+
 /** Symbol for a provider-created card market: game-namespaced so provider ids can never collide across
  *  games or with the `INDEX:` namespace. Legacy pokemontcg markets keep their bare `c.id` symbols (the
  *  upsert key for the live feed) — cutover joins them via tcgplayer_id/provider_card_id, not symbol. */
@@ -108,11 +115,14 @@ export async function upsertCardMarket(q: Queryer, opts: CardUpsert): Promise<st
   const meta = opts.metadata != null ? JSON.stringify(opts.metadata) : null;
   await q.query(
     `INSERT INTO markets(id, kind, game, symbol, display_name, card_id, variant, image_small, image_large, set_logo, metadata, tradeable,
-       max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id, featured, min_qty_e6, graded_psa10_e6, scrydex_card_id, scrydex_expansion_id, product_type)
-     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13, COALESCE($14, false), COALESCE($15, 100), $16, $17, $18, $19)
+       max_oi_long_uusdc, max_oi_short_uusdc, tcgplayer_id, provider_card_id, featured, min_qty_e6, graded_psa10_e6, scrydex_card_id, scrydex_expansion_id, product_type,
+       printing)
+     VALUES($1, 'card', $11, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10, $12, $13, COALESCE($14, false), COALESCE($15, 100), $16, $17, $18, $19, $20)
      ON CONFLICT(symbol) DO UPDATE
        SET display_name = EXCLUDED.display_name, image_small = EXCLUDED.image_small, image_large = EXCLUDED.image_large,
-           set_logo = EXCLUDED.set_logo, metadata = EXCLUDED.metadata, variant = EXCLUDED.variant,
+           set_logo = EXCLUDED.set_logo, metadata = EXCLUDED.metadata,
+           -- the printing follows the feed's name for it; a feed that can't tell this pass (Scrydex, no match) keeps it
+           variant = COALESCE(EXCLUDED.variant, markets.variant), printing = COALESCE(EXCLUDED.printing, markets.printing),
            tcgplayer_id = COALESCE(EXCLUDED.tcgplayer_id, markets.tcgplayer_id),
            provider_card_id = COALESCE(EXCLUDED.provider_card_id, markets.provider_card_id),
            featured = COALESCE($14, markets.featured),
@@ -124,11 +134,25 @@ export async function upsertCardMarket(q: Queryer, opts: CardUpsert): Promise<st
       id, opts.symbol, opts.displayName, opts.cardId, opts.variant, opts.imageSmall, opts.imageLarge ?? null,
       opts.setLogo ?? null, meta, CARD_OI_CAP, opts.game ?? 'pokemon', opts.tcgplayerId ?? null, opts.providerCardId ?? null,
       opts.featured ?? null, opts.minQtyE6?.toString() ?? null, opts.gradedE6?.toString() ?? null,
-      opts.scrydexCardId ?? null, opts.scrydexExpansionId ?? null, opts.productType ?? null,
+      opts.scrydexCardId ?? null, opts.scrydexExpansionId ?? null, opts.productType ?? null, normVariant(opts.variant),
     ],
   );
   const r = await q.query<{ id: string }>(`SELECT id FROM markets WHERE symbol = $1`, [opts.symbol]);
   return r.rows[0].id;
+}
+
+/** A new printing market (P5) takes the Scrydex card + expansion ids of a sibling printing on the same TCGplayer
+ *  product — one Scrydex card record carries every printing — so the Scrydex pass prices it and its price alerts
+ *  (keyed by expansion) re-price it. No provider call. A market that already has them is left alone. */
+export async function copySiblingScrydexIds(q: Queryer, marketId: string): Promise<void> {
+  await q.query(
+    `UPDATE markets n SET scrydex_card_id = s.scrydex_card_id, scrydex_expansion_id = COALESCE(n.scrydex_expansion_id, s.scrydex_expansion_id)
+       FROM (SELECT scrydex_card_id, scrydex_expansion_id FROM markets
+              WHERE tcgplayer_id = (SELECT tcgplayer_id FROM markets WHERE id = $1) AND id <> $1 AND scrydex_card_id IS NOT NULL
+              ORDER BY (scrydex_expansion_id IS NULL), id LIMIT 1) s
+      WHERE n.id = $1 AND n.scrydex_card_id IS NULL`,
+    [marketId],
+  );
 }
 
 /** An index market's symbol. Pokémon keeps its original un-namespaced symbol (back-compat, preserves history);
@@ -167,6 +191,9 @@ export interface MarketView {
   symbol: string;
   displayName: string;
   cardId: string | null;
+  variant: string | null; // the printing's provider name ('Reverse Holofoil', 'Foil'…) — the printing chip
+  printing: string | null; // its key; markets with the same tcgplayerId and different printings are siblings (P5)
+  tcgplayerId: string | null;
   indexSlug: string | null;
   imageSmall: string | null;
   setLogo: string | null;
@@ -295,6 +322,9 @@ export async function listMarketsWithData(db: Db): Promise<MarketView[]> {
         symbol: m.symbol,
         displayName: m.display_name,
         cardId: m.card_id,
+        variant: m.variant,
+        printing: m.printing,
+        tcgplayerId: m.tcgplayer_id,
         indexSlug: m.index_slug,
         imageSmall: m.image_small,
         setLogo: m.set_logo,

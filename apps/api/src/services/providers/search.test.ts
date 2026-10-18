@@ -187,6 +187,33 @@ test('[tcgpl/OP] ensureMarketFromCard: idempotent create, variant dedup, revival
   assert.deepEqual(back.rows[0], { status: 'active', fresh: true });
 });
 
+test('[tcgpl/OP] ensure with printing markets on: another printing of a listed product still trades the listed market', async () => {
+  const { config } = await import('../../config.ts');
+  const { applyMarketGuards } = await import('../../db/market-guards.ts');
+  const cfg = config as { printingMarketsEnabled: boolean };
+  const first = await ensureMarketFromCard(db, clientsOf({ tcgpl: fakeTpl([tplCard('pm-main', { spot: 30, ebay7d: 30, tid: 777100 })]) }), 'pm-main', 'onepiece', FX);
+  cfg.printingMarketsEnabled = true;
+  try {
+    await applyMarketGuards(db); // the one-per-product index is relaxed now: search's own check must hold
+    const other = await ensureMarketFromCard(db, clientsOf({ tcgpl: fakeTpl([tplCard('pm-alt', { spot: 12, ebay7d: 12, tid: 777100 })]) }), 'pm-alt', 'onepiece', FX);
+    assert.deepEqual(other, { marketId: first.marketId, created: false }, 'search never lists a second printing (discovery does)');
+  } finally {
+    cfg.printingMarketsEnabled = false;
+    await applyMarketGuards(db);
+  }
+});
+
+test('[tcgpl/OP] ensure on a retired market whose card label is live elsewhere returns that live market', async () => {
+  const old = await ensureMarketFromCard(db, clientsOf({ tcgpl: fakeTpl([tplCard('lbl-old', { spot: 30, ebay7d: 30, tid: 777200 })]) }), 'lbl-old', 'onepiece', FX);
+  await db.query(`UPDATE markets SET status = 'delisted', tradeable = false WHERE id = $1`, [old.marketId]);
+  const live = await ensureMarketFromCard(db, clientsOf({ tcgpl: fakeTpl([tplCard('lbl-new', { spot: 30, ebay7d: 30, tid: 777201 })]) }), 'lbl-new', 'onepiece', FX);
+  await db.query(`UPDATE markets SET card_id = 'lbl-shared' WHERE id IN ($1, $2)`, [old.marketId, live.marketId]);
+  const r = await ensureMarketFromCard(db, clientsOf({ tcgpl: fakeTpl([tplCard('lbl-old', { spot: 30, ebay7d: 30, tid: 777200 })]) }), 'lbl-old', 'onepiece', FX);
+  assert.deepEqual(r, { marketId: live.marketId, created: false });
+  const st = await db.query<{ status: string }>(`SELECT status FROM markets WHERE id = $1`, [old.marketId]);
+  assert.equal(st.rows[0].status, 'delisted', 'never revived onto a live label');
+});
+
 test('[tcgpl/OP] ensureMarketFromCard rejects unlistable + unknown ids', async () => {
   await assert.rejects(ensureMarketFromCard(db, clientsOf({ tcgpl: fakeTpl([tplCard('prov-thin', { spot: 4, ebay7d: 4 })]) }), 'prov-thin', 'onepiece', FX), /not listable/);
   await assert.rejects(ensureMarketFromCard(db, clientsOf({ tcgpl: fakeTpl([]) }), 'prov-missing', 'onepiece', FX), /card not found/);

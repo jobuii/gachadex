@@ -4,6 +4,9 @@ import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { useStickyState } from '../lib/useStickyState';
 import { GAME_TABS as GAMES } from '../lib/games.js';
 import { TrendSpark } from './TrendSpark';
+import { useSiblingGroups, printingFamily, isMainPrinting, PRINTING_FAMILIES } from '../lib/printing.js';
+import { fmtVol } from '../lib/format.js';
+import { PrintingChip } from './Printing.jsx';
 
 // Dedicated "Markets" screener (the filters/Option-C page): a sortable table of every card market with
 // top-mover tabs (Top/Volume/Gainers/Losers), a game filter, a rarity filter, and search. Sorting keys
@@ -30,12 +33,6 @@ function PriceCell({ market }) {
   return <>{priceE6 ? formatUsd(BigInt(priceE6)) : '—'}</>;
 }
 
-function fmtVol(usd) {
-  if (!usd || usd <= 0) return '—';
-  if (usd >= 1_000_000) return `$${(usd / 1_000_000).toFixed(1)}M`;
-  if (usd >= 1_000) return `$${(usd / 1_000).toFixed(0)}K`;
-  return `$${usd.toFixed(0)}`;
-}
 
 export function MarketsScreener({ markets, loading, onTradeMarket }) {
   const [game, setGame] = useState('all');
@@ -43,6 +40,9 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
   const [rarity, setRarity] = useState('all');
   const [search, setSearch] = useState('');
   const [showJpy, setShowJpy] = useStickyState('pokeX_showJpy', false); // persists across refresh (shared key with the sidebar toggle)
+  const [family, setFamily] = useState('all'); // option C's printing filter (mockups/printing-options.html)
+  const [mainOnly, setMainOnly] = useStickyState('gachadex_mainPrintingOnly', false);
+  const groups = useSiblingGroups(markets);
 
   const cards = useMemo(() => (markets || []).filter((m) => m.kind === 'card'), [markets]);
   // The game + JPY filters bound which rarities can appear, so derive the dropdown options from THAT
@@ -64,10 +64,12 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
   const rows = useMemo(() => {
     let r = scoped;
     if (rarity !== 'all') r = r.filter((c) => c.rarity === rarity);
+    if (family !== 'all') r = r.filter((c) => printingFamily(c) === family);
+    if (mainOnly) r = r.filter((c) => isMainPrinting(c, groups));
     const q = search.trim().toLowerCase();
     if (q) r = r.filter((c) => c.displayName.toLowerCase().includes(q));
     return [...r].sort(CARD_SORTS[sort] ?? CARD_SORTS.top);
-  }, [scoped, rarity, search, sort]);
+  }, [scoped, rarity, search, sort, family, mainOnly, groups]);
 
   return (
     <div className="screener">
@@ -113,6 +115,17 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
         </div>
       </div>
 
+      {groups.size > 0 && (
+        <div className="screener-printings" role="group" aria-label="Printing">
+          {[['all', 'All'], ...PRINTING_FAMILIES].map(([id, label]) => (
+            <button key={id} className={`pc-filter ${family === id ? 'on' : ''}`} aria-pressed={family === id} onClick={() => setFamily(id)}>{label}</button>
+          ))}
+          <button className={`screener-jpy pc-main ${mainOnly ? 'on' : ''}`} aria-pressed={mainOnly} onClick={() => setMainOnly((v) => !v)} title="Hide a card's other printings">
+            Main printing only
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <div className="screener-empty">Loading markets…</div>
       ) : (
@@ -139,7 +152,7 @@ export function MarketsScreener({ markets, loading, onTradeMarket }) {
                     <td>
                       <div className="screener-card">
                         {m.imageSmall ? <img src={m.imageSmall} alt="" className="screener-thumb" /> : <span className="screener-thumb" />}
-                        <span className="screener-name">{m.displayName}</span>
+                        <span className="screener-name">{m.displayName} <PrintingChip market={m} group={groups.get(m.tcgplayerId)} /></span>
                       </div>
                     </td>
                     <td className="num"><PriceCell market={m} /></td>

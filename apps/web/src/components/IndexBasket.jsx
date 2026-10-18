@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { formatUsd } from '@pokex/pricing';
 import { shortDate, useIndexBasket } from '../lib/indexBasket.js';
+import { useFixedPopover } from '../lib/popover.js';
 
 // Index members (rules v3, R9) — chosen mockup "B + C" (mockups/index-members-options.html):
 //   IndexBasketDrawer: Members · Upcoming · Change log for one index (opened from the Markets Indices table or the
@@ -118,41 +119,13 @@ export function IndexBasketDrawer({ market, initialTab = 'members', onClose }) {
 /** Trade-header chip for an index market: muted "Members", glowing cyan during an announced change (option C). */
 export function IndexChangeChip({ market, onOpen }) {
   const { view } = useIndexBasket(market?.kind === 'index' ? market.symbol : null);
-  const [open, setOpen] = useState(false);
-  // fixed-position box from the chip's on-screen rect, kept inside the window — a parent column's overflow can't clip it
-  const [box, setBox] = useState(null);
-  const wrap = useRef(null);
-  const chip = useRef(null);
-  const place = () => {
-    const r = wrap.current?.getBoundingClientRect();
-    if (!r) return;
-    const width = Math.min(360, window.innerWidth - 16);
-    const top = r.bottom + 6;
-    // a Top-250 change can list dozens of cards: scroll inside, so the action buttons stay reachable
-    setBox({ top, left: Math.max(8, Math.min(r.left, window.innerWidth - width - 8)), width, maxHeight: Math.max(160, window.innerHeight - top - 8) });
-  };
-  useEffect(() => {
-    if (!open) return undefined;
-    const onDoc = (e) => { if (!wrap.current?.contains(e.target)) setOpen(false); };
-    const onKey = (e) => { if (e.key === 'Escape') { setOpen(false); chip.current?.focus(); } };
-    const onMove = () => place(); // fixed-position: follow the chip (phones resize as the address bar hides)
-    document.addEventListener('pointerdown', onDoc);
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('resize', onMove);
-    window.addEventListener('scroll', onMove, true);
-    return () => {
-      document.removeEventListener('pointerdown', onDoc);
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('resize', onMove);
-      window.removeEventListener('scroll', onMove, true);
-    };
-  }, [open]);
+  const { open, setOpen, box, wrapRef, triggerRef, toggle } = useFixedPopover();
   if (market?.kind !== 'index' || !view?.governed) return null;
   const up = view.upcoming;
   if (!up) return <button className="ib-chip" onClick={() => onOpen('members')}>Members</button>;
   return (
-    <div className="ib-chip-wrap" ref={wrap}>
-      <button ref={chip} className="ib-chip live" aria-expanded={open} onClick={() => { place(); setOpen((v) => !v); }}>
+    <div className="ib-chip-wrap" ref={wrapRef}>
+      <button ref={triggerRef} className="ib-chip live" aria-expanded={open} onClick={toggle}>
         <span className="ib-chip-dot" aria-hidden />Change {shortDate(up.effectiveAt)} · +{up.adds.length} / −{up.removes.length}
       </button>
       {open && (

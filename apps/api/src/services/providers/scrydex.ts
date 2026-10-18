@@ -247,23 +247,26 @@ export interface ScrydexRaw {
  *  no Scrydex anchor (undefined → the market prices off its own tcgpl printing) rather than a guess: One Piece
  *  names never say "foil", and taking the first candidate priced Shanks OP09-004 SP Gold at the Wanted
  *  Poster's $233 (tcgpl $1,522). With no variant to go on, the first match (legacy listing paths). */
-function findVariantByProduct(card: ScrydexCard, tcgplayerId: number | null, variant?: string | null): ScrydexVariant | undefined {
+function findVariantByProduct(card: ScrydexCard, tcgplayerId: number | null, variant?: string | null, strict = false): ScrydexVariant | undefined {
   if (tcgplayerId == null) return undefined;
   const want = String(tcgplayerId);
   const candidates = (card.variants ?? []).filter((v) =>
     (v.marketplaces ?? []).some((m) => m.product_id != null && String(m.product_id) === want),
   );
-  if (candidates.length <= 1 || !variant) return candidates[0];
   const ours = normVariant(variant) ?? '';
   const exact = candidates.find((v) => normVariant(v.name) === ours);
+  // strict: OUR product carries several printing markets (P5), so a lone or same-foil candidate may be a sibling's
+  // printing (a Reverse market priced at the Holo quote) — only the exact name counts, else no Scrydex anchor
+  if (strict) return exact;
+  if (candidates.length <= 1 || !variant) return candidates[0];
   if (exact) return exact;
   const foil = ours.includes('foil');
   const sameFoil = candidates.filter((v) => (normVariant(v.name) ?? '').includes('foil') === foil);
   return sameFoil.length === 1 ? sameFoil[0] : undefined;
 }
 
-export function extractRaw(card: ScrydexCard, tcgplayerId: number | null, variant?: string | null): ScrydexRaw | null {
-  const v = findVariantByProduct(card, tcgplayerId, variant);
+export function extractRaw(card: ScrydexCard, tcgplayerId: number | null, variant?: string | null, strict = false): ScrydexRaw | null {
+  const v = findVariantByProduct(card, tcgplayerId, variant, strict);
   if (!v) return null;
   // This variant's positive raw rungs, best grade first.
   const rungs = RAW_CONDITION_ORDER.map((cond) => ({
@@ -306,8 +309,8 @@ export function extractRaw(card: ScrydexCard, tcgplayerId: number | null, varian
  *  so isBrokenRaw isn't applied here. We DO drop an inverted PSA-10 (top grade priced below a lower-grade
  *  PSA of the same card — impossible), so the displayed ladder AND the scrydexPsa10E6 anchor stay
  *  consistent and the anchor falls back to the tcgpl PSA-10. */
-export function scrydexGradedLadder(card: ScrydexCard, tcgplayerId: number | null, fxJpyUsd: number | null, marketVariant?: string | null): GradeRow[] {
-  const variant = findVariantByProduct(card, tcgplayerId, marketVariant);
+export function scrydexGradedLadder(card: ScrydexCard, tcgplayerId: number | null, fxJpyUsd: number | null, marketVariant?: string | null, strict = false): GradeRow[] {
+  const variant = findVariantByProduct(card, tcgplayerId, marketVariant, strict);
   if (!variant) return [];
   const ranged = (p: ScrydexPrice) => typeof p.low === 'number' && typeof p.high === 'number' && p.low < p.high;
   const best = new Map<string, ScrydexPrice>();
@@ -475,9 +478,9 @@ export const EMPTY_CROSS: CrossCheck = { tcgpMarket: null, ebay1d: null }; // "n
  *  card but Scrydex still prices it (Scrydex-primary keeps it tradeable instead of letting it go stale).
  *  Identity stays from OUR market row. `rawE6`/`confident` are placeholders the fetcher overwrites with
  *  the combined price/tier. */
-export function fromScrydexCard(c: ScrydexCard, t: ScrydexTracked): OracleCard {
+export function fromScrydexCard(c: ScrydexCard, t: ScrydexTracked, strict = false): OracleCard {
   const front = (c.images ?? []).find((i) => i.type === 'front') ?? (c.images ?? [])[0];
-  const variant = findVariantByProduct(c, t.tcgplayer_id, t.variant);
+  const variant = findVariantByProduct(c, t.tcgplayer_id, t.variant, strict);
   return {
     game: t.game,
     symbol: t.symbol,
@@ -545,10 +548,15 @@ export async function fetchScrydexTrackedCards(
   // 3. FX once per pass — only JP (JPY) Scrydex prices use it (decision #3).
   const fxJpyUsd = await fx();
 
+  // printing markets (P5): a product tracked as 2+ markets matches Scrydex by exact printing name only
+  const perProduct = new Map<number, number>();
+  for (const t of tracked.rows) if (t.tcgplayer_id != null) perProduct.set(t.tcgplayer_id, (perProduct.get(t.tcgplayer_id) ?? 0) + 1);
+
   return tracked.rows.flatMap((t) => {
     const sxCard = t.scrydex_card_id ? sxById.get(t.scrydex_card_id) : undefined;
     const tplCard = t.provider_card_id ? tplById.get(t.provider_card_id) : undefined;
-    const sxRaw = sxCard ? extractRaw(sxCard, t.tcgplayer_id, t.variant) : null;
+    const strict = t.tcgplayer_id != null && (perProduct.get(t.tcgplayer_id) ?? 0) > 1;
+    const sxRaw = sxCard ? extractRaw(sxCard, t.tcgplayer_id, t.variant, strict) : null;
     // Align the cross-check to the anchor's grade; a broken best grade ⇒ undefined ⇒ tcgpl NM-first (we
     // price off tcgpl's best grade instead of a downgraded Scrydex rung) (build spec §④ #3).
     const xCond = sxRaw && !sxRaw.bestGradeBroken ? SX_TO_TPL_CONDITION[sxRaw.condition] : undefined;
@@ -562,13 +570,13 @@ export async function fetchScrydexTrackedCards(
       const identity: TrackedMarket = { provider_card_id: t.provider_card_id ?? '', symbol: t.symbol, card_id: t.card_id, game: t.game, featured: t.featured };
       base = fromTplCard(tplCard, identity);
     } else if (sxCard) {
-      base = fromScrydexCard(sxCard, t);
+      base = fromScrydexCard(sxCard, t, strict);
     }
     if (!base) return []; // priced but nothing to describe it — skip rather than upsert a null display
 
     // Graded: Scrydex full ladder first (richer + free of the tcgpl eBay-median garbage); tcgpl's eBay
     // PSA-10 (carried on `base` when it came from fromTplCard) is the fallback for the index anchor.
-    const sxGradedLadder = sxCard ? scrydexGradedLadder(sxCard, t.tcgplayer_id, fxJpyUsd, t.variant) : [];
+    const sxGradedLadder = sxCard ? scrydexGradedLadder(sxCard, t.tcgplayer_id, fxJpyUsd, t.variant, strict) : [];
     const gradedE6 = scrydexPsa10E6(sxGradedLadder) ?? base.gradedE6;
 
     return [

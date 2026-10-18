@@ -1,9 +1,10 @@
+import { liveLabelFree } from '../../db/market-guards.ts';
 import { GAMES } from '@pokex/shared-types';
 import { toE6 } from '@pokex/pricing';
 import type { Db } from '../../db/client.ts';
 import { HttpError } from '../../errors.ts';
 import { ingestCard, type OracleCard } from '../oracle.ts';
-import { cardSymbol } from '../markets.ts';
+import { cardSymbol, MAIN_MARKET_ORDER } from '../markets.ts';
 import { seedMarketHistory } from './history.ts';
 import {
   fromTplCard,
@@ -206,13 +207,20 @@ export async function searchCatalog(
     sxIds.length || provIds.length || tids.length
       ? await db.query<{ id: string; sid: string | null; pid: string | null; tid: string | null }>(
           `SELECT id, scrydex_card_id AS sid, provider_card_id AS pid, tcgplayer_id::text AS tid FROM markets
-            WHERE kind = 'card' AND (scrydex_card_id = ANY($1::text[]) OR provider_card_id = ANY($2::text[]) OR tcgplayer_id = ANY($3::bigint[]))`,
+            WHERE kind = 'card' AND (scrydex_card_id = ANY($1::text[]) OR provider_card_id = ANY($2::text[]) OR tcgplayer_id = ANY($3::bigint[]))
+            ORDER BY ${MAIN_MARKET_ORDER}`,
           [sxIds, provIds, tids],
         )
       : { rows: [] };
-  const byScrydex = new Map(existing.rows.filter((r) => r.sid).map((r) => [r.sid!, r.id]));
-  const byProv = new Map(existing.rows.filter((r) => r.pid).map((r) => [r.pid!, r.id]));
-  const byTid = new Map(existing.rows.filter((r) => r.tid).map((r) => [r.tid!, r.id]));
+  // first row wins: rows come main-market first, so several printings of one card link to its main market (P5)
+  const firstBy = (key: (r: (typeof existing.rows)[number]) => string | null) => {
+    const m = new Map<string, string>();
+    for (const r of existing.rows) { const k = key(r); if (k && !m.has(k)) m.set(k, r.id); }
+    return m;
+  };
+  const byScrydex = firstBy((r) => r.sid);
+  const byProv = firstBy((r) => r.pid);
+  const byTid = firstBy((r) => r.tid);
 
   return top.map((c) => ({
     providerCardId: c.providerCardId,
@@ -236,7 +244,8 @@ export async function searchCatalog(
 
 async function findByScrydexCardId(db: Db, scrydexCardId: string): Promise<{ id: string; status: string } | null> {
   const r = await db.query<{ id: string; status: string }>(
-    `SELECT id, status FROM markets WHERE kind = 'card' AND scrydex_card_id = $1 LIMIT 1`,
+    // several printings can share a Scrydex card (P5): the product's main market, never an arbitrary one
+    `SELECT id, status FROM markets WHERE kind = 'card' AND scrydex_card_id = $1 ORDER BY ${MAIN_MARKET_ORDER} LIMIT 1`,
     [scrydexCardId],
   );
   return r.rows[0] ?? null;
@@ -245,7 +254,7 @@ async function findByScrydexCardId(db: Db, scrydexCardId: string): Promise<{ id:
 async function findByTcgplayerId(db: Db, tcgplayerId: number | null): Promise<{ id: string; status: string } | null> {
   if (tcgplayerId == null) return null;
   const r = await db.query<{ id: string; status: string }>(
-    `SELECT id, status FROM markets WHERE kind = 'card' AND tcgplayer_id = $1 LIMIT 1`,
+    `SELECT id, status FROM markets WHERE kind = 'card' AND tcgplayer_id = $1 ORDER BY ${MAIN_MARKET_ORDER} LIMIT 1`,
     [tcgplayerId],
   );
   return r.rows[0] ?? null;
@@ -254,12 +263,23 @@ async function findByTcgplayerId(db: Db, tcgplayerId: number | null): Promise<{ 
 /** Bring a retired (dead long-tail) market back: rejoin the refresh set and reset created_at so the
  *  retirement sweep gives it a fresh 30 days. created_at is ALSO the engine's "activation marker" —
  *  a fresh print (computed_at >= created_at) must land before the market can be OPENED, so the
- *  caller reprices RIGHT AFTER this; the stale pre-retirement mark can never be opened against. */
-async function reactivate(db: Db, marketId: string): Promise<void> {
-  await db.query(
-    `UPDATE markets SET status = 'active', tradeable = true, created_at = now() WHERE id = $1 AND status = 'delisted'`,
+ *  caller reprices RIGHT AFTER this; the stale pre-retirement mark can never be opened against.
+ *  Returns the market to trade: this one — or, when a live market holds its card label (the live-label guard,
+ *  db/market-guards.ts), that one; the retired row stays retired. */
+async function reactivate(db: Db, marketId: string): Promise<string> {
+  const revived = await db.query(
+    `UPDATE markets m SET status = 'active', tradeable = true, created_at = now() WHERE m.id = $1 AND m.status = 'delisted'
+        AND ${liveLabelFree('m')} RETURNING m.id`,
     [marketId],
   );
+  if (revived.rows.length) return marketId;
+  const holder = await db.query<{ id: string }>(
+    `SELECT o.id FROM markets m JOIN markets o ON o.game = m.game AND o.kind = 'card' AND o.card_id = m.card_id
+        AND o.status <> 'delisted' AND o.id <> m.id
+      WHERE m.id = $1 AND m.status = 'delisted' LIMIT 1`,
+    [marketId],
+  );
+  return holder.rows[0]?.id ?? marketId;
 }
 
 // ===========================================================================
@@ -269,7 +289,7 @@ async function reactivate(db: Db, marketId: string): Promise<void> {
 async function findExistingTcgpl(db: Db, providerCardId: string, tcgplayerId: number | null): Promise<{ id: string; status: string } | null> {
   const r = await db.query<{ id: string; status: string }>(
     `SELECT id, status FROM markets WHERE kind = 'card' AND (provider_card_id = $1 OR ($2::bigint IS NOT NULL AND tcgplayer_id = $2))
-      LIMIT 1`,
+      ORDER BY (provider_card_id = $1) DESC, ${MAIN_MARKET_ORDER} LIMIT 1`,
     [providerCardId, tcgplayerId],
   );
   return r.rows[0] ?? null;
@@ -277,8 +297,9 @@ async function findExistingTcgpl(db: Db, providerCardId: string, tcgplayerId: nu
 
 /** Re-list a delisted market on a FRESH provider price (never the stale pre-retirement one): reactivate
  *  first (resets the activation marker), then ingest the just-fetched card so its new mark beats it. */
-async function reviveTcgpl(db: Db, marketId: string, c: TplCard): Promise<void> {
-  await reactivate(db, marketId);
+async function reviveTcgpl(db: Db, marketId: string, c: TplCard): Promise<string> {
+  const use = await reactivate(db, marketId);
+  if (use !== marketId) return use;
   const card = fromTplCard(c, {
     provider_card_id: c.id,
     symbol: cardSymbol(c.game?.slug ?? '', c.id),
@@ -292,6 +313,7 @@ async function reviveTcgpl(db: Db, marketId: string, c: TplCard): Promise<void> 
   // source_observed_at, so a fresh print + mark always lands. This is a deliberate "reprice now" event.
   card.observedAt = null;
   if (card.rawE6 > 0n) await ingestCard(db, card, new Date());
+  return marketId;
 }
 
 async function ensureFromTcgpl(db: Db, client: TcgPriceLookupClient, providerCardId: string): Promise<{ marketId: string; created: boolean }> {
@@ -301,9 +323,12 @@ async function ensureFromTcgpl(db: Db, client: TcgPriceLookupClient, providerCar
   const c = await client.getCard(providerCardId, 'search');
   if (!c) throw new HttpError(404, 'card not found', 'card_not_found');
 
-  if (pre) {
-    await reviveTcgpl(db, pre.id, c);
-    return { marketId: pre.id, created: false };
+  if (pre) return { marketId: await reviveTcgpl(db, pre.id, c), created: false };
+  // a printing of an already-listed product trades on that market — search never creates a second one (P5: only
+  // discovery lists other printings, under its own rule)
+  const sameProduct = await findExistingTcgpl(db, c.id, tplTcgplayerId(c));
+  if (sameProduct) {
+    return { marketId: sameProduct.status === 'delisted' ? await reviveTcgpl(db, sameProduct.id, c) : sameProduct.id, created: false };
   }
 
   const game = c.game?.slug ?? '';
@@ -329,10 +354,7 @@ async function ensureFromTcgpl(db: Db, client: TcgPriceLookupClient, providerCar
     marketId = await ingestCard(db, card, new Date());
   } catch (e) {
     const lost = await findExistingTcgpl(db, c.id, tplTcgplayerId(c));
-    if (lost) {
-      if (lost.status === 'delisted') await reviveTcgpl(db, lost.id, c);
-      return { marketId: lost.id, created: false };
-    }
+    if (lost) return { marketId: lost.status === 'delisted' ? await reviveTcgpl(db, lost.id, c) : lost.id, created: false };
     throw e;
   }
   void seedMarketHistory(db, client, { id: marketId, providerCardId: c.id }).catch(() => {});
@@ -387,10 +409,11 @@ async function reviveScrydex(
   best: { tcgplayerId: number; raw: ScrydexRaw } | null,
   game: string,
   rate: number | null,
-): Promise<void> {
-  await reactivate(db, marketId);
+): Promise<string> {
+  const use = await reactivate(db, marketId);
+  if (use !== marketId) return use; // its card label is live on another market — trade that one
   await stampScrydexIds(db, marketId, c); // symbol-independent — always anchors THIS row on Scrydex
-  if (!best) return; // no usable price right now — the next oracle pass reprices it off the Scrydex anchor
+  if (!best) return marketId; // no usable price right now — the next oracle pass reprices it off the Scrydex anchor
   const combined = combinePrice(best.raw, EMPTY_CROSS, rate); // no tcgpl cross-check at listing time; the oracle adds it on the next refresh
   if (combined.priceUsd > 0) {
     const card = buildScrydexCard(c, best, combined.priceUsd, combined.tier === 'tradeable', game);
@@ -399,6 +422,7 @@ async function reviveScrydex(
     // the row is already reactivated + scrydex-stamped, so the next oracle pass reprices it.
     await ingestCard(db, card, new Date()).catch(() => {});
   }
+  return marketId;
 }
 
 async function ensureFromScrydex(
@@ -420,10 +444,7 @@ async function ensureFromScrydex(
   const best = bestScrydexRaw(c, rate);
 
   // Retired market the user wants back: revive on a fresh price (the listing gate is for NEW markets).
-  if (pre) {
-    await reviveScrydex(db, pre.id, c, best, game, rate);
-    return { marketId: pre.id, created: false };
-  }
+  if (pre) return { marketId: await reviveScrydex(db, pre.id, c, best, game, rate), created: false };
 
   if (!best) {
     throw new HttpError(422, 'card not listable: no TCGplayer-priced printing on Scrydex', 'below_listing_threshold');
@@ -435,11 +456,7 @@ async function ensureFromScrydex(
 
   // Canonical dedup: a printing twin of an already-listed product shares its tcgplayer_id.
   const dup = await findByTcgplayerId(db, best.tcgplayerId);
-  if (dup) {
-    if (dup.status !== 'delisted') return { marketId: dup.id, created: false };
-    await reviveScrydex(db, dup.id, c, best, game, rate);
-    return { marketId: dup.id, created: false };
-  }
+  if (dup) return { marketId: dup.status === 'delisted' ? await reviveScrydex(db, dup.id, c, best, game, rate) : dup.id, created: false };
 
   // buildScrydexCard carries scrydex_card_id/expansion_id, so the create upsert stamps them ATOMICALLY
   // with the row (no orphan window). provider_card_id stays null — the oracle anchors on scrydex_card_id.
@@ -450,10 +467,7 @@ async function ensureFromScrydex(
   } catch (e) {
     // Unique-index race (the tcgplayer_id unique index is the arbiter): the canonical market won.
     const lost = await findByTcgplayerId(db, best.tcgplayerId);
-    if (lost) {
-      if (lost.status === 'delisted') await reviveScrydex(db, lost.id, c, best, game, rate);
-      return { marketId: lost.id, created: false };
-    }
+    if (lost) return { marketId: lost.status === 'delisted' ? await reviveScrydex(db, lost.id, c, best, game, rate) : lost.id, created: false };
     throw e;
   }
   // No tcgpl provider_card_id and Scrydex has no daily-history endpoint → no chart seed; the hourly

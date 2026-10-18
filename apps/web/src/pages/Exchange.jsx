@@ -144,7 +144,7 @@ export function Exchange() {
             collapsed={sidebarCollapsed}
             setCollapsed={setSidebarCollapsed}
           />
-          <TradingView market={selected} onGoToMarket={goToMarket} />
+          <TradingView market={selected} markets={markets} onGoToMarket={goToMarket} />
           <OrderEntry market={selected} onTraded={loadMarkets} />
         </div>
       )}
@@ -173,7 +173,7 @@ export function Exchange() {
                 {selected && <MktBarPrice market={selected} />}
                 <span className="mkt-bar-caret">▾</span>
               </button>
-              <TradingView market={selected} mobile />
+              <TradingView market={selected} markets={markets} mobile onGoToMarket={goToMarket} />
               <OrderEntry market={selected} onTraded={loadMarkets} />
               <BottomPanel market={selected} onGoToMarket={goToMarket} />
             </>

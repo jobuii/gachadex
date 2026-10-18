@@ -4,6 +4,8 @@ import { indexSeries, INDEX_SERIES_LABELS, SERIES_ORDER } from '@pokex/shared-ty
 import { useRealtime, liveMarkE6 } from '../store/realtime';
 import { useAuth } from '../auth/AuthContext';
 import { useStickyState } from '../lib/useStickyState';
+import { useSiblingGroups } from '../lib/printing.js';
+import { PrintingChip } from './Printing.jsx';
 import { GAME_LIST as GAMES } from '../lib/games.js';
 import { MarketThumb } from './MarketThumb';
 import * as api from '../lib/api.js';
@@ -178,6 +180,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
   const shownIds = useMemo(() => new Set(list.map((m) => m.id)), [list]);
   const catalogRows = catalog?.filter((r) => !r.marketId || !shownIds.has(r.marketId));
   const marketById = useMemo(() => new Map(markets.map((m) => [m.id, m])), [markets]);
+  const groups = useSiblingGroups(markets); // printing markets (P5): a chip on cards listed in 2+ printings
   // After listing a catalog card, stamp its new marketId onto the result so the row flips LIST → TRADE
   // (existing is derived from r.marketId, which the cached search results otherwise never gets).
   const markListed = (providerCardId, marketId) =>
@@ -293,7 +296,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
                   <MarketThumb market={m} className="market-thumb" />
                   <div className="market-item-info">
                     <span className="market-item-name">{m.displayName}</span>
-                    <span className="market-item-set">{marketSubtitle(m)}</span>
+                    <span className="market-item-set">{marketSubtitle(m)}<PrintingChip market={m} group={groups.get(m.tcgplayerId)} /></span>
                   </div>
                 </div>
                 <div className="market-item-right">

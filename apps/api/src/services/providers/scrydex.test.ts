@@ -569,6 +569,14 @@ test('extractRaw: a TCGplayer product shared by Normal AND Foil prices OUR varia
   assert.equal(extractRaw(rh, 7, 'Reverse Holofoil')!.market, 9, 'exact name match wins over foil-ness');
 });
 
+test('extractRaw strict (a product listed as 2+ printing markets): only the exact printing — never a lone or same-foil one', () => {
+  // Scrydex lists only the Holo on product 7; our Reverse Holo sibling must not take the Holo's $40 (P5 review, C2)
+  const c = card([{ name: 'holofoil', marketplaces: [{ name: 'tcgplayer', product_id: '7' }], prices: [raw('NM', 40)] }]);
+  assert.equal(extractRaw(c, 7, 'Reverse Holofoil')!.market, 40, 'one market on the product: the lone printing, as before');
+  assert.equal(extractRaw(c, 7, 'Reverse Holofoil', true), null, 'siblings: no exact name → no Scrydex anchor');
+  assert.equal(extractRaw(c, 7, 'Holofoil', true)!.market, 40);
+});
+
 test('extractRaw: several printings on one product and none matches OUR printing → no Scrydex anchor, never a guess', () => {
   // Live 2026-10-18: Shanks OP09-004 (SP)(Gold), product 657442, was priced at the Wanted Poster's $232.97
   // (tcgpl $1,522). One Piece variant names never contain "foil", so the foil-ness tie-break fell to candidates[0].

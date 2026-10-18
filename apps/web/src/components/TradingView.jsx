@@ -10,6 +10,8 @@ import { useTheme } from '../store/theme';
 import { BottomPanel } from './BottomPanel';
 import { MarketThumb } from './MarketThumb';
 import { IndexChangeChip, IndexBasketDrawer } from './IndexBasket.jsx';
+import { PrintingSwitcher } from './Printing.jsx';
+import { useSiblingGroups } from '../lib/printing.js';
 import * as api from '../lib/api.js';
 
 const TIMEFRAMES = ['1D', '1W', '1M', '3M', '1Y'];
@@ -69,7 +71,7 @@ const CHART_MIN = 150;
 const CHART_CHROME = 190;
 const clampPanel = (h) => Math.min(Math.max(h, PANEL_MIN), Math.max(PANEL_MIN + 100, window.innerHeight - CHART_CHROME - CHART_MIN));
 
-export function TradingView({ market, mobile = false, onGoToMarket }) {
+export function TradingView({ market, markets, mobile = false, onGoToMarket }) {
   const elRef = useRef(null);
   const chartRef = useRef(null);
   const mainRef = useRef(null);
@@ -89,6 +91,7 @@ export function TradingView({ market, mobile = false, onGoToMarket }) {
   const [panelHeight, setPanelHeight] = useState(() => (mobile ? 0 : clampPanel(Number(localStorage.getItem('gachadex_panel_h')) || 210)));
   const [dragging, setDragging] = useState(false);
   const [basketTab, setBasketTab] = useState(null); // index members drawer (index markets only), opened from the header chip
+  const groups = useSiblingGroups(markets); // printing markets (P5): the switcher lists this card's other printings
 
   const marks = useRealtime((s) => s.marks);
   const oi = useRealtime((s) => s.oi);
@@ -314,6 +317,7 @@ export function TradingView({ market, mobile = false, onGoToMarket }) {
           </div>
         )}
         <IndexChangeChip market={market} onOpen={(tab) => setBasketTab({ marketId: market?.id, tab })} />
+        <PrintingSwitcher market={market} group={groups.get(market?.tcgplayerId)} onGoToMarket={onGoToMarket} />
         {basketTab && basketTab.marketId === market?.id && (
           <IndexBasketDrawer market={market} initialTab={basketTab.tab} onClose={() => setBasketTab(null)} />
         )}

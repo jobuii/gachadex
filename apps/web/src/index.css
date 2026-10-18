@@ -2173,6 +2173,39 @@ td.addr:hover { text-decoration: underline; }
 .ib-pop-actions { display: flex; gap: 0.5rem; }
 @media (max-width: 640px) { .ib-drawer { width: 100vw; } .ib-chg { grid-template-columns: 1fr; } }
 
+/* Printing markets (2026-10-18 plan P5, mockups/printing-options.html): option C's chip after a card's name + the screener's
+   printing filter; option A's switcher on the trade view. One hue per printing family, from each skin's tokens. */
+.pc { display: inline-flex; align-items: center; height: 1.05rem; padding: 0 0.32rem; margin-left: 0.25rem; vertical-align: 0.08em;
+  font-family: var(--font-num, monospace); font-size: 0.55rem; font-weight: 500; line-height: 1; white-space: nowrap; border-radius: 4px;
+  color: var(--pc); border: 1px solid color-mix(in srgb, var(--pc) 55%, transparent); background: color-mix(in srgb, var(--pc) 10%, transparent); }
+.pc-normal { --pc: var(--text-muted); }
+.pc-rev { --pc: var(--cyan, var(--accent-lit)); }
+.pc-holo { --pc: var(--accent-lit); }
+.pc-first { --pc: var(--gold); }
+.pc-foil { --pc: var(--pink, var(--danger)); }
+.pc-alt { --pc: var(--success); }
+.screener-printings { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; padding: 0.5rem 1rem;
+  border-bottom: var(--border-w, 1px) solid var(--border); background: var(--bg-2); } /* a second row of the .screener-bar */
+.pc-filter { background: var(--bg-3); border: var(--border-w, 1px) solid var(--border); color: var(--text-muted); border-radius: 999px;
+  font-family: var(--font-num, monospace); font-size: 0.6rem; padding: 0.2rem 0.6rem; cursor: pointer; }
+.pc-filter.on { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--bg-3)); }
+.screener-printings .pc-main { margin-left: auto; }
+.pc-switch-btn { padding-left: 0.15rem; gap: 0.3rem; } /* on .ib-chip — the trade-header chip base */
+.pc-switch-n { font-family: var(--font-num, monospace); font-size: 0.58rem; white-space: nowrap; }
+.ib-pop.pc-pop { padding: 0; } /* on .ib-pop — the shared fixed popover */
+.pc-pop-h { font-size: 0.6rem; color: var(--text-muted); padding: 0.55rem 0.75rem; border-bottom: 1px solid var(--border); }
+.pc-table { width: 100%; border-collapse: collapse; font-size: 0.66rem; }
+.pc-table th { text-align: left; font-size: 0.52rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); font-weight: 500;
+  padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--border); }
+.pc-table td { padding: 0.42rem 0.6rem; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); color: var(--text); cursor: pointer; }
+.pc-table td.up { color: var(--success); } .pc-table td.down { color: var(--danger); } .pc-table td.muted { color: var(--text-muted); }
+.pc-table .num { text-align: right; font-family: var(--font-num, monospace); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pc-table tr:hover td, .pc-table tr:focus-visible td { background: var(--bg-3); outline: none; }
+.pc-table tr.on td { background: color-mix(in srgb, var(--accent) 12%, var(--bg-2)); cursor: default; }
+.pc-table .pc { margin-left: 0; }
+.pc-full { color: var(--text-muted); font-size: 0.6rem; }
+@media (max-width: 640px) { .pc-table th:nth-child(4), .pc-table td:nth-child(4) { display: none; } .pc-full { display: none; } }
+
 /* ─── Docs page (/docs) — full-width, gachadex skin (echoes .main-grid + .sidebar) ─── */
 .docs { min-height: 100vh; background: var(--bg); color: var(--text); font-family: var(--font-chat); }
 .docs-top { position: sticky; top: 0; z-index: 100; height: 64px; display: flex; align-items: center; justify-content: space-between;

@@ -22,7 +22,8 @@ const E6 = 1_000_000n;
 const GUARD = (corroborated: boolean) => ({ corroborated, clampBps: 2500 });
 
 const newMarket = async (name = 'Guard Card') => {
-  const id = await upsertCardMarket(db, { symbol: `mtg:g-${randomUUID().slice(0, 8)}`, cardId: 'g', displayName: name, variant: 'Standard', imageSmall: 'i' });
+  const sym = `mtg:g-${randomUUID().slice(0, 8)}`;
+  const id = await upsertCardMarket(db, { symbol: sym, cardId: sym, displayName: name, variant: 'Standard', imageSmall: 'i' }); // one live card label per market
   return (await getMarketById(db, id))!;
 };
 const fresh = (id: string) => getMarketById(db, id).then((m) => m!); // reload so mark_clamped reflects the last write (as ingestCard does)
@@ -122,7 +123,7 @@ test('markGuardsReport surfaces a clamped market (candidate vs adopted, gap %) +
 // --- end to end: the ingest path drives the guard only for a provider that sets markCorroborated ---
 type OracleCardT = import('./oracle.ts').OracleCard;
 const card = (over: Partial<OracleCardT> & Pick<OracleCardT, 'symbol' | 'rawE6'>): OracleCardT => ({
-  game: 'mtg', cardId: 'gi', displayName: 'Ingest Guard #1', variant: 'Standard', imageSmall: 'i', confident: true, ...over,
+  game: 'mtg', cardId: over.symbol, displayName: 'Ingest Guard #1', variant: 'Standard', imageSmall: 'i', confident: true, ...over,
 });
 
 test('ingest: a Scrydex-style card (markCorroborated set) clamps end-to-end and surfaces markStabilizing', async () => {

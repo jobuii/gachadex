@@ -220,8 +220,23 @@ export async function ingestScopedCards(db: Db, cards: OracleCard[]): Promise<nu
   const pinnedRows = await db.query<{ id: string }>(`SELECT id FROM markets WHERE price_pinned`);
   const pinned = new Set(pinnedRows.rows.map((r) => r.id));
   const at = new Date();
-  for (const c of priced) await ingestCard(db, c, at, pinned, feedUpsertOverrides());
-  return priced.length;
+  return (await ingestEach(db, priced, at, pinned)).length;
+}
+
+/** ingestCard for each card, ISOLATED: one card's database error (e.g. an identity another market holds) is logged and
+ *  skipped — it never stops the rest of the pass, the graded write or the indices, and the next pass would only fail on
+ *  it again. Returns the cards that landed. */
+async function ingestEach(db: Db, cards: OracleCard[], at: Date, pinned: Set<string>): Promise<OracleCard[]> {
+  const ok: OracleCard[] = [];
+  for (const c of cards) {
+    try {
+      await ingestCard(db, c, at, pinned, feedUpsertOverrides());
+      ok.push(c);
+    } catch (e) {
+      console.error(`[oracle] ${c.symbol}: not priced this pass — ${(e as Error).message}`);
+    }
+  }
+  return ok;
 }
 
 /** Re-price every tracked market in the given Scrydex expansions (the prices.raw_updated webhook, §8):
@@ -251,13 +266,14 @@ export async function ingest(
   gradedFetcher: GradedFetcher | null = config.justtcgApiKey ? fetchGradedPrice : null,
 ): Promise<{ cards: number; indices: number; graded: number }> {
   const passObservedAt = new Date();
-  const priced = (await (fetcher ?? primaryFetcher(db))()).filter((c) => c.rawE6 > 0n);
+  const fetched = (await (fetcher ?? primaryFetcher(db))()).filter((c) => c.rawE6 > 0n);
 
   // Operator-pinned markets carry a manual price (ROADMAP §2) — the auto-oracle never overwrites them.
   const pinnedRows = await db.query<{ id: string }>(`SELECT id FROM markets WHERE price_pinned`);
   const pinned = new Set(pinnedRows.rows.map((r) => r.id));
 
-  for (const c of priced) await ingestCard(db, c, passObservedAt, pinned, feedUpsertOverrides());
+  // a card that failed to land is missing from the baskets this pass (carried flat, as any missing member)
+  const priced = await ingestEach(db, fetched, passObservedAt, pinned);
 
   // Index baskets are PER-GAME and FEATURED-ONLY (P4): the tracked universe (everything priced above)
   // and the index constituents are deliberately distinct sets, so long-tail on-demand markets can never
@@ -296,13 +312,19 @@ export async function ingest(
     const top = list.sort(byPriceDesc).slice(0, config.gradedConstituents);
     const extra = gradedMembers ? basketCards.filter((c) => c.game === game && c.productType === 'single' && gradedMembers.has(c.cardId) && !top.includes(c)) : [];
     for (const b of [...top, ...extra]) {
-      if (b.gradedE6 == null && gradedFetcher) {
-        const g = await gradedFetcher(oracleByCard.get(b.cardId)!);
-        if (g != null) b.gradedE6 = toE6(g); // non-positive values are dropped by the guard below + in buildBaskets
-      }
-      if (b.gradedE6 != null && b.gradedE6 > 0n) {
-        await db.query(`UPDATE markets SET graded_psa10_e6=$1 WHERE card_id=$2 AND kind='card'`, [b.gradedE6.toString(), b.cardId]);
-        gradedTotal++;
+      try {
+        if (b.gradedE6 == null && gradedFetcher) {
+          const g = await gradedFetcher(oracleByCard.get(b.cardId)!);
+          if (g != null) b.gradedE6 = toE6(g); // non-positive values are dropped by the guard below + in buildBaskets
+        }
+        if (b.gradedE6 != null && b.gradedE6 > 0n) {
+          // live markets only: a card label is unique among them (db/market-guards.ts), so this is exactly one market —
+          // a retired market that once shared the label (a delisted jumbo) no longer gets another printing's PSA-10
+          await db.query(`UPDATE markets SET graded_psa10_e6=$1 WHERE card_id=$2 AND kind='card' AND status <> 'delisted'`, [b.gradedE6.toString(), b.cardId]);
+          gradedTotal++;
+        }
+      } catch (e) {
+        console.error(`[oracle] graded ${b.cardId}: ${(e as Error).message}`);
       }
     }
   }
@@ -312,7 +334,7 @@ export async function ingest(
   await db.query(
     `INSERT INTO graded_prints(market_id, graded_e6)
      SELECT m.id, u.g FROM unnest($1::text[], $2::bigint[]) AS u(card_id, g)
-       JOIN markets m ON m.card_id = u.card_id AND m.kind = 'card'
+       JOIN markets m ON m.card_id = u.card_id AND m.kind = 'card' AND m.status <> 'delisted'
       WHERE u.g IS DISTINCT FROM (SELECT p.graded_e6 FROM graded_prints p WHERE p.market_id = m.id ORDER BY p.id DESC LIMIT 1)
          OR NOT EXISTS (SELECT 1 FROM graded_prints p WHERE p.market_id = m.id)`,
     [singles.map((c) => c.cardId), singles.map((c) => (c.gradedE6 != null && c.gradedE6 > 0n ? c.gradedE6.toString() : null))],
@@ -329,8 +351,13 @@ export async function ingest(
     if (members.length > 0) {
       // data exists -> the index is (or becomes) live; this is how OP/MTG indices light up post-discovery.
       // A catalog-GATED tier (sealed) is built + listed but never auto-flipped tradeable: an operator lists it.
-      await buildIndex(db, idx, members, cur, passObservedAt, pinned);
-      indices++;
+      try {
+        await buildIndex(db, idx, members, cur, passObservedAt, pinned);
+        indices++;
+      } catch (e) {
+        // one index's error never skips the others; this one keeps its last level and chains on next pass
+        console.error(`[oracle] index ${idx.game}:${idx.slug}: ${(e as Error).message}`);
+      }
     } else if (!idx.tradeable) {
       // No data this pass for a catalog-gated tier: make sure it's listed (inserted untradeable if new) but NEVER
       // downgrade one that's already live — an empty pass (e.g. every card of a game stale for 36h) must not flip a

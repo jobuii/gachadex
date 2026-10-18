@@ -313,8 +313,15 @@ ALTER TABLE markets ADD COLUMN IF NOT EXISTS tcgplayer_id BIGINT;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS provider_card_id TEXT;
 -- One market per provider card / per TCGplayer product (partial: legacy rows are NULL until backfilled).
 -- This is the duplicate-market guard: a second create for the same physical card must conflict, not insert.
+-- With PRINTING_MARKETS_ENABLED it becomes one per (product, printing) — db/market-guards.ts.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_provider_card ON markets(provider_card_id) WHERE provider_card_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_tcgplayer ON markets(tcgplayer_id) WHERE tcgplayer_id IS NOT NULL;
+-- A card's printing as a key ('normal', 'reverseholofoil', 'firsteditionholofoil', 'foil'…): normVariant of the provider's
+-- variant name (providers/backfill.ts), kept by the upsert and backfilled by db/market-guards.ts.
+ALTER TABLE markets ADD COLUMN IF NOT EXISTS printing TEXT;
+-- One market per (TCGplayer product, printing): the guard printing markets (P5) live under. While
+-- PRINTING_MARKETS_ENABLED is off the stricter idx_markets_tcgplayer above still holds (db/market-guards.ts).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_tcgplayer_printing ON markets(tcgplayer_id, COALESCE(printing, '')) WHERE tcgplayer_id IS NOT NULL;
 ALTER TABLE markets ADD COLUMN IF NOT EXISTS featured BOOLEAN NOT NULL DEFAULT false;
 -- What the product is (services/product-type.ts): 'single' | 'sealed' | 'other' (e.g. Pokémon Code Card).
 -- Card indices hold singles only; sealed gets its own per-game basket. Set on every provider upsert from the
