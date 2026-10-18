@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import type { Db, Queryer } from '../db/client.ts';
 import { tryAcquireLease, releaseLease, ORACLE_INGEST_LEASE } from './lease.ts';
 
-export type RepairKind = 'rebuild' | 'cleanup' | 'backfill';
+export type RepairKind = 'rebuild' | 'cleanup' | 'backfill' | 'printing';
 
 export const newRepairRunId = (kind: RepairKind) => `${kind}-${new Date().toISOString()}-${randomUUID().slice(0, 8)}`;
 
