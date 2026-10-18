@@ -1,5 +1,5 @@
 import type { Db } from '../db/client.ts';
-import { cardSymbol, upsertCardMarket } from './markets.ts';
+import { cardSymbol, upsertCardMarket, withFeaturedSource } from './markets.ts';
 import { toCardUpsert } from './oracle.ts';
 import { getDefaultScrydexClient, scrydexSlug, fromScrydexCard, type ScrydexClient, type ScrydexTracked } from './providers/scrydex.ts';
 import { getDefaultClient, fromTplCard, type TcgPriceLookupClient, type TrackedMarket } from './providers/tcgpricelookup.ts';
@@ -181,7 +181,7 @@ export async function applyUniverse(
   // derivation, so an existing tcgpl-priceable market is never wrongly hidden if the new index row
   // happens to lack a tcgpl price.
   for (const m of updates) {
-    await db.query(
+    await withFeaturedSource(db, 'universe', (q) => q.query(
       // Fill provider_card_id if it was missing (a prior Scrydex-only market that now has a tcgpl match)
       // so it becomes tcgpl-priceable + visible; requires_scrydex reflects the POST-fill value (Postgres
       // evaluates every SET RHS against the OLD row, so re-derive from COALESCE here, not the bare column).
@@ -190,7 +190,7 @@ export async function applyUniverse(
          provider_card_id=COALESCE(provider_card_id, $4),
          requires_scrydex=(COALESCE(provider_card_id, $4) IS NULL), jpy=$5 WHERE tcgplayer_id=$1`,
       [m.tcgplayerId, m.scrydexCardId, m.scrydexExpansionId, m.tcgplCardId, m.reason === 'jpy-floor'],
-    );
+    ));
     result.updated++;
   }
   log(`re-featured ${result.updated} existing markets`);
@@ -214,7 +214,7 @@ export async function applyUniverse(
         scrydex_card_id: m.scrydexCardId, provider_card_id: m.tcgplCardId ?? null,
         symbol: cardSymbol(game, providerId), card_id: providerId, game, tcgplayer_id: m.tcgplayerId, featured: true,
       };
-      const id = await upsertCardMarket(db, { ...toCardUpsert(fromScrydexCard(card, t)), featured: true });
+      const id = await withFeaturedSource(db, 'universe', (q) => upsertCardMarket(q, { ...toCardUpsert(fromScrydexCard(card, t)), featured: true }));
       await db.query(`UPDATE markets SET scrydex_card_id=$2, scrydex_expansion_id=$3, requires_scrydex=(provider_card_id IS NULL), jpy=$4 WHERE id=$1`,
         [id, m.scrydexCardId, m.scrydexExpansionId, m.reason === 'jpy-floor']);
       result.created++;
@@ -226,7 +226,7 @@ export async function applyUniverse(
       const c = cards.get(m.tcgplCardId);
       if (!c) { result.fetchFailures++; continue; }
       const t: TrackedMarket = { provider_card_id: c.id, symbol: cardSymbol(m.game, c.id), card_id: c.id, game: m.game, featured: true };
-      const id = await upsertCardMarket(db, { ...toCardUpsert(fromTplCard(c, t)), featured: true });
+      const id = await withFeaturedSource(db, 'universe', (q) => upsertCardMarket(q, { ...toCardUpsert(fromTplCard(c, t)), featured: true }));
       await db.query(`UPDATE markets SET scrydex_card_id=COALESCE($2, scrydex_card_id), requires_scrydex=(provider_card_id IS NULL), jpy=$3 WHERE id=$1`,
         [id, m.scrydexCardId, m.reason === 'jpy-floor']);
       result.created++;
@@ -236,8 +236,8 @@ export async function applyUniverse(
 
   // 3. un-feature drop-outs — status/tradeable untouched, so they keep pricing (open-position-safe)
   if (dropTids.length) {
-    await db.query(`UPDATE markets SET featured=false WHERE kind='card' AND tcgplayer_id = ANY($1)`, [dropTids]);
-    result.unfeatured = dropTids.length;
+    const r = await withFeaturedSource(db, 'universe', (q) => q.query(`UPDATE markets SET featured=false WHERE kind='card' AND tcgplayer_id = ANY($1) AND id NOT IN (SELECT market_id FROM index_locked_markets) RETURNING id`, [dropTids]));
+    result.unfeatured = r.rows.length; // index members / pending additions / reserves stay featured (R7)
   }
   log(`un-featured ${result.unfeatured} drop-outs`);
   return result;

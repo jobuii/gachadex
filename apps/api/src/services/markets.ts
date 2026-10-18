@@ -94,6 +94,15 @@ export function cardSymbol(game: string, providerCardId: string): string {
   return `${game}:${providerCardId}`;
 }
 
+/** Run `fn` in one transaction tagged with WHO is changing `featured`: the featured_events trigger (schema.sql) records
+ *  this source with each flip. The setting is transaction-local, so it can't leak to other queries on the connection. */
+export async function withFeaturedSource<T>(db: Db, source: string, fn: (q: Queryer) => Promise<T>): Promise<T> {
+  return db.tx(async (q) => {
+    await q.query(`SELECT set_config('gachadex.featured_source', $1, true)`, [source]);
+    return fn(q);
+  });
+}
+
 export async function upsertCardMarket(q: Queryer, opts: CardUpsert): Promise<string> {
   const id = randomUUID();
   const meta = opts.metadata != null ? JSON.stringify(opts.metadata) : null;

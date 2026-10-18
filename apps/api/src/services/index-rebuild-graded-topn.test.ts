@@ -96,7 +96,7 @@ test('a card that goes stale (no fresh raw print) is a leaver whose PSA-10 move 
   await reset();
   await ingest(db, async () => [oc('a', 100, t(80), 1000), oc('b', 50, t(80), 500)]);
   // That pass happened 3 days ago: age everything it wrote, so a's raw print is now beyond INDEX_FRESH_MS.
-  for (const [tbl, cols] of [['oracle_prices', ['ingested_at', 'source_observed_at']], ['marks', ['computed_at']], ['graded_prints', ['observed_at']]] as const) {
+  for (const [tbl, cols] of [['oracle_prices', ['ingested_at', 'source_observed_at']], ['marks', ['computed_at']], ['graded_prints', ['observed_at']], ['featured_events', ['at']], ['market_status_events', ['at']]] as const) {
     await db.query(`UPDATE ${tbl} SET ${cols.map((c) => `${c} = ${c} - interval '3 days'`).join(', ')}`);
   }
   const aged = new Date(t(80).getTime() - 3 * 86_400_000); // a's provider snapshot, re-served unchanged → no new print

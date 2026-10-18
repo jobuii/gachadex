@@ -196,6 +196,13 @@ export const config = {
   // EVER changed price (every sealed price is a frozen single listing) — a Sealed index would be a flat 1000
   // line. Sealed is still kept OUT of the card tiers either way. Turn on once a moving sealed price source exists.
   sealedIndexEnabled: process.env.SEALED_INDEX_ENABLED === 'true',
+  // Index membership rules v3 (index-rules.ts / index-membership.ts; 2026-10-18 plan): monthly change dates with an
+  // FTSE-style buffer, removal between dates only for a cause, reserve replacements, public change log. OFF = the old
+  // rule (re-slice top-N every pass). On launch the member lists start from the live baskets (no jump).
+  indexRulesV3: process.env.INDEX_RULES_V3 === 'true',
+  indexSeasoningDays: num('INDEX_SEASONING_DAYS', 30), // R3: first live price at least this old to join
+  indexStaleRemoveDays: num('INDEX_STALE_REMOVE_DAYS', 14), // R5: no fresh price (or Graded: no PSA-10) this long → removed
+  indexNoticeHours: num('INDEX_NOTICE_HOURS', 72), // R1: a change takes effect at least this long after it is published
 
   // Resting orders (limit / SL / TP — docs/limit-stop-orders-spec.md). OFF by default: ships dark, the
   // routes + the trigger loop both no-op until RESTING_ORDERS_ENABLED=true. The sweep runs on its OWN

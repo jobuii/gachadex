@@ -10,6 +10,8 @@ import { fetchTrackedCards } from './providers/tcgpricelookup.ts';
 import { fetchScrydexTrackedCards } from './providers/scrydex.ts';
 import { chainStep, weightingOf, type ConstituentPrice } from './index-weighting.ts';
 import { buildBaskets, byPriceDesc, type BasketCard } from './index-baskets.ts';
+import { runIndexRules, retireIndexRules } from './index-membership.ts';
+import { basketKey } from './index-rules.ts';
 import type { ProductType } from './product-type.ts';
 
 /**
@@ -158,6 +160,14 @@ function printPayload(c: OracleCard): unknown {
   return { ...base, gradedE6: c.gradedE6.toString() };
 }
 
+/** Upsert overrides for a price pass. The Scrydex/tcgpl fetchers carry each market's `featured` as they READ it at
+ *  the start of the pass, only so the pass can pick baskets — writing it back would undo a discovery rebalance that
+ *  landed mid-pass (2026-10-17: a webhook re-price ran 3 min after the Pokémon apply). So those passes leave the
+ *  stored flag alone. The legacy pokemontcg feed IS its own featured list (it stamps every card it returns). */
+function feedUpsertOverrides(): Partial<CardUpsert> | undefined {
+  return config.oraclePrimary === 'pokemontcg' ? undefined : { featured: undefined };
+}
+
 export async function ingestCard(
   db: Db,
   c: OracleCard,
@@ -210,7 +220,7 @@ export async function ingestScopedCards(db: Db, cards: OracleCard[]): Promise<nu
   const pinnedRows = await db.query<{ id: string }>(`SELECT id FROM markets WHERE price_pinned`);
   const pinned = new Set(pinnedRows.rows.map((r) => r.id));
   const at = new Date();
-  for (const c of priced) await ingestCard(db, c, at, pinned);
+  for (const c of priced) await ingestCard(db, c, at, pinned, feedUpsertOverrides());
   return priced.length;
 }
 
@@ -247,7 +257,7 @@ export async function ingest(
   const pinnedRows = await db.query<{ id: string }>(`SELECT id FROM markets WHERE price_pinned`);
   const pinned = new Set(pinnedRows.rows.map((r) => r.id));
 
-  for (const c of priced) await ingestCard(db, c, passObservedAt, pinned);
+  for (const c of priced) await ingestCard(db, c, passObservedAt, pinned, feedUpsertOverrides());
 
   // Index baskets are PER-GAME and FEATURED-ONLY (P4): the tracked universe (everything priced above)
   // and the index constituents are deliberately distinct sets, so long-tail on-demand markets can never
@@ -262,6 +272,12 @@ export async function ingest(
     eligible: !!c.featured && eligible.has(c.cardId),
   }));
 
+  // Index rules v3: launch / publish / apply / remove-for-cause BEFORE building, so a change lands between passes.
+  // Switched off: any open member lists are closed (old rule, no locks; a later switch-on relaunches without a jump).
+  let members: Map<string, Set<string>> | undefined;
+  if (config.indexRulesV3) members = await runIndexRules(db, passObservedAt);
+  else await retireIndexRules(db, passObservedAt);
+
   // Graded (PSA-10) prices for the top-N singles per game — powers the Graded index + per-card graded panel.
   // Providers that carry graded inline (Scrydex ladder / tcgpl) need no extra fetch; the gradedFetcher
   // (JustTCG) is the fallback for top-N cards without it. Resolved here so buildBaskets stays pure.
@@ -274,8 +290,12 @@ export async function ingest(
     singlesByGame.set(c.game, list);
   }
   let gradedTotal = 0;
-  for (const list of singlesByGame.values()) {
-    for (const b of list.sort(byPriceDesc).slice(0, config.gradedConstituents)) {
+  for (const [game, list] of singlesByGame) {
+    // the raw top N, plus (rules v3) every current Graded member — it may rank below N on raw price yet stay a member
+    const gradedMembers = members?.get(basketKey(game, 'graded'));
+    const top = list.sort(byPriceDesc).slice(0, config.gradedConstituents);
+    const extra = gradedMembers ? basketCards.filter((c) => c.game === game && c.productType === 'single' && gradedMembers.has(c.cardId) && !top.includes(c)) : [];
+    for (const b of [...top, ...extra]) {
       if (b.gradedE6 == null && gradedFetcher) {
         const g = await gradedFetcher(oracleByCard.get(b.cardId)!);
         if (g != null) b.gradedE6 = toE6(g); // non-positive values are dropped by the guard below + in buildBaskets
@@ -303,6 +323,7 @@ export async function ingest(
     gradedConstituents: config.gradedConstituents,
     sealedEnabled: config.sealedIndexEnabled,
     sealedMin: config.sealedIndexMinConstituents,
+    members,
   });
   for (const { idx, members, cur } of baskets) {
     if (members.length > 0) {
@@ -373,6 +394,10 @@ async function buildIndex(
   // transaction: split, a crash between them would chain the old level off the new snapshot (a lost pass move).
   const recorded = await db.tx(async (q) => {
     await writeIndexSnapshot(q, marketId, members);
+    await q.query(
+      `INSERT INTO index_pass_log(market_id, pass_at, members, missing, outliers) VALUES($1, $2, $3, $4, $5)`,
+      [marketId, observedAt, members.map((m) => m.cardId), step.missingIds, step.outliers],
+    );
     return recordOracle(q, marketId, indexValueE6, observedAt, {
       kind: 'index',
       method: weighting,

@@ -8,6 +8,7 @@ import { getDefaultScrydexClient } from '../services/providers/scrydex.ts';
 import { authenticate } from '../plugins/auth.ts';
 import { config, catalogSearchEnabled, searchAndBetActive } from '../config.ts';
 import { rl } from './_ratelimit.ts';
+import { indexBasketView } from '../services/index-membership.ts';
 import { HttpError } from '../errors.ts';
 
 const TF_DAYS: Record<string, number> = { '1D': 1, '1W': 7, '1M': 30, '3M': 90, '1Y': 365 };
@@ -32,6 +33,15 @@ export async function marketRoutes(app: FastifyInstance): Promise<void> {
   // Time-windowed stats (1w / 1m / YTD % change + 52w high/low) per index market, for the Markets
   // "Indices" overview table. Public + cheap (indices are few); the live price + 24h come from /markets.
   app.get('/markets/index-overview', async () => ({ indices: await indexOverview(await getDb()) }));
+
+  // Index rules v3 (R9): an index's member list, its announced change and the change log. Public + cheap.
+  app.get('/markets/index-basket', async (req) => {
+    const { symbol } = (req.query ?? {}) as { symbol?: string };
+    if (typeof symbol !== 'string' || !/^INDEX:[a-z0-9:-]{1,60}$/.test(symbol)) throw new HttpError(400, 'symbol required, e.g. INDEX:top-100', 'bad_symbol');
+    const view = await indexBasketView(await getDb(), symbol);
+    if (!view) throw new HttpError(404, 'index not found');
+    return view;
+  });
 
   // Catalogue search (read-only) is live once the feature flag is on + a search-capable provider drives
   // the oracle — it does NOT depend on the NAV gates (it browses, it doesn't create a market). Routing

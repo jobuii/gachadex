@@ -82,6 +82,7 @@ test('apply rewrites a corrupted history back to the methodology, rescales marks
 test('a day with no pass gets a point ONLY when fresh card data exists for it — never invented past the fresh window', async () => {
   // Shift the three passes 6 days back: the days between them and today have no pass.
   await db.query(`UPDATE oracle_prices SET source_observed_at = source_observed_at - interval '6 days', ingested_at = ingested_at - interval '6 days'`);
+  await db.query(`UPDATE featured_events SET at = at - interval '6 days'`); // the cards were featured when those passes ran
   const lastReal = (await db.query<{ t: Date }>(`SELECT max(ingested_at) AS t FROM oracle_prices`)).rows[0].t.getTime();
   await ingest(db, async () => [oc('a', 120), oc('b', 30), oc('c', 1000)]); // today's pass
   const stalePoints = (plan: Awaited<ReturnType<typeof planIndexRebuild>>) =>

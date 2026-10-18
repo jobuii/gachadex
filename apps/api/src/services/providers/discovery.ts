@@ -1,6 +1,6 @@
 import { config } from '../../config.ts';
 import type { Db } from '../../db/client.ts';
-import { cardSymbol, upsertCardMarket } from '../markets.ts';
+import { cardSymbol, upsertCardMarket, withFeaturedSource } from '../markets.ts';
 import { toCardUpsert } from '../oracle.ts';
 import { rawPriceUsd, fromTplCard, tplTcgplayerId, hasLiquiditySignal, MIN_LIST_PRICE_USD, type TcgPriceLookupClient, type TrackedMarket } from './tcgpricelookup.ts';
 import { productTypeOf, type ProductType } from '../product-type.ts';
@@ -192,7 +192,7 @@ export async function discoverGame(
       byId.get(c.id) ?? { provider_card_id: c.id, symbol: cardSymbol(game, c.id), card_id: c.id, game, featured: true };
     const oc = fromTplCard(c, t);
     try {
-      await upsertCardMarket(db, { ...toCardUpsert(oc), featured: true });
+      await withFeaturedSource(db, 'discovery', (q) => upsertCardMarket(q, { ...toCardUpsert(oc), featured: true }));
       // no oracle print here — the refresh loop prices new markets on its next pass
     } catch {
       // unique-violation (identity already claimed by another market) — skip this card, never die
@@ -212,11 +212,15 @@ export async function discoverGame(
     [game],
   );
   // drop-outs leave the basket but stay tracked + priced
-  await db.query(
-    `UPDATE markets SET featured = false
-      WHERE game = $1 AND kind = 'card' AND featured
-        AND (provider_card_id IS NULL OR provider_card_id != ALL($2))`,
-    [game, topIds],
+  await withFeaturedSource(db, 'discovery', (q) =>
+    q.query(
+      // R7 (index rules v3): never a current index member, announced addition or reserve — they stay featured + priced
+      `UPDATE markets SET featured = false
+        WHERE game = $1 AND kind = 'card' AND featured
+          AND (provider_card_id IS NULL OR provider_card_id != ALL($2))
+          AND id NOT IN (SELECT market_id FROM index_locked_markets)`,
+      [game, topIds],
+    ),
   );
   await clearState(db, game);
   log(`featured rebalanced: ${top.length} cards for ${game}`);
@@ -233,6 +237,7 @@ export async function retireDeadMarkets(db: Db, retireAfterDays = config.retireA
       WHERE m.kind = 'card' AND m.featured = false AND m.status = 'active'
         AND m.created_at < now() - ($1 || ' days')::interval
         AND NOT EXISTS (SELECT 1 FROM positions p WHERE p.market_id = m.id AND p.status = 'open')
+        AND m.id NOT IN (SELECT market_id FROM index_locked_markets)
         AND NOT EXISTS (SELECT 1 FROM fills f WHERE f.market_id = m.id AND f.created_at > now() - ($1 || ' days')::interval)
       RETURNING m.id`,
     [String(retireAfterDays)],

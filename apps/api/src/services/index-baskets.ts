@@ -1,6 +1,7 @@
 import { INDEX_CATALOG } from '@pokex/shared-types';
 import type { ConstituentPrice } from './index-weighting.ts';
 import type { ProductType } from './product-type.ts';
+import { basketKey } from './index-rules.ts';
 
 /**
  * Index basket construction — the ONE definition, shared by the live ingest (oracle.ts) and the history rebuild
@@ -29,6 +30,10 @@ export interface BasketOptions {
   gradedConstituents: number;
   sealedEnabled: boolean;
   sealedMin: number;
+  // Index rules v3 (index-membership.ts): fixed member lists by basket ('pokemon:top-100') as card ids. A basket
+  // present here takes exactly these members (every one priced this pass — a stale member is carried at its last
+  // price, R6); an absent basket keeps the old rule (re-slice the eligible top N).
+  members?: Map<string, Set<string>>;
 }
 
 export type CatalogIndex = (typeof INDEX_CATALOG)[number];
@@ -72,6 +77,12 @@ export function buildBaskets(cards: BasketCard[], o: BasketOptions): Basket[] {
   const toMember = (c: BasketCard) => ({ cardId: c.cardId, priceE6: c.priceE6 });
   return INDEX_CATALOG.map((idx) => {
     const d = derived.get(idx.game) ?? none;
+    const fixed = o.members?.get(basketKey(idx.game, idx.tier));
+    if (fixed && idx.tier !== 'sealed') {
+      const px = idx.tier === 'graded' ? d.gradedPx : d.singlesPx;
+      const members = [...px].filter(([cardId]) => fixed.has(cardId)).map(([cardId, priceE6]) => ({ cardId, priceE6 })).sort(byPriceDesc);
+      return { idx, members, cur: px };
+    }
     if (idx.tier === 'graded') {
       const members = d.singles
         .slice(0, o.gradedConstituents)

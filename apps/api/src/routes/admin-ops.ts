@@ -10,6 +10,7 @@ import { gachaMonitoring, fundGachaRewardsBudget } from '../services/gacha-monit
 import { bonusConfigView, setBonusConfig } from '../services/bonus-config.ts';
 import { fundCreditBudget, bonusOverview, clearFirstWithdrawalReview } from '../services/bonus.ts';
 import { getWorkerHealth } from '../services/worker-health.ts'; // DB-only → reports RPC health even when the RPC is down
+import { excludeFromIndices, clearIndexExclusion, listIndexExclusions } from '../services/index-membership.ts';
 import { reconcileStuckPrizes } from '../services/gacha-reconcile.ts'; // web3-free (DB + DAS) → eager-safe
 import { recentRestocks } from '../services/gacha-stock.ts'; // web3-free (DB + CC read client) → eager-safe
 import { resetGoldBalances } from '../services/gold.ts'; // web3-free (DB only) → eager-safe
@@ -86,6 +87,25 @@ export async function adminOpsRoutes(app: FastifyInstance): Promise<void> {
       operator: 'admin', // the key authenticates the operator; finer identity can come later
     });
     return { id, ...r };
+  });
+
+  // Index rules v3 R11: remove a card from every index by hand (e.g. after a fake sale) — it leaves at the next price
+  // pass and stays out until cleared. The reason is shown in the public change log.
+  app.get('/admin/index-exclusions', rl(config.routeRateLimits.admin), async () => ({ exclusions: await listIndexExclusions(await getDb()) }));
+  app.post('/admin/index-exclusions', rl(config.routeRateLimits.admin), async (req) => {
+    const { marketId, reason } = (req.body ?? {}) as { marketId?: string; reason?: string };
+    if (typeof marketId !== 'string' || !marketId) throw new HttpError(400, 'marketId required');
+    const why = typeof reason === 'string' ? reason.trim() : '';
+    if (!why || why.length > 200) throw new HttpError(400, 'a reason (1-200 characters) is required');
+    const db = await getDb();
+    const m = await db.query(`SELECT 1 FROM markets WHERE id = $1 AND kind = 'card'`, [marketId]);
+    if (!m.rows.length) throw new HttpError(404, 'card market not found');
+    await excludeFromIndices(db, marketId, why);
+    return { marketId, excluded: true, rulesOn: config.indexRulesV3 }; // rulesOn false: recorded, takes effect once the rules are on
+  });
+  app.delete('/admin/index-exclusions/:marketId', rl(config.routeRateLimits.admin), async (req) => {
+    const { marketId } = req.params as { marketId: string };
+    return { marketId, cleared: await clearIndexExclusion(await getDb(), marketId) };
   });
 
   // Unpin a market so the automated oracle resumes overwriting its price.

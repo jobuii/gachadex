@@ -419,6 +419,107 @@ CREATE TABLE IF NOT EXISTS graded_prints (
 );
 CREATE INDEX IF NOT EXISTS idx_graded_prints_market ON graded_prints(market_id, id);
 
+-- Point-in-time history of the two market flags the index baskets depend on (2026-10-18 plan P2). Before these, only
+-- the CURRENT featured/status existed, so the history rebuild had to assume today's featured list for every past day
+-- (a discovery run on 2026-10-17 swapped 411 of 707 featured cards). Written by triggers, so no writer can be
+-- missed: discovery, the universe script, listing, operator SQL alike. `source` is whatever the writing transaction
+-- set via set_config('gachadex.featured_source', …, true) (see withFeaturedSource), else 'unknown'. The rebuild reads
+-- these as-of each pass; seeded history (scripts/seed-featured-events.ts) carries a 'seed:…' source.
+CREATE TABLE IF NOT EXISTS featured_events (
+  id        BIGSERIAL PRIMARY KEY,
+  market_id TEXT NOT NULL REFERENCES markets(id),
+  featured  BOOLEAN NOT NULL,
+  source    TEXT NOT NULL DEFAULT 'unknown',
+  at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_featured_events_at ON featured_events(at, id);
+CREATE TABLE IF NOT EXISTS market_status_events (
+  id        BIGSERIAL PRIMARY KEY,
+  market_id TEXT NOT NULL REFERENCES markets(id),
+  status    TEXT NOT NULL,
+  at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_market_status_events_at ON market_status_events(at, id);
+CREATE OR REPLACE FUNCTION log_market_flag_changes() RETURNS trigger AS $$
+BEGIN
+  IF NEW.kind = 'card' THEN
+    IF (TG_OP = 'INSERT' AND NEW.featured) OR (TG_OP = 'UPDATE' AND NEW.featured IS DISTINCT FROM OLD.featured) THEN
+      INSERT INTO featured_events(market_id, featured, source)
+      VALUES (NEW.id, NEW.featured, COALESCE(NULLIF(current_setting('gachadex.featured_source', true), ''), 'unknown'));
+    END IF;
+    IF (TG_OP = 'INSERT' AND NEW.status <> 'active') OR (TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status) THEN
+      INSERT INTO market_status_events(market_id, status) VALUES (NEW.id, NEW.status);
+    END IF;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_market_flag_changes ON markets;
+CREATE TRIGGER trg_market_flag_changes AFTER INSERT OR UPDATE OF featured, status ON markets
+  FOR EACH ROW EXECUTE FUNCTION log_market_flag_changes();
+
+-- What each live index pass actually used (P2): the basket written for the next pass to chain off, plus the previous
+-- basket's cards that had no price this pass (missing) or were dropped by the outlier guard. Before this, a pass
+-- stored only counts, so a rebuild could not be checked against live exactly. One row per index market per pass.
+CREATE TABLE IF NOT EXISTS index_pass_log (
+  id        BIGSERIAL PRIMARY KEY,
+  market_id TEXT NOT NULL REFERENCES markets(id),
+  pass_at   TIMESTAMPTZ NOT NULL,
+  members   TEXT[] NOT NULL,
+  missing   TEXT[] NOT NULL DEFAULT '{}',
+  outliers  TEXT[] NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_index_pass_log ON index_pass_log(market_id, pass_at);
+
+-- Index membership v3 (INDEX_RULES_V3; services/index-membership.ts). A basket is one member list per game + tier
+-- ('pokemon:top-100'), shared by its GJ / G&P / Pokedaq series. Rows are never deleted: left_at closes a membership,
+-- so the list as of any moment is joined_at <= t < left_at (the history rebuild reads exactly that).
+CREATE TABLE IF NOT EXISTS index_members (
+  id           BIGSERIAL PRIMARY KEY,
+  basket       TEXT NOT NULL,
+  market_id    TEXT NOT NULL REFERENCES markets(id),
+  joined_at    TIMESTAMPTZ NOT NULL,
+  left_at      TIMESTAMPTZ,
+  join_reason  TEXT NOT NULL,           -- launch | change | reserve
+  leave_reason TEXT                     -- rank | printing | hand | delisted | stale | no-psa10
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_index_members_current ON index_members(basket, market_id) WHERE left_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_index_members_basket ON index_members(basket, joined_at);
+-- One published change per basket per month (R1): reference = prices at 00:00 UTC on the 1st; effective at the first
+-- pass at or after effective_at; applied_at marks it done (a restart can never apply it twice).
+CREATE TABLE IF NOT EXISTS index_changes (
+  id           BIGSERIAL PRIMARY KEY,
+  basket       TEXT NOT NULL,
+  change_date  DATE NOT NULL,
+  reference_at TIMESTAMPTZ NOT NULL,
+  published_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  effective_at TIMESTAMPTZ NOT NULL,
+  applied_at   TIMESTAMPTZ,
+  adds         TEXT[] NOT NULL,
+  removes      JSONB NOT NULL,          -- [{marketId, reason}]
+  reserves     TEXT[] NOT NULL,
+  cancelled    BOOLEAN NOT NULL DEFAULT false, -- the rules were switched off before it applied (never applied)
+  UNIQUE (basket, change_date)
+);
+-- R11: cards an operator removed by hand — out of every basket until cleared (DELETE = cleared).
+CREATE TABLE IF NOT EXISTS index_exclusions (
+  market_id  TEXT PRIMARY KEY REFERENCES markets(id),
+  reason     TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- R7: markets nothing may de-feature or delist — current members, announced additions, the latest reserve lists.
+-- Only baskets the rules govern right now (an open membership): with the switch off nothing is locked.
+CREATE OR REPLACE VIEW index_locked_markets AS
+  SELECT market_id FROM index_members WHERE left_at IS NULL
+  UNION SELECT unnest(adds) FROM index_changes WHERE applied_at IS NULL AND NOT cancelled
+  UNION SELECT unnest(c.reserves) FROM index_changes c
+         WHERE NOT c.cancelled
+           AND c.change_date = (SELECT max(c2.change_date) FROM index_changes c2 WHERE c2.basket = c.basket)
+           AND EXISTS (SELECT 1 FROM index_members im WHERE im.basket = c.basket AND im.left_at IS NULL);
+-- Optional speed-up for the rules' as-of price reads, built by hand ONCE before the deploy (CONCURRENTLY can't run
+-- inside this boot transaction, and a plain build would block oracle_prices writes during boot):
+--   CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_oracle_prices_market_ingested ON oracle_prices(market_id, ingested_at) WHERE is_accepted;
+
 CREATE TABLE IF NOT EXISTS marks (
   id             BIGSERIAL PRIMARY KEY,
   market_id      TEXT NOT NULL REFERENCES markets(id),

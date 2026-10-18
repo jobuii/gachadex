@@ -49,6 +49,7 @@ export interface ChainStep {
   levelE6: bigint;
   used: number; // previous-basket cards that contributed a return this pass
   missing: number; // previous-basket cards with no usable price this pass (imputed)
+  missingIds: string[]; // …and which ones (cardIds) — logged per pass (index_pass_log) so a rebuild can be checked against live
   outliers: string[]; // previous-basket cards excluded by the outlier guard (cardIds)
   launched: boolean; // no prior level/snapshot → started at BASE_VALUE_E6
 }
@@ -64,16 +65,16 @@ export function chainStep(
   weighting: IndexWeighting,
   opts: ChainOptions,
 ): ChainStep {
-  if (prevLevelE6 <= 0n || prev.size === 0) return { levelE6: BASE_VALUE_E6, used: 0, missing: 0, outliers: [], launched: true };
+  if (prevLevelE6 <= 0n || prev.size === 0) return { levelE6: BASE_VALUE_E6, used: 0, missing: 0, missingIds: [], outliers: [], launched: true };
   const hi = opts.outlierFactor;
   const lo = 1 / opts.outlierFactor;
   const used: { cardId: string; p0: bigint; p1: bigint; rel: number }[] = [];
   const outliers: string[] = [];
-  let missing = 0;
+  const missingIds: string[] = [];
   for (const [cardId, p0] of prev) {
     const p1 = cur.get(cardId);
     if (!(p0 > 0n) || p1 == null || !(p1 > 0n)) {
-      missing++;
+      missingIds.push(cardId);
       continue;
     }
     const rel = Number(p1) / Number(p0);
@@ -83,7 +84,8 @@ export function chainStep(
     }
     used.push({ cardId, p0, p1, rel });
   }
-  if (used.length === 0) return { levelE6: prevLevelE6, used: 0, missing, outliers, launched: false }; // nothing measurable — carry forward
+  const missing = missingIds.length;
+  if (used.length === 0) return { levelE6: prevLevelE6, used: 0, missing, missingIds, outliers, launched: false }; // nothing measurable — carry forward
 
   let r: number;
   if (weighting === 'price') {
@@ -104,7 +106,7 @@ export function chainStep(
     }
     r = den > 0 ? Math.exp(num / den) : 1;
   }
-  return { levelE6: BigInt(Math.round(Number(prevLevelE6) * r)), used: used.length, missing, outliers, launched: false };
+  return { levelE6: BigInt(Math.round(Number(prevLevelE6) * r)), used: used.length, missing, missingIds, outliers, launched: false };
 }
 
 /**

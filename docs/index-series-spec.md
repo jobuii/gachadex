@@ -5,6 +5,35 @@ Replaces the single price-weighted index family with a branded three-series line
 on branch `feat/index-series` (`services/index-weighting.ts`, the `oracle.ts` buildIndex split, the
 generated 22-market `INDEX_CATALOG`, and the sidebar series grouping).
 
+## 00. v3 membership rules (2026-10-18 plan; switch `INDEX_RULES_V3`, OFF by default)
+
+v2 still re-sliced each basket every 6-hour pass from the featured cards, and the weekly discovery job could swap
+most of the featured list (17 Oct 2026: 411 off, 530 on), with no record of which cards were members. v3 changes
+only **who is a member**; the level math (v2 below) is unchanged. Code: `services/index-rules.ts` (pure rules),
+`services/index-membership.ts` (DB: launch / publish / apply / causes), `index-baskets.ts` (`members` option),
+tables `index_members`, `index_changes`, `index_exclusions`, view `index_locked_markets` (schema.sql).
+
+| Rule | What |
+|---|---|
+| R1 | Monthly change date. Ranking uses each card's latest accepted price at 00:00 UTC on the 1st; published that day; effective at the first pass at or after max(the 4th 00:00 UTC, published + `INDEX_NOTICE_HOURS` 72h). One change per basket per month (unique), applied once. |
+| R2 | Rank by raw price (Graded: raw price among cards with a PSA-10, valued at PSA-10). Pool = the game's featured singles + current members. |
+| R3 | To join: featured, not delisted / reduce-only / low-confidence, fresh at the reference time, first live (non-backfill) price ≥ `INDEX_SEASONING_DAYS` (30) old; Graded also needs a PSA-10. |
+| R4 | FTSE-style buffer: join at rank ≤ 90, stay while ≤ 110 (Top 250: 225 / 275; Graded scales with its size). Exactly N: too many → lowest-ranked go; too few → highest-ranked that may join fill in; fewer eligible → the basket holds fewer. |
+| R5 | Between dates a member leaves only for a cause: delisted; no fresh price for `INDEX_STALE_REMOVE_DAYS` (14); Graded: no PSA-10 for 14 days; removed by hand. Reduce-only / low-confidence alone are not causes. |
+| D3 | A leaver between dates is replaced at the next pass by the best reserve (the change's runners-up, `RESERVE_SIZE` 20) that may join now. |
+| R6 | A stale member stays at its last price (flat return), as v2 already does. |
+| R7 | Discovery, the universe script and the hourly dead-market sweep never de-feature or delist a member, an announced addition or a reserve. Announced additions are re-checked at the effective pass and backed by reserves. |
+| R8 | Continuity: the change lands between passes (this pass measured on the previous snapshot). |
+| R9 | Public: `GET /markets/index-basket?symbol=…` — members, upcoming change, change log. |
+| R10 | Launch: the first v3 pass takes the live basket (GJ series snapshot) as the member list — no jump; the first change date is the next 1st. |
+| R11 | Removed by hand (`/admin/index-exclusions`): out of every basket until cleared. Removed for a cause: back only via a later change date, passing R3. |
+| R12 | One printing per product: only the most valuable printing of a TCGplayer product can be a member, fixed per change date. |
+
+History: the rebuild reads `index_members` as of each pass from a basket's launch on, and before it the featured /
+status flags as of each pass (`featured_events`, `market_status_events`, written by a trigger; seeded by
+`scripts/seed-featured-events.ts`). Each pass also logs its basket, missing and outlier cards (`index_pass_log`).
+Sealed keeps the v2 rule. Not done here: baskets are still keyed by card id (a printing-markets prerequisite, P5).
+
 ## 0. v2 methodology (2026-10 audit) — SUPERSEDES the §2 math below
 
 A live audit (2026-10-16) found the v1 series could not show a downturn: Pokémon Top-100 never fell more than

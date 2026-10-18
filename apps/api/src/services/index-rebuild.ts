@@ -11,10 +11,12 @@
  * data exists for it, i.e. after the gap backfill), and leaves the final basket as the snapshot the next live pass
  * chains off.
  *
- * Known approximations (the history needed for exactness was never stored): eligibility uses each card's CURRENT
- * `featured` flag and stored product type (no history of either), and only freshness — not the market's status at
- * the time (live also drops halted/delisted markets); a pass's prices are each card's latest accepted print as of
- * that pass. PSA-10 values come from graded_prints (what each live pass used) once it exists; before it, from each
+ * Featured and status are read AS OF each pass from featured_events / market_status_events (triggers, schema.sql):
+ * before a market's first featured event it held the opposite of that event, and a market with no events keeps its
+ * CURRENT flag (the old approximation, still used for history nobody recorded); a market is 'active' until its first
+ * status event. As live: a delisted market isn't priced (missing, not flat) and a halted one can't be a member.
+ * Remaining approximations: stored product type (no history), and a pass's prices are each card's latest accepted
+ * print as of that pass (live also misses a card the provider skipped that pass). PSA-10 values come from graded_prints (what each live pass used) once it exists; before it, from each
  * print's stored `gradedE6`, or — for prints that predate it — a replay of
  * the live choice from the provider fields (Scrydex ladder PSA 10, else tcgpl's eBay PSA-10; JustTCG can't be
  * replayed before graded_prints).
@@ -24,6 +26,7 @@ import { DEFAULT_CAP_BPS } from '@pokex/shared-types';
 import type { Db, Queryer } from '../db/client.ts';
 import { chainStep, weightingOf, BASE_VALUE_E6, type ConstituentPrice, type IndexWeighting } from './index-weighting.ts';
 import { buildBaskets, type BasketCard } from './index-baskets.ts';
+import { loadMembershipRows, membershipAsOf } from './index-membership.ts';
 import { productTypeOfMarket, type ProductType } from './product-type.ts';
 import { indexSymbol, upsertIndexMarket } from './markets.ts';
 import { writeIndexSnapshot } from './oracle.ts';
@@ -172,6 +175,19 @@ async function loadGradedPrints(q: Queryer, marketIds: string[]): Promise<{ sinc
   return { since, rows: rows.map((r) => ({ marketId: r.market_id, at: r.at, graded: r.g == null ? null : BigInt(r.g) })) };
 }
 
+/** featured_events + market_status_events, oldest first, for the as-of reads in planIndexRebuild. */
+async function loadFlagHistory(q: Queryer): Promise<{
+  featured: { marketId: string; at: Date; on: boolean }[];
+  status: { marketId: string; at: Date; status: string }[];
+}> {
+  const f = await q.query<{ market_id: string; at: Date; featured: boolean }>(`SELECT market_id, at, featured FROM featured_events ORDER BY at, id`);
+  const st = await q.query<{ market_id: string; at: Date; status: string }>(`SELECT market_id, at, status FROM market_status_events ORDER BY at, id`);
+  return {
+    featured: f.rows.map((r) => ({ marketId: r.market_id, at: r.at, on: r.featured })),
+    status: st.rows.map((r) => ({ marketId: r.market_id, at: r.at, status: r.status })),
+  };
+}
+
 /** Read-only: the rebuilt series for every index (existing + catalog series that would exist). */
 export async function planIndexRebuild(q: Queryer, o: RebuildOptions): Promise<RebuildSeries[]> {
   const sched = await loadPassSchedule(q);
@@ -187,15 +203,21 @@ export async function planIndexRebuild(q: Queryer, o: RebuildOptions): Promise<R
   const idxMarkets = (await q.query<{ id: string; symbol: string; price_pinned: boolean }>(`SELECT id, symbol, price_pinned FROM markets WHERE kind = 'index'`)).rows;
   const marketIdBySymbol = new Map(idxMarkets.map((m) => [m.symbol, m.id]));
   const pinned = new Set(idxMarkets.filter((m) => m.price_pinned).map((m) => m.symbol)); // operator-priced: never rebuilt
+  // Every card featured now OR at any recorded time (a card de-featured since still counted while it was featured).
   const cards = (
-    await q.query<{ id: string; game: string; card_id: string; display_name: string; rarity: string | null; product_type: string | null }>(
-      `SELECT id, game, card_id, display_name, metadata->>'rarity' AS rarity, product_type
-         FROM markets WHERE kind = 'card' AND featured AND card_id IS NOT NULL`,
+    await q.query<{ id: string; game: string; card_id: string; display_name: string; rarity: string | null; product_type: string | null; featured: boolean }>(
+      `SELECT id, game, card_id, display_name, metadata->>'rarity' AS rarity, product_type, featured
+         FROM markets m WHERE kind = 'card' AND card_id IS NOT NULL
+          AND (featured OR EXISTS (SELECT 1 FROM featured_events e WHERE e.market_id = m.id))`,
     )
   ).rows;
   const cardById = new Map(
-    cards.map((c) => [c.id, { game: c.game, cardId: c.card_id, productType: (c.product_type as ProductType | null) ?? productTypeOfMarket(c.display_name, c.rarity) }]),
+    cards.map((c) => [c.id, { game: c.game, cardId: c.card_id, featuredNow: c.featured, productType: (c.product_type as ProductType | null) ?? productTypeOfMarket(c.display_name, c.rarity) }]),
   );
+  const flags = await loadFlagHistory(q);
+  const membership = await loadMembershipRows(q); // index rules v3: from a basket's launch on, its member list as of each pass
+  const firstFeatured = new Map<string, boolean>();
+  for (const e of flags.featured) if (!firstFeatured.has(e.marketId)) firstFeatured.set(e.marketId, e.on);
   const prints = await loadCompactPrints(q, [...cardById.keys()], o.excludePrintIds ?? new Set());
   const graded = await loadGradedPrints(q, [...cardById.keys()]);
 
@@ -203,8 +225,12 @@ export async function planIndexRebuild(q: Queryer, o: RebuildOptions): Promise<R
   const series = new Map<string, State>();
   const last = new Map<string, { price: bigint; ing: Date; graded: bigint | null }>();
   const lastGraded = new Map<string, bigint | null>(); // graded_prints, as of the pass
+  const featuredNow = new Map<string, boolean>(); // featured_events, as of the pass
+  const statusNow = new Map<string, string>(); // market_status_events, as of the pass
   let pi = 0;
   let gi = 0;
+  let fi = 0;
+  let si = 0;
   for (const pass of schedule) {
     while (pi < prints.length && prints[pi].ing <= pass.cutoff) {
       const p = prints[pi++];
@@ -214,6 +240,16 @@ export async function planIndexRebuild(q: Queryer, o: RebuildOptions): Promise<R
       const g = graded.rows[gi++];
       lastGraded.set(g.marketId, g.graded);
     }
+    while (fi < flags.featured.length && flags.featured[fi].at <= pass.cutoff) {
+      const e = flags.featured[fi++];
+      featuredNow.set(e.marketId, e.on);
+    }
+    while (si < flags.status.length && flags.status[si].at <= pass.cutoff) {
+      const e = flags.status[si++];
+      statusNow.set(e.marketId, e.status);
+    }
+    const featuredAsOf = (mid: string): boolean =>
+      featuredNow.get(mid) ?? (firstFeatured.has(mid) ? !firstFeatured.get(mid) : cardById.get(mid)!.featuredNow);
     // From the first graded_prints row on, it is the record of what each live pass used (no row = no PSA-10).
     const tracked = graded.since != null && graded.since <= pass.cutoff;
     // Every card's last-known price goes in (leavers are measured); only fresh ones (the live INDEX_FRESH_MS rule)
@@ -221,11 +257,14 @@ export async function planIndexRebuild(q: Queryer, o: RebuildOptions): Promise<R
     const cards: BasketCard[] = [];
     for (const [mid, l] of last) {
       const c = cardById.get(mid)!;
+      const status = statusNow.get(mid) ?? 'active';
+      if (status === 'delisted') continue; // live doesn't fetch a delisted market: it is missing, not flat
       const gradedE6 = tracked ? (lastGraded.get(mid) ?? null) : l.graded;
-      cards.push({ game: c.game, cardId: c.cardId, priceE6: l.price, gradedE6, productType: c.productType, eligible: pass.cutoff.getTime() - l.ing.getTime() < o.freshMs });
+      const fresh = pass.cutoff.getTime() - l.ing.getTime() < o.freshMs;
+      cards.push({ game: c.game, cardId: c.cardId, priceE6: l.price, gradedE6, productType: c.productType, eligible: fresh && status !== 'halted' && featuredAsOf(mid) });
     }
     const k = pass.t.getTime();
-    for (const { idx, members, cur } of buildBaskets(cards, o)) {
+    for (const { idx, members, cur } of buildBaskets(cards, { ...o, members: membership.length ? membershipAsOf(membership, pass.cutoff) : undefined })) {
       const symbol = indexSymbol(idx.game, idx.slug);
       if (pinned.has(symbol)) continue;
       let s = series.get(symbol);
