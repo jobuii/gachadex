@@ -110,6 +110,27 @@ test('manual freeze/unfreeze round-trips and is visible in the queue view', asyn
   assert.equal(await withdrawalsFrozen(db), null);
 });
 
+test('RPC outage: the treasury GET fails, but freeze, the queue (with its freeze state) and custody health still answer', async () => {
+  // The admin panel keeps Freeze + the queue usable in an outage by reading these DB-only routes (AdminPanel realFunds gate).
+  const realHot = tchain.hotBalance;
+  tchain.hotBalance = async () => { throw new Error('simulated RPC outage'); };
+  try {
+    const treasury = await app.inject({ method: 'GET', url: '/admin/treasury', headers: KEY });
+    assert.ok(treasury.statusCode >= 500, `treasury must fail without the chain, got ${treasury.statusCode}`);
+    const freeze = await app.inject({ method: 'POST', url: '/admin/freeze', headers: KEY, payload: { reason: 'rpc down drill' } });
+    assert.equal(freeze.statusCode, 200, freeze.body);
+    const queue = await app.inject({ method: 'GET', url: '/admin/withdrawals', headers: KEY });
+    assert.equal(queue.statusCode, 200, queue.body);
+    assert.match(queue.json().frozen ?? '', /operator: rpc down drill/);
+    const health = await app.inject({ method: 'GET', url: '/admin/custody-health', headers: KEY });
+    assert.equal(health.statusCode, 200, health.body);
+    assert.equal(health.json().custodyActive, true);
+  } finally {
+    tchain.hotBalance = realHot;
+    await unfreezeWithdrawals(db);
+  }
+});
+
 test('the treasury report is read-only — numbers come back, nothing is swept or frozen', async () => {
   tchain.hot = usdc(100_000); // way above the float cap: a treasuryPass WOULD sweep this
   const before = tchain.sweeps.length;

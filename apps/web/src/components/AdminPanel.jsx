@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { formatUsd, formatSignedUsd, toE6, shortenPubkey } from '@pokex/pricing';
 import * as api from '../lib/api.js';
 import { CustomersView } from './CustomersView.jsx';
@@ -84,6 +84,12 @@ export function AdminPanel({ onGoToMarket } = {}) {
   const [markGuards, setMarkGuards] = useState(null); // { clamped:[...], flippedToday:[...] } | null — §6a mark guard
   const [tab, setTab] = useState('main'); // 'main' (the operator tools) | 'customers' | 'chat'
   const [withdrawals, setWithdrawals] = useState([]); // requested withdrawal queue (real-funds)
+  // Freeze reason from the withdrawals-queue GET (DB-only, so it answers during an RPC outage when the treasury
+  // can't). undefined = not known yet → fall back to the treasury's copy.
+  const [queueFrozen, setQueueFrozen] = useState(undefined);
+  const [queueErr, setQueueErr] = useState(false); // the queue GET failed — never render that as an empty queue
+  // Bumped by Freeze/Unfreeze: a poll that STARTED before the action must not overwrite its result when it lands later.
+  const freezeSeq = useRef(0);
   const [wbusy, setWbusy] = useState(null); // withdrawal id being approved/reversed
 
   // Validate the key against a key-gated endpoint (GET /admin/insurance — registered whenever an admin
@@ -247,10 +253,16 @@ export function AdminPanel({ onGoToMarket } = {}) {
         }
       })(),
       (async () => {
+        const seq = freezeSeq.current;
         try {
-          setWithdrawals((await api.adminGetWithdrawals('requested', key)).withdrawals || []); // real-funds-only
+          const q = await api.adminGetWithdrawals('requested', key); // real-funds-only
+          setWithdrawals(q.withdrawals || []);
+          setQueueErr(false);
+          if (seq === freezeSeq.current) setQueueFrozen(q.frozen ?? null);
         } catch {
           setWithdrawals([]);
+          setQueueErr(true);
+          if (seq === freezeSeq.current) setQueueFrozen(undefined);
         }
       })(),
     ]);
@@ -302,6 +314,10 @@ export function AdminPanel({ onGoToMarket } = {}) {
     setMarkGuards(null);
     setTab('main');
     setWithdrawals([]);
+    setQueueFrozen(undefined);
+    setQueueErr(false);
+    setCustodyHealth(null);
+    setTreasuryErr(false);
     setMsg(null);
     setErr(null);
   };
@@ -511,6 +527,24 @@ export function AdminPanel({ onGoToMarket } = {}) {
     }
   };
 
+  // Re-read the freeze state + treasury after a freeze/unfreeze WITHOUT letting a failure turn the action's success
+  // into an error: during an RPC outage the treasury GET fails although the (DB-only) freeze/unfreeze worked.
+  const refreshTreasuryQuietly = async () => {
+    const seq = freezeSeq.current;
+    try {
+      const q = await api.adminGetWithdrawals('requested', adminKey.trim());
+      if (seq === freezeSeq.current) setQueueFrozen(q.frozen ?? null); // DB truth after the action (unless a newer action ran)
+    } catch {
+      /* keep the optimistic value; the next poll corrects it */
+    }
+    try {
+      setTreasury(await api.adminGetTreasury(adminKey.trim()));
+      setTreasuryErr(false);
+    } catch {
+      setTreasury(null);
+      setTreasuryErr(true);
+    }
+  };
   // Withdrawal freeze toggle. A PoR breach auto-freezes; unfreezing is ALWAYS a manual operator action (it never
   // self-clears), so surface it here. Re-fetch the treasury after either so the banner reflects the new state.
   const unfreeze = async () => {
@@ -520,13 +554,16 @@ export function AdminPanel({ onGoToMarket } = {}) {
     setBusy('freeze');
     try {
       await api.adminUnfreeze(adminKey.trim());
-      setTreasury(await api.adminGetTreasury(adminKey.trim()));
+      freezeSeq.current++;
+      setQueueFrozen(null);
       setMsg('Withdrawals unfrozen — payouts will process again.');
     } catch (e) {
       setErr(e.message);
+      return;
     } finally {
       setBusy(null);
     }
+    await refreshTreasuryQuietly();
   };
   // Re-run proof-of-reserves live (the server re-reads the ledger + on-chain custody balances) so an operator
   // can confirm whether a shortfall still exists — e.g. before deciding to unfreeze.
@@ -536,9 +573,12 @@ export function AdminPanel({ onGoToMarket } = {}) {
     setBusy('treasury-refresh');
     try {
       setTreasury(await api.adminGetTreasury(adminKey.trim()));
+      setTreasuryErr(false);
       setMsg('Reserves re-checked live from the ledger + on-chain custody.');
     } catch (e) {
-      setErr(e.message);
+      setTreasury(null);
+      setTreasuryErr(true);
+      setErr(`Treasury still unreachable (${e.message}) — usually the Solana RPC is down; see the health strip.`);
     } finally {
       setBusy(null);
     }
@@ -551,13 +591,16 @@ export function AdminPanel({ onGoToMarket } = {}) {
     setBusy('freeze');
     try {
       await api.adminFreeze(reason.trim(), adminKey.trim());
-      setTreasury(await api.adminGetTreasury(adminKey.trim()));
+      freezeSeq.current++;
+      setQueueFrozen(`operator: ${reason.trim()}`); // the server stores it with this prefix
       setMsg('Withdrawals frozen.');
     } catch (e) {
       setErr(e.message);
+      return;
     } finally {
       setBusy(null);
     }
+    await refreshTreasuryQuietly();
   };
 
   // Approve = sign + broadcast the payout; reverse = re-credit a row that provably never paid.
@@ -652,6 +695,15 @@ export function AdminPanel({ onGoToMarket } = {}) {
   // Overview figures. Economics (ledger-derived) render in BOTH fund modes.
   const customerE6 = economics ? BigInt(economics.freeE6) + BigInt(economics.lockedE6) : 0n;
   const bd = economics?.pnlBreakdown ?? null; // house P/L breakdown (string-e6 fields)
+  // Real funds are on even when the treasury GET fails (it needs the chain RPC): the DB-only health readout
+  // still says so. Gate the custody UI on THIS, not on `treasury`, so an RPC outage can't hide Freeze or the queue.
+  // (the queue GET is registered only under real funds, so its answering proves it too)
+  const realFunds = treasury != null || custodyHealth?.custodyActive === true || queueFrozen !== undefined;
+  // undefined = unknown (neither DB-only queue GET nor treasury answered) — shown as unknown, NEVER as "open".
+  let frozen;
+  if (queueFrozen !== undefined) frozen = queueFrozen;
+  else if (treasury) frozen = treasury.frozen ?? null;
+  const chainDown = realFunds && treasury == null; // the latest treasury read failed (or hasn't answered yet)
   // Net trader P/L from the CUSTOMER's perspective (+ = customers up vs the house) = −(house's realized trader P/L).
   const traderCustomerPnlE6 = bd ? (-BigInt(bd.traderPnlE6)).toString() : null;
 
@@ -709,20 +761,36 @@ export function AdminPanel({ onGoToMarket } = {}) {
       {msg && <div className="ref-msg up">{msg}</div>}
       {err && <div className="order-error">{err}</div>}
 
-      {/* Withdrawal-freeze status + toggle (real-funds only; treasury is null in play-money). A PoR breach
-          auto-freezes and stays frozen until an operator unfreezes — surface it loudly on every tab. */}
-      {treasury && (
+      {/* Withdrawal-freeze status + toggle (real-funds only). A PoR breach auto-freezes and stays frozen until an
+          operator unfreezes — surface it loudly on every tab. Gated on realFunds (not `treasury`) so it stays usable
+          during an RPC outage: freeze/unfreeze are DB-only, and `frozen` comes from the DB-only queue GET. */}
+      {realFunds && (
         <>
-          {treasury.frozen ? (
+          {frozen === undefined ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', background: 'rgba(234,179,8,0.10)', border: '1px solid #a16207', borderRadius: 8, padding: '0.45rem 0.9rem', margin: '0.6rem 0' }}>
+              <span style={{ color: '#fde68a', fontSize: '0.8rem' }}>Withdrawal freeze state not known yet — still loading, or it couldn’t be loaded (retrying every 30 s).</span>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button className="btn-ghost sm" disabled={busy === 'treasury-refresh'} onClick={refreshTreasury} title="Re-check reserves live (ledger + on-chain)">
+                  {busy === 'treasury-refresh' ? '…' : '↻ Refresh'}
+                </button>
+                <button className="btn-ghost sm" disabled={busy === 'freeze'} onClick={freeze}>
+                  {busy === 'freeze' ? '…' : 'Freeze'}
+                </button>
+              </div>
+            </div>
+          ) : frozen ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', background: 'rgba(220,38,38,0.14)', border: '1px solid #dc2626', borderRadius: 8, padding: '0.7rem 1rem', margin: '0.6rem 0' }}>
               <span style={{ color: '#fca5a5', fontSize: '0.84rem' }}>
-                <strong style={{ color: '#fecaca' }}>⚠️ Withdrawals are FROZEN.</strong> {treasury.frozen}
+                <strong style={{ color: '#fecaca' }}>⚠️ Withdrawals are FROZEN.</strong> {frozen}
               </span>
               <div style={{ display: 'flex', gap: '0.5rem', whiteSpace: 'nowrap' }}>
                 <button className="btn-ghost sm" disabled={busy === 'treasury-refresh'} onClick={refreshTreasury} title="Re-check reserves live (ledger + on-chain)">
                   {busy === 'treasury-refresh' ? '…' : '↻ Refresh'}
                 </button>
-                <button className="btn-primary sm" disabled={busy === 'freeze'} onClick={unfreeze}>
+                {/* Unfreezing re-opens ALL payouts, so it needs a live reserves check: disabled while the treasury
+                    (on-chain) read is failing. Freeze stays available — it is the safe direction. */}
+                <button className="btn-primary sm" disabled={busy === 'freeze' || chainDown} onClick={unfreeze}
+                  title={chainDown ? 'Reserves can’t be checked while the Solana RPC is unreachable — Refresh once it recovers' : undefined}>
                   {busy === 'freeze' ? '…' : 'Unfreeze withdrawals'}
                 </button>
               </div>
@@ -746,7 +814,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
           {/* `=== false` (not `!`) so a stale API without the field hides this instead of hitting BigInt(undefined);
               `!frozen` so it never contradicts the FROZEN banner (e.g. after a manual freeze or a topped-up-but-
               still-<total state). userOwed is clamped ≥ 0 (it can go negative if users net-owe the house). */}
-          {!treasury.frozen && treasury.breached && treasury.userReservesBreached === false && (
+          {treasury && !frozen && treasury.breached && treasury.userReservesBreached === false && (
             <div style={{ background: 'rgba(220,38,38,0.10)', border: '1px solid #b91c1c', borderRadius: 8, padding: '0.55rem 1rem', margin: '0.6rem 0' }}>
               <span style={{ color: '#fca5a5', fontSize: '0.82rem' }}>
                 <strong style={{ color: '#fecaca' }}>⚠ Reserves below total claims.</strong>{' '}
@@ -869,8 +937,8 @@ export function AdminPanel({ onGoToMarket } = {}) {
           <Stat label="Referral fees paid" value={economics.referralFeesPaidE6} />
           <Stat label="Customer LP in pool" value={economics.customerLpE6} />
           {/* custody cash-flow group: deposits, withdrawals, then pending (flashing red when >0) immediately left of P/L */}
-          {treasury && <Stat label="Total deposits" value={economics.totalDepositsE6} />}
-          {treasury && <Stat label="Total withdrawals" value={economics.totalWithdrawalsE6} />}
+          {realFunds && <Stat label="Total deposits" value={economics.totalDepositsE6} />}
+          {realFunds && <Stat label="Total withdrawals" value={economics.totalWithdrawalsE6} />}
           {treasury && (
             <Stat
               label="Pending withdrawals"
@@ -883,7 +951,7 @@ export function AdminPanel({ onGoToMarket } = {}) {
       ) : (
         <p className="ref-blurb">Operator metrics load once your admin key is verified.</p>
       )}
-      {economics && !treasury && (
+      {economics && !realFunds && (
         <p className="ref-blurb">On-chain custody (hot / cold balances, proof-of-reserves) appears in real-funds mode.</p>
       )}
 
@@ -937,14 +1005,14 @@ export function AdminPanel({ onGoToMarket } = {}) {
         <span style={{ color: 'var(--success)' }}>Green</span> rows go to the user's own sign-in wallet (lower risk).
         Approve signs + broadcasts the payout; reverse re-credits a row that never paid out.
       </p>
-      {treasury ? (
+      {realFunds ? (
         <table className="hist-table">
           <thead>
             <tr><th>Owner wallet</th><th>Destination</th><th>Amount</th><th>Requested</th><th /></tr>
           </thead>
           <tbody>
             {withdrawals.length === 0 && (
-              <tr><td colSpan={5} className="hist-empty">No withdrawals in the queue.</td></tr>
+              <tr><td colSpan={5} className="hist-empty">{queueErr ? 'Couldn’t load the withdrawal queue — retrying every 30 s.' : 'No withdrawals in the queue.'}</td></tr>
             )}
             {withdrawals.map((w) => {
               const self = w.dest_address && w.dest_address === w.pubkey;
@@ -958,7 +1026,10 @@ export function AdminPanel({ onGoToMarket } = {}) {
                   <td>{formatUsd(BigInt(w.amount_e6))}</td>
                   <td className="muted">{w.requested_at ? new Date(w.requested_at).toLocaleString() : '—'}</td>
                   <td>
-                    <button className="btn-primary sm" disabled={wbusy === w.id} onClick={() => approveWithdrawal(w)}>
+                    {/* Approve signs + broadcasts on-chain → unavailable while the RPC is down. Reverse of a
+                        'requested' row is a DB-only re-credit, so it stays available. */}
+                    <button className="btn-primary sm" disabled={wbusy === w.id || chainDown} onClick={() => approveWithdrawal(w)}
+                      title={chainDown ? 'Needs the Solana RPC, which is unreachable right now' : undefined}>
                       {wbusy === w.id ? '…' : 'Approve'}
                     </button>
                     <button className="btn-ghost sm" disabled={wbusy === w.id} onClick={() => reverseWithdrawal(w)}>
