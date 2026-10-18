@@ -47,6 +47,30 @@ Three rules keep every series honest:
   pass's return — such jumps are almost always data errors (a mis-mapped printing, a placeholder listing). Its
   new price becomes its base, so a genuine re-price counts from the next pass on.
 
+## How members change
+
+An index with a published member list — it has a **Members** button on **Markets → Indices** and in the trade view —
+keeps a **fixed list of cards** that changes once a month, the way the big stock indices are run:
+
+- **Once a month.** Cards are ranked on their prices at **00:00 UTC on the 1st**. The change is announced that day
+  and takes effect at the first price update **on or after the 4th**, never less than **3 days** after the
+  announcement. The **Upcoming** tab shows what is coming in and going out.
+- **A buffer at the cut-off.** In a Top 100, a card joins when it ranks **90th or better** and stays while it ranks
+  **110th or better** (Top 250: **225** to join, **275** to stay). A card hovering around the line doesn't flip in and
+  out every month. The basket holds exactly 100 (or 250) — fewer only if not enough cards qualify.
+- **Who can join.** A featured single with a live, full-confidence price (not close-only), priced on GachaDex for at
+  least **30 days**. The Graded index also needs a PSA 10 price.
+- **Leaving between change dates — only for a reason.** The card is delisted, has had no fresh price for **14 days**
+  (Graded: no PSA 10 for 14 days), or is removed by the operator with a stated reason. Its place goes to the best card
+  on the **reserve list** (the runners-up of the last ranking). A card whose price stops updating stays at its last
+  price until it recovers or leaves.
+- **One printing per card.** When a card trades in several printings (say Normal and Foil), only its most valuable
+  printing can be a member, checked on each change date.
+- **No jump.** A change lands between two price updates, so the index level carries straight on — the move up to
+  the change is measured on the old list, everything after on the new one.
+
+Every change, with the reason each card left, is in the **Change log** tab.
+
 ## What's listed
 
 Baskets are published per game — **Top 100** and **Top 250** for Pokémon, One Piece, and Magic — plus

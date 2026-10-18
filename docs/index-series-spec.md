@@ -32,7 +32,10 @@ tables `index_members`, `index_changes`, `index_exclusions`, view `index_locked_
 History: the rebuild reads `index_members` as of each pass from a basket's launch on, and before it the featured /
 status flags as of each pass (`featured_events`, `market_status_events`, written by a trigger; seeded by
 `scripts/seed-featured-events.ts`). Each pass also logs its basket, missing and outlier cards (`index_pass_log`).
-Sealed keeps the v2 rule. Not done here: baskets are still keyed by card id (a printing-markets prerequisite, P5).
+Sealed keeps the v2 rule. Baskets stay keyed by card id: with printing markets (P5) each printing gets its own card id
+(tcgpl ids are per printing) and `db/market-guards.ts` keeps live card ids unique per game (decided 2026-10-19 instead
+of re-keying the stored snapshots and chain-link by market id). Public rules: the /docs Indices page, "How members
+change".
 
 ## 0. v2 methodology (2026-10 audit) — SUPERSEDES the §2 math below
 

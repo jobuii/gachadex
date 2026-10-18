@@ -110,7 +110,7 @@ export function IndexBasketDrawer({ market, initialTab = 'members', onClose }) {
             </div>
           ) : <p className="ib-note">No changes yet.</p>)}
         </div>
-        {view?.governed && <footer className="ib-foot">Members change once a month with 3 days’ notice; a buffer keeps cards near the cut-off from flipping in and out. <a href="/docs#indices">How index members change</a></footer>}
+        {view?.governed && <footer className="ib-foot">Members change once a month with 3 days’ notice; a buffer keeps cards near the cut-off from flipping in and out. <a href="/docs#how-members-change">How index members change</a></footer>}
       </aside>
     </div>
   );
