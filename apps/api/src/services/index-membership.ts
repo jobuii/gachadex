@@ -36,7 +36,7 @@ export interface GovernedBasket {
 export function governedBaskets(): GovernedBasket[] {
   const out = new Map<string, GovernedBasket>();
   for (const idx of INDEX_CATALOG) {
-    const rules = tierRules(idx.tier, config.gradedConstituents);
+    const rules = tierRules(idx.tier, config.gradedConstituents, config.indexStayPct);
     const key = basketKey(idx.game, idx.tier);
     if (rules && !out.has(key)) out.set(key, { key, game: idx.game, tier: idx.tier, rules, gjSymbol: indexSymbol(idx.game, idx.tier) });
   }

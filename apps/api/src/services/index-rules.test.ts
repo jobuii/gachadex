@@ -15,6 +15,7 @@ test('tier rules: Top 100 90/110, Top 250 225/275, Graded scales with its size, 
   assert.deepEqual(tierRules('top-250', 100), { n: 250, joinRank: 225, stayRank: 275 });
   assert.deepEqual(tierRules('graded', 100), { n: 100, joinRank: 90, stayRank: 110 });
   assert.equal(tierRules('sealed', 100), null);
+  assert.deepEqual(tierRules('top-250', 100, 120), { n: 250, joinRank: 225, stayRank: 300 }, 'the wider buffer: 90 / 120');
 });
 
 test('R4 join edge: a non-member at rank 9 joins, at rank 10 it joins only to fill a slot', () => {

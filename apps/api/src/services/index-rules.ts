@@ -20,10 +20,12 @@ export interface TierRules {
 }
 
 /** D2 (FTSE style 90/110, Top 250: 225/275) — Graded uses the Top-100 numbers. */
-export function tierRules(tier: string, gradedConstituents: number): TierRules | null {
-  if (tier === 'top-100') return { n: 100, joinRank: 90, stayRank: 110 };
-  if (tier === 'top-250') return { n: 250, joinRank: 225, stayRank: 275 };
-  if (tier === 'graded') return { n: gradedConstituents, joinRank: Math.round(gradedConstituents * 0.9), stayRank: Math.round(gradedConstituents * 1.1) };
+export function tierRules(tier: string, gradedConstituents: number, stayPct = 110): TierRules | null {
+  // join at 90% of N, stay while within stayPct% of N (D2: 110 — the plan's "wider" option is 120)
+  const rules = (n: number): TierRules => ({ n, joinRank: Math.round(n * 0.9), stayRank: Math.round((n * stayPct) / 100) });
+  if (tier === 'top-100') return rules(100);
+  if (tier === 'top-250') return rules(250);
+  if (tier === 'graded') return rules(gradedConstituents);
   return null; // sealed: not governed by v3 (out of scope)
 }
 

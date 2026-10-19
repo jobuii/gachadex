@@ -42,6 +42,7 @@ export interface RebuildOptions {
   sealedEnabled: boolean;
   gapFill: boolean; // add a point on a UTC day that had no pass (when fresh card data exists for it)
   excludePrintIds?: Set<string>; // treat these card prints as rejected (a dry run of the bad-print cleanup)
+  onBasket?: (symbol: string, at: Date, members: ConstituentPrice[]) => void; // each series' basket at each pass (index-rules-replay)
 }
 
 export interface RebuildPoint {
@@ -82,7 +83,7 @@ function daysWithout(days: Set<string>): string[] {
   return out;
 }
 
-interface PassSchedule {
+export interface PassSchedule {
   passes: { t: Date; cutoff: Date }[]; // real passes only, oldest first
   rowAt: Map<string, { id: string; v: bigint }>; // `${marketId}|${t}` → existing print (real or synthetic)
   firstT: Map<string, number>; // marketId → its first real print (series lifetime start)
@@ -91,7 +92,7 @@ interface PassSchedule {
 /** The real oracle passes (all indices of a pass share its timestamp), read from the index prints. A rebuild's
  *  synthetic gap-day points never count as a pass; an operator's manual print (admin-pricing) is not a pass and
  *  is never rewritten; a pinned index (which live never prints over) is left out entirely. */
-async function loadPassSchedule(q: Queryer): Promise<PassSchedule> {
+export async function loadPassSchedule(q: Queryer): Promise<PassSchedule> {
   const rows = (
     await q.query<{ id: string; market_id: string; t: Date; ing: Date; v: string; synthetic: boolean }>(
       `SELECT o.id::text AS id, o.market_id, o.source_observed_at AS t, o.ingested_at AS ing, o.index_price_e6::text AS v,
@@ -124,7 +125,7 @@ export async function missingPassDays(q: Queryer): Promise<string[]> {
 }
 
 /** A print's PSA-10: the stored provider-neutral `gradedE6`, else a replay of the live choice (older prints). */
-function gradedOf(stored: string | null, sxLadder: unknown, tplPsa10: unknown): bigint | null {
+export function gradedOf(stored: string | null, sxLadder: unknown, tplPsa10: unknown): bigint | null {
   if (stored != null) return BigInt(stored);
   if (Array.isArray(sxLadder)) {
     const v = scrydexPsa10E6(sxLadder as GradeRow[]);
@@ -267,6 +268,7 @@ export async function planIndexRebuild(q: Queryer, o: RebuildOptions): Promise<R
     for (const { idx, members, cur } of buildBaskets(cards, { ...o, members: membership.length ? membershipAsOf(membership, pass.cutoff) : undefined })) {
       const symbol = indexSymbol(idx.game, idx.slug);
       if (pinned.has(symbol)) continue;
+      o.onBasket?.(symbol, pass.cutoff, members);
       let s = series.get(symbol);
       if (!s) {
         s = {

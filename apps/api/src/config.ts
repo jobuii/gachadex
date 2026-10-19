@@ -200,6 +200,12 @@ export const config = {
   // FTSE-style buffer, removal between dates only for a cause, reserve replacements, public change log. OFF = the old
   // rule (re-slice top-N every pass). On launch the member lists start from the live baskets (no jump).
   indexRulesV3: process.env.INDEX_RULES_V3 === 'true',
+  // R4 buffer: a member stays while it ranks within INDEX_STAY_PCT% of N (110 → Top 100 stays to 110, Top 250 to 275).
+  indexStayPct: (() => {
+    const v = num('INDEX_STAY_PCT', 110);
+    if (!(v >= 100)) throw new Error(`INDEX_STAY_PCT must be a number >= 100 (got "${process.env.INDEX_STAY_PCT}")`);
+    return v;
+  })(),
   // One market per printing (2026-10-18 plan, P5): discovery also lists the other printings (Normal / Reverse / Foil…)
   // of featured cards, and the one-market-per-TCGplayer-product guard is relaxed to one per (product, printing) —
   // db/market-guards.ts. OFF = today's one printing per product (the guard is restored when no siblings exist).
