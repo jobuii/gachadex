@@ -69,6 +69,24 @@ export function onePerProduct(cands: Candidate[]): { kept: Candidate[]; dropped:
   return { kept: cands.filter((c) => keep.has(c.marketId)), dropped: cands.filter((c) => !keep.has(c.marketId)) };
 }
 
+/** Decision B (2026-10-19): who replaces members leaving between change dates — the change's reserves first, then the
+ *  best-ranked cards that may join NOW, so a basket doesn't shrink until the next 1st. Never a `barred` card (one that
+ *  left for a cause since the last change comes back only at a change date, R11) and never a second printing of a
+ *  product already in the basket (R12: `heldProducts`). */
+export function substitutes(cands: Candidate[], reserves: string[], count: number, barred: Set<string>, heldProducts: Set<string>): string[] {
+  const byId = new Map(cands.map((c) => [c.marketId, c]));
+  const order = [...reserves.map((id) => byId.get(id)).filter((c): c is Candidate => c != null), ...[...cands].sort(byPriceDesc)];
+  const out: string[] = [];
+  const products = new Set(heldProducts);
+  for (const c of order) {
+    if (out.length >= count) break;
+    if (!mayJoin(c) || barred.has(c.marketId) || products.has(c.productKey)) continue; // (a pick's own product blocks a repeat)
+    out.push(c.marketId);
+    products.add(c.productKey);
+  }
+  return out;
+}
+
 /** A change date (R2–R5, R11, R12): the new basket from the current members and the ranked candidates. */
 export function reconstitute(all: Candidate[], t: TierRules, reserveSize = RESERVE_SIZE): Reconstitution {
   const removes: Reconstitution['removes'] = [];

@@ -73,7 +73,7 @@ export interface CardUpsert {
   // them; tcgpricelookup supplies both. Never erased on re-upsert (COALESCE keeps the stored value).
   tcgplayerId?: number | null;
   providerCardId?: string | null;
-  // Index-constituent eligibility (the discovery top-250). Omit to keep the stored value.
+  // Index-constituent eligibility (the discovery featured set: top 400 singles + top 250 sealed per game, D10). Omit to keep the stored value.
   featured?: boolean | null;
   // single | sealed | other (product-type.ts) — from the provider's structured fields. Omit to keep the stored value.
   productType?: ProductType | null;
@@ -211,7 +211,7 @@ export interface MarketView {
   pricePinned: boolean;
   restricted: boolean; // low price confidence -> reduce-only (no new positions); see priceCard
   markStabilizing: boolean; // §6a mark guard engaged: the mark is creeping toward an uncorroborated jump (price stabilizing)
-  featured: boolean; // top-250-by-price member (the sidebar's default card list)
+  featured: boolean; // in the discovery featured set (top singles by price, D10: 400 per game) — the sidebar's default card list
   volume24hUsd: number; // 24h traded notional (USD) — the screener Volume column + Top-Volume sort
   rarity: string | null; // card rarity (from metadata) — the screener Rarity column + By-Rarity filter
   jpy: boolean; // Japanese-market card — the JPY on/off filter (default off: the main 250/game is English)

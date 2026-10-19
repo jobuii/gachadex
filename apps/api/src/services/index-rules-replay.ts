@@ -140,7 +140,7 @@ export async function replayV3(db: Db, opts: RebuildOptions, old: ReplayRun, sta
   const was = cfg.indexStayPct;
   cfg.indexStayPct = stayPct;
   try {
-    for (const t of ['index_members', 'index_changes', 'index_exclusions']) await db.query(`DELETE FROM ${t}`);
+    for (const t of ['index_members', 'index_changes', 'index_exclusions', 'index_rules_off', 'index_basket_size']) await db.query(`DELETE FROM ${t}`);
     // the flags are set by hand below, as of each pass — the trigger would stamp them "now" into the history it reads
     await db.query(`ALTER TABLE markets DISABLE TRIGGER trg_market_flag_changes`);
     // R10: each basket launches from the old rule's basket at ITS first pass — a game whose cards were first priced

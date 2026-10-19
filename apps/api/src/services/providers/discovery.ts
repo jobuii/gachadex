@@ -72,6 +72,7 @@ const clearState = (db: Db, game: string) => db.query(`DELETE FROM settings WHER
  *  rows are separate provider cards, same product) — keep only the highest-priced printing, per the
  *  one-market-per-canonical-variant decision (a duplicate would also trip idx_markets_tcgplayer). */
 export function topCandidates(kept: Candidate[], topN: number): Candidate[] {
+  if (topN <= 0) return [];
   const sorted = [...kept].sort(
     (a, b) =>
       b.price - a.price ||
@@ -95,11 +96,11 @@ export function topCandidates(kept: Candidate[], topN: number): Candidate[] {
  *  index), chosen as top-N SINGLES and, separately, top-N SEALED — so sealed product never takes a card
  *  slot (it was 71% of the Pokémon "Top 100 cards" by weight) and feeds its own Sealed basket. 'other'
  *  (e.g. Code Cards) is in neither. */
-export function featuredSelection(kept: Candidate[], topN: number): Candidate[] {
+export function featuredSelection(kept: Candidate[], singlesN: number, sealedN = singlesN): Candidate[] {
   const liquid = kept.filter((c) => c.liq !== false);
   return [
-    ...topCandidates(liquid.filter((c) => (c.pt ?? 'single') === 'single'), topN),
-    ...topCandidates(liquid.filter((c) => c.pt === 'sealed'), topN),
+    ...topCandidates(liquid.filter((c) => (c.pt ?? 'single') === 'single'), singlesN),
+    ...topCandidates(liquid.filter((c) => c.pt === 'sealed'), sealedN),
   ];
 }
 
@@ -158,11 +159,12 @@ export async function discoverGame(
   db: Db,
   client: TcgPriceLookupClient,
   game: string,
-  opts: { topN?: number; minPriceUsd?: number; apply?: boolean; fresh?: boolean; force?: boolean; log?: (msg: string) => void },
+  // topN = featured singles (D10: config.featuredSinglesPerGame); sealedN = featured sealed products, chosen separately
+  opts: { topN?: number; sealedN?: number; minPriceUsd?: number; apply?: boolean; fresh?: boolean; force?: boolean; log?: (msg: string) => void },
 ): Promise<DiscoveryReport> {
   // the keep-threshold defaults to the SAME $10 floor as the search-and-bet listing gate, so the
   // featured universe and the on-demand listable universe can't silently desynchronize
-  const { topN = 250, minPriceUsd = MIN_LIST_PRICE_USD, apply = false, fresh = false, force = false } = opts;
+  const { topN = config.featuredSinglesPerGame, sealedN = config.featuredSealedPerGame, minPriceUsd = MIN_LIST_PRICE_USD, apply = false, fresh = false, force = false } = opts;
   const log = opts.log ?? (() => {});
   // Cutover-sequencing guard: while pokemontcg is the live feed it re-stamps ITS top-250 as featured
   // every pass, so a pokemon rebalance here would be silently reverted (and oscillate the index
@@ -202,7 +204,7 @@ export async function discoverGame(
     await saveState(db, game, state);
   }
 
-  const top = featuredSelection(state.kept, topN);
+  const top = featuredSelection(state.kept, topN, sealedN);
   if (!apply) {
     return { game, scanned, kept: state.kept.length, top, applied: false, resumedFromOffset };
   }
@@ -256,7 +258,7 @@ export async function discoverGame(
   }
   if (conflicts > 0) log(`${conflicts} candidate(s) skipped on identity conflicts`);
   // A re-featured card that the retirement sweep had delisted (dropped out, sat dead, then its price
-  // rose back into the top-250) must REJOIN the live set — a featured market may never be delisted,
+  // rose back into the featured set) must REJOIN the live set — a featured market may never be delisted,
   // or it gets no price and silently drops out of the index basket. created_at resets, so the engine
   // freshness gate keeps it un-openable until the next refresh prints (no stale-mark opens).
   // Printing siblings come back the same way. At most one market per card label, and never onto a label a live market

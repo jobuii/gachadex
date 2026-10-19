@@ -62,8 +62,13 @@ keeps a **fixed list of cards** that changes once a month, the way the big stock
   least **30 days**. The Graded index also needs a PSA 10 price.
 - **Leaving between change dates — only for a reason.** The card is delisted, has had no fresh price for **14 days**
   (Graded: no PSA 10 for 14 days), or is removed by the operator with a stated reason. Its place goes to the best card
-  on the **reserve list** (the runners-up of the last ranking). A card whose price stops updating stays at its last
-  price until it recovers or leaves.
+  on the **reserve list** (the runners-up of the last ranking), or else to the best card that may join right now — at
+  the next price update, or as soon as one qualifies. A card that left this way comes back only when a later change
+  takes effect, and a card already announced as coming in still waits for its date. A card whose price stops updating
+  stays at its last price until it recovers or leaves.
+- **If every card leaves** (say, a price outage): the index holds its level until prices return, then refills with the
+  best cards that may join, as if starting fresh. While it has no cards, its price doesn't move, so trading switches
+  to close-only after 36 hours and back on once it has cards again.
 - **One printing per card.** When a card trades in several printings (say Normal and Foil), only its most valuable
   printing can be a member, checked on each change date.
 - **No jump.** A change lands between two price updates, so the index level carries straight on — the move up to

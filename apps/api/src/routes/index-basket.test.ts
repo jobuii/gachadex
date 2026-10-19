@@ -60,6 +60,31 @@ test('GET /markets/index-basket: members after launch; 400 on a bad symbol, 404 
   assert.equal((await app.inject({ method: 'GET', url: '/markets/index-basket?symbol=INDEX:missing' })).statusCode, 404);
 });
 
+test('D: the change log shows what the change itself did, and announced cards that did not join', async () => {
+  const id = (sym: string) => db.query<{ id: string }>(`SELECT id FROM markets WHERE symbol = $1`, [sym]).then((r) => r.rows[0].id);
+  await ingest(db, async () => [oc('c', 30), oc('d', 20), oc('e', 10)]);
+  const [a, b, c, d, e] = await Promise.all(['a', 'b', 'c', 'd', 'e'].map((x) => id(`pokemon:${x}`)));
+  const at = new Date('2027-03-04T06:00:00Z');
+  await db.query(
+    `INSERT INTO index_changes(basket, change_date, reference_at, published_at, effective_at, applied_at, adds, removes, reserves)
+     VALUES('pokemon:top-100', '2027-03-01', '2027-03-01', '2027-03-01T06:00:00Z', $1, $1, $2, $3, '{}')`,
+    [at, [c, d, e], JSON.stringify([{ marketId: b, reason: 'rank' }])],
+  );
+  // (the first test switched the rules off, closing every list — so the rows are written out here)
+  const row = (m: string, joined: string | Date, reason: string, left: Date | null = null, why: string | null = null) =>
+    db.query(`INSERT INTO index_members(basket, market_id, joined_at, left_at, join_reason, leave_reason) VALUES('pokemon:top-100', $1, $2, $3, $4, $5)`, [m, joined, left, reason, why]);
+  await row(c, at, 'change'); // joined by the change
+  await row(e, '2027-03-02T06:00:00Z', 'refill'); // an announced add already in (joined as a refill meanwhile)
+  await row(b, '2027-02-04T06:00:00Z', 'change', at, 'rank'); // removed by the change
+  await row(a, '2027-02-04T06:00:00Z', 'change', at, 'hand'); // removed for a cause in the same pass — not the change
+  const v = (await app.inject({ method: 'GET', url: '/markets/index-basket?symbol=INDEX:top-100' })).json();
+  const entry = v.log.find((l: { changeDate: string }) => l.changeDate === '2027-03-01');
+  const ids = (xs: { marketId: string }[]) => xs.map((x) => x.marketId);
+  assert.deepEqual(ids(entry.adds), [c], 'only the card the change added');
+  assert.deepEqual(entry.removes.map((x: { marketId: string; reason: string }) => [x.marketId, x.reason]), [[b, 'rank']], 'not the same-pass hand removal');
+  assert.deepEqual(ids(entry.notJoined), [d], 'd did not join; e was already in');
+});
+
 test('admin index exclusions: key required, reason required, add → list → clear', async () => {
   const mid = (await db.query<{ id: string }>(`SELECT id FROM markets WHERE symbol = 'pokemon:a'`)).rows[0].id;
   assert.equal((await app.inject({ method: 'GET', url: '/admin/index-exclusions' })).statusCode, 401);

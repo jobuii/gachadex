@@ -2153,6 +2153,9 @@ td.addr:hover { text-decoration: underline; }
 .ib-chg > div > div { padding: 0.12rem 0; }
 .ib-chg-h { font-size: 0.55rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.2rem; }
 .ib-chg-h.up { color: var(--success); } .ib-chg-h.down { color: var(--danger); }
+.ib-chg-skip { grid-column: 1 / -1; border-top: 1px dashed var(--border); padding-top: 0.4rem; }
+.ib-chg-skip .ib-chg-h { color: var(--text-muted); }
+.ib-chg-why { font-size: 0.56rem; color: var(--text-muted); margin-top: 0.2rem; }
 .ib-reason { font-size: 0.52rem; color: var(--gold); border: 1px solid color-mix(in srgb, var(--gold) 45%, transparent); border-radius: 4px; padding: 0 0.3rem; margin-left: 0.3rem; white-space: nowrap; }
 .ib-log details { border-bottom: 1px solid var(--border); padding: 0.45rem 0; }
 .ib-log summary { cursor: pointer; font-size: 0.66rem; color: var(--text); display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }

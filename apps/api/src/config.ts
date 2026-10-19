@@ -200,6 +200,10 @@ export const config = {
   // FTSE-style buffer, removal between dates only for a cause, reserve replacements, public change log. OFF = the old
   // rule (re-slice top-N every pass). On launch the member lists start from the live baskets (no jump).
   indexRulesV3: process.env.INDEX_RULES_V3 === 'true',
+  // D10 (2026-10-18 plan): discovery features the top 400 SINGLES per game (was 250) so a Top 250 has a buffer and a
+  // reserve list; sealed product keeps its own, separate top 250.
+  featuredSinglesPerGame: num('FEATURED_SINGLES_PER_GAME', 400),
+  featuredSealedPerGame: num('FEATURED_SEALED_PER_GAME', 250),
   // R4 buffer: a member stays while it ranks within INDEX_STAY_PCT% of N (110 → Top 100 stays to 110, Top 250 to 275).
   indexStayPct: (() => {
     const v = num('INDEX_STAY_PCT', 110);

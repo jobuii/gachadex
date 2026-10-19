@@ -20,13 +20,14 @@ tables `index_members`, `index_changes`, `index_exclusions`, view `index_locked_
 | R3 | To join: featured, not delisted / reduce-only / low-confidence, fresh at the reference time, first live (non-backfill) price ≥ `INDEX_SEASONING_DAYS` (30) old; Graded also needs a PSA-10. |
 | R4 | FTSE-style buffer: join at rank ≤ 90, stay while ≤ 110 (Top 250: 225 / 275; Graded scales with its size). Exactly N: too many → lowest-ranked go; too few → highest-ranked that may join fill in; fewer eligible → the basket holds fewer. |
 | R5 | Between dates a member leaves only for a cause: delisted; no fresh price for `INDEX_STALE_REMOVE_DAYS` (14); Graded: no PSA-10 for 14 days; removed by hand. Reduce-only / low-confidence alone are not causes. |
-| D3 | A leaver between dates is replaced at the next pass by the best reserve (the change's runners-up, `RESERVE_SIZE` 20) that may join now. |
+| D3 | A leaver between dates is replaced by the best reserve (the change's runners-up, `RESERVE_SIZE` 20) that may join now, else (decision B, 2026-10-19) the best card that may join now. The basket keeps its size (`index_basket_size`: set at launch and to the size a change describes — `index_changes.size` — when it applies); a gap nothing can fill yet is filled on a later pass. Until a change applies, refills stop at the size it will leave, and never take or re-add a card it announces. |
+| C | (2026-10-19) A basket that loses every member stays governed: empty, it holds its level (no print → the 36 h stale halt). It refills as a fresh start — the best that may join, up to N, the R11 bar lifted, size N until the next change applies. Switching the rules off ends it (`index_rules_off` marker). |
 | R6 | A stale member stays at its last price (flat return), as v2 already does. |
 | R7 | Discovery, the universe script and the hourly dead-market sweep never de-feature or delist a member, an announced addition or a reserve. Announced additions are re-checked at the effective pass and backed by reserves. |
 | R8 | Continuity: the change lands between passes (this pass measured on the previous snapshot). |
 | R9 | Public: `GET /markets/index-basket?symbol=…` — members, upcoming change, change log. |
 | R10 | Launch: the first v3 pass takes the live basket (GJ series snapshot) as the member list — no jump; the first change date is the next 1st. |
-| R11 | Removed by hand (`/admin/index-exclusions`): out of every basket until cleared. Removed for a cause: back only via a later change date, passing R3. |
+| R11 | Removed by hand (`/admin/index-exclusions`): out of every basket until cleared. Removed for a cause: back only via a later change date, passing R3 — as a refill too: barred from the publish of the latest applied change (or launch / the latest fresh start) until the next one applies. Counted per era (since the latest launch). |
 | R12 | One printing per product: only the most valuable printing of a TCGplayer product can be a member, fixed per change date. |
 
 History: the rebuild reads `index_members` as of each pass from a basket's launch on, and before it the featured /

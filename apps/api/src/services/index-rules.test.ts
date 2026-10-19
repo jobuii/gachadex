@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { reconstitute, onePerProduct, tierRules, type Candidate } from './index-rules.ts';
+import { reconstitute, onePerProduct, substitutes, tierRules, type Candidate } from './index-rules.ts';
 
 // R2–R5, R11, R12 at their edges, on a 10-card basket (join ≤ 9, stay ≤ 11) — the same shape as Top 100 (90/110).
 const T = { n: 10, joinRank: 9, stayRank: 11 };
@@ -77,4 +77,12 @@ test('reserves: the next-best cards that may join, in rank order, capped', () =>
   const r = reconstitute(cands, T, 3);
   assert.equal(r.members.length, 10);
   assert.deepEqual(r.reserves, ['m11', 'm12', 'm14'], 'm13 may not join, so it is no reserve');
+});
+
+test('B substitutes: reserves first, then the best that may join now; never a barred card or a second printing of a held product', () => {
+  const c = (id: string, usd: number, o: Partial<Candidate> = {}): Candidate =>
+    ({ marketId: id, productKey: id, priceE6: BigInt(usd), member: false, canJoin: true, cause: null, excluded: false, ...o });
+  const cands = [c('top', 90), c('held-sib', 80, { productKey: 'P' }), c('barred', 70), c('stale', 60, { canJoin: false }), c('res', 10), c('next', 50)];
+  assert.deepEqual(substitutes(cands, ['res'], 3, new Set(['barred']), new Set(['P'])), ['res', 'top', 'next']);
+  assert.deepEqual(substitutes(cands, [], 0, new Set(), new Set()), []);
 });

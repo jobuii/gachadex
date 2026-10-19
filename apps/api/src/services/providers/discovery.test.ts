@@ -175,6 +175,7 @@ test('featuredSelection: liquid only; top-N singles and top-N sealed chosen SEPA
   ];
   assert.deepEqual(featuredSelection(kept, 2).map((c) => c.id), ['mox', 'lotus', 'box']);
   assert.deepEqual(featuredSelection(kept, 10).map((c) => c.id), ['mox', 'lotus', 'legacy', 'box']);
+  assert.deepEqual(featuredSelection(kept, 1, 0).map((c) => c.id), ['mox'], 'D10: singles and sealed take separate counts');
 });
 
 test('hasLiquiditySignal: eBay sales or a real TCGplayer spread; one static listing is not liquid', async () => {

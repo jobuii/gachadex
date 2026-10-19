@@ -10,7 +10,8 @@
  *      after max(the 4th, published + INDEX_NOTICE_HOURS);
  *   3. apply a due change: each announced addition is checked again and replaced by the next reserve if it no longer
  *      may join (R7);
- *   4. between dates (R5/D3): a member with a cause leaves; the best reserve that may join now takes its place.
+ *   4. between dates (R5/D3, decision B): a member with a cause leaves; the basket is kept at its size (set at launch
+ *      and at each change) from the reserves, then the best card that may join now — on this pass or a later one.
  * Everything is idempotent: one change per basket per month (unique key), applied_at claimed atomically, at most one
  * open membership per basket and market (partial unique index).
  */
@@ -19,7 +20,7 @@ import type { Db, Queryer } from '../db/client.ts';
 import { config } from '../config.ts';
 import { indexSymbol } from './markets.ts';
 import { productTypeOfMarket, type ProductType } from './product-type.ts';
-import { basketKey, mayJoin, reconstitute, tierRules, type Candidate, type TierRules } from './index-rules.ts';
+import { basketKey, mayJoin, reconstitute, substitutes, tierRules, type Candidate, type TierRules } from './index-rules.ts';
 import { cappedWeights, weightingOf } from './index-weighting.ts';
 
 const DAY_MS = 86_400_000;
@@ -156,14 +157,10 @@ async function leave(q: Queryer, key: string, removes: { marketId: string; reaso
 
 /** R10: a basket that was never launched, or whose rules were switched off since, starts from the live basket of this
  *  moment — its GJ series snapshot — so nothing jumps. A basket emptied by causes (e.g. a provider outage staled every
- *  member) is NOT relaunched from that stale snapshot: it stays empty (the old rule prices it meanwhile) until the next
- *  change date refills it from the ranked pool. */
+ *  member) is NOT relaunched from that stale snapshot: it stays governed and refills from the cards that may join now
+ *  (decision C, removeForCause) — empty, it holds its level, never the old top-N rule. */
 async function launchIfNew(db: Db, b: GovernedBasket, now: Date): Promise<void> {
-  if ((await currentMembers(db, b.key)).size > 0) return;
-  const last = (await db.query<{ leave_reason: string | null }>(
-    `SELECT leave_reason FROM index_members WHERE basket = $1 ORDER BY left_at DESC NULLS FIRST, id DESC LIMIT 1`, [b.key],
-  )).rows[0];
-  if (last && last.leave_reason !== 'rules-off') return;
+  if ((await basketState(db, b.key)) === 'governed') return; // open members, or emptied by causes (C: refills instead)
   const snap = await db.query<{ id: string }>(
     `SELECT DISTINCT ON (ic.card_id) m.id
        FROM index_constituents ic
@@ -172,7 +169,20 @@ async function launchIfNew(db: Db, b: GovernedBasket, now: Date): Promise<void> 
       ORDER BY ic.card_id, (m.status = 'delisted'), m.featured DESC, m.id`,
     [b.gjSymbol, b.game],
   );
-  await db.tx((q) => join(q, b.key, snap.rows.map((r) => r.id), now, 'launch'));
+  await db.tx(async (q) => {
+    await join(q, b.key, snap.rows.map((r) => r.id), now, 'launch');
+    await setSize(q, b.key, now);
+  });
+}
+
+/** Decision B: the size the basket keeps until the next change — `size`, or its member count right now (a launch). */
+async function setSize(q: Queryer, key: string, at: Date, size?: number): Promise<void> {
+  await q.query(
+    `INSERT INTO index_basket_size(basket, size, set_at)
+     SELECT $1, COALESCE($3::int, (SELECT count(*)::int FROM index_members WHERE basket = $1 AND left_at IS NULL)), $2
+     ON CONFLICT (basket) DO UPDATE SET size = EXCLUDED.size, set_at = EXCLUDED.set_at`,
+    [key, at, size ?? null],
+  );
 }
 
 /** R1: publish this month's change once the reference time has passed (only for a basket launched before it). */
@@ -189,10 +199,11 @@ async function publishIfDue(db: Db, b: GovernedBasket, now: Date): Promise<void>
   const seen = new Set(cands.map((c) => c.marketId));
   const ineligible = [...members].filter((id) => !seen.has(id)).map((marketId) => ({ marketId, reason: 'ineligible' }));
   const effectiveAt = new Date(Math.max(earliestEffective.getTime(), now.getTime() + config.indexNoticeHours * 3_600_000));
+  const removes = [...r.removes, ...ineligible];
   await db.query(
-    `INSERT INTO index_changes(basket, change_date, reference_at, published_at, effective_at, adds, removes, reserves)
-     VALUES($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (basket, change_date) DO NOTHING`,
-    [b.key, changeDate, referenceAt, now, effectiveAt, r.adds, JSON.stringify([...r.removes, ...ineligible]), r.reserves],
+    `INSERT INTO index_changes(basket, change_date, reference_at, published_at, effective_at, adds, removes, reserves, size)
+     VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (basket, change_date) DO NOTHING`,
+    [b.key, changeDate, referenceAt, now, effectiveAt, r.adds, JSON.stringify(removes), r.reserves, members.size - removes.length + r.adds.length],
   );
 }
 
@@ -201,19 +212,24 @@ async function publishIfDue(db: Db, b: GovernedBasket, now: Date): Promise<void>
 async function applyIfDue(db: Db, b: GovernedBasket, now: Date): Promise<void> {
   await db.tx(async (q) => {
     const due = (
-      await q.query<{ id: string; adds: string[]; removes: { marketId: string; reason: string }[]; reserves: string[] }>(
+      await q.query<{ id: string; adds: string[]; removes: { marketId: string; reason: string }[]; reserves: string[]; size: number | null }>(
         `UPDATE index_changes SET applied_at = $3
           WHERE applied_at IS NULL AND NOT cancelled
             AND id = (SELECT id FROM index_changes WHERE basket = $1 AND applied_at IS NULL AND NOT cancelled AND effective_at <= $2 ORDER BY change_date LIMIT 1)
-          RETURNING id, adds, removes, reserves`,
+          RETURNING id, adds, removes, reserves, size`,
         [b.key, now, now],
       )
     ).rows[0];
     if (!due) return;
     const members = await currentMembers(q, b.key);
     const removes = due.removes.filter((r) => members.has(r.marketId));
-    const cands = await loadCandidates(q, b, now, 'only', [...due.adds, ...due.reserves], members, await exclusions(q));
+    const removing = new Set(removes.map((r) => r.marketId));
+    const cands = await loadCandidates(q, b, now, 'only', [...due.adds, ...due.reserves, ...members], members, await exclusions(q));
     const may = new Map(cands.map((c) => [c.marketId, mayJoin(c)]));
+    // R12 at apply too: a refill since the publish may hold another printing of an add's product
+    const product = new Map(cands.map((c) => [c.marketId, c.productKey]));
+    const held = new Set(cands.filter((c) => c.member && !removing.has(c.marketId)).map((c) => c.productKey));
+    const fits = (id: string) => may.get(id) === true && !held.has(product.get(id)!);
     const room = b.rules.n - (members.size - removes.length); // never past N (a member may have left early for a cause)
     const adds: string[] = [];
     const leftSince = new Set((await q.query<{ market_id: string }>(
@@ -224,49 +240,117 @@ async function applyIfDue(db: Db, b: GovernedBasket, now: Date): Promise<void> {
     for (const id of due.adds) {
       if (adds.length >= room) break;
       if (members.has(id)) continue; // already in (e.g. joined as a reserve meanwhile): done, not failed
-      if (may.get(id)) { adds.push(id); continue; }
-      const sub = reserves.find((r) => may.get(r) && !adds.includes(r));
-      if (sub) adds.push(sub);
+      const pick = fits(id) ? id : reserves.find((r) => fits(r) && !adds.includes(r));
+      if (pick) { adds.push(pick); held.add(product.get(pick)!); }
     }
     await leave(q, b.key, removes, now);
     await join(q, b.key, adds, now, 'change');
+    // the size the change describes — whether or not each add could join now, and whatever gap a cause opened since —
+    // so a shortfall is topped up from the reserves and the pool, later this pass or on a later one (B)
+    const intended = due.size ?? members.size - removes.length + due.adds.filter((id) => !members.has(id)).length;
+    await setSize(q, b.key, now, Math.min(b.rules.n, intended));
   });
 }
 
-/** R5 + D3 between change dates: a member with a cause (or removed by hand, or no longer a single of this game) leaves;
- *  the best reserve that may join replaces it — unless the announced change already removes that member (its adds
- *  fill the slot), and never a reserve that already left this month (R11: back only at a change date). */
+/** R5 + D3 between change dates: a member with a cause (or removed by hand, or no longer a single of this game) leaves.
+ *  Decision B: the basket is kept at its size (index_basket_size) — reserves first, then the best card that may join
+ *  now — on this pass, or on a later one if nothing may join yet. Slots of the announced change's removes stay free
+ *  for its adds, and a card that left for a cause since the last change (this era) comes back only at a change date
+ *  (R11). C: a launched basket that lost every member stays governed; it refills as a fresh start (decision 2026-10-19:
+ *  e.g. after an outage staled every card) — the best cards that may join now, the R11 bar lifted, no reserves first. */
 async function removeForCause(db: Db, b: GovernedBasket, now: Date): Promise<void> {
   const members = await currentMembers(db, b.key);
-  if (!members.size) return;
+  if (!members.size && (await basketState(db, b.key)) !== 'governed') return;
+  // the current era: since the latest launch — an earlier era's changes, reserves and switch-off closes don't count
+  const eraStart = (await db.query<{ t: Date | null }>(
+    `SELECT max(joined_at) AS t FROM index_members WHERE basket = $1 AND join_reason = 'launch'`, [b.key],
+  )).rows[0].t;
+  if (!eraStart) return;
   const latest = (
-    await db.query<{ reserves: string[]; published_at: Date; pending: boolean; removes: { marketId: string }[] }>(
-      `SELECT reserves, published_at, (applied_at IS NULL AND NOT cancelled) AS pending, removes
-         FROM index_changes WHERE basket = $1 AND NOT cancelled ORDER BY change_date DESC LIMIT 1`,
-      [b.key],
+    await db.query<{
+      reserves: string[]; adds: string[]; pending: boolean; removes: { marketId: string }[]; size: number | null; published_at: Date;
+      bar_from: Date | null; announced_in: string[]; announced_out: string[];
+    }>(
+      `SELECT reserves, adds, (applied_at IS NULL) AS pending, removes, size, published_at,
+              -- R11's window opens at the publish of the latest APPLIED change (as applyIfDue bars its reserves)
+              (SELECT published_at FROM index_changes WHERE basket = $1 AND applied_at >= $2 ORDER BY applied_at DESC LIMIT 1) AS bar_from,
+              -- every card any not-yet-applied change announces in or out: no refill takes or re-adds one before it applies
+              ARRAY(SELECT unnest(c.adds) FROM index_changes c
+                     WHERE c.basket = $1 AND c.applied_at IS NULL AND NOT c.cancelled AND c.published_at >= $2) AS announced_in,
+              ARRAY(SELECT jsonb_array_elements(c.removes)->>'marketId' FROM index_changes c
+                     WHERE c.basket = $1 AND c.applied_at IS NULL AND NOT c.cancelled AND c.published_at >= $2) AS announced_out
+         FROM index_changes WHERE basket = $1 AND NOT cancelled AND published_at >= $2 ORDER BY change_date DESC LIMIT 1`,
+      [b.key, eraStart],
     )
   ).rows[0];
-  const leftThisMonth = latest
-    ? new Set((await db.query<{ market_id: string }>(
-        `SELECT market_id FROM index_members WHERE basket = $1 AND left_at IS NOT NULL AND left_at >= $2`, [b.key, latest.published_at],
-      )).rows.map((r) => r.market_id))
-    : new Set<string>();
-  const reserves = (latest?.reserves ?? []).filter((id) => !leftThisMonth.has(id));
-  const pendingRemoves = new Set(latest?.pending ? latest.removes.map((r) => r.marketId) : []);
-  const cands = await loadCandidates(db, b, now, 'only', [...members, ...reserves], members, await exclusions(db));
+  const cands = await loadCandidates(db, b, now, 'only', [...members, ...(latest?.reserves ?? [])], members, await exclusions(db));
   const seen = new Set(cands.map((c) => c.marketId));
   const leaving = [
     ...cands.filter((c) => c.member && (c.excluded || c.cause)).map((c) => ({ marketId: c.marketId, reason: c.excluded ? 'hand' : c.cause! })),
     ...[...members].filter((id) => !seen.has(id)).map((marketId) => ({ marketId, reason: 'ineligible' })),
   ];
-  if (!leaving.length) return;
-  const byId = new Map(cands.map((c) => [c.marketId, c]));
-  const toReplace = leaving.filter((l) => !pendingRemoves.has(l.marketId)).length;
-  const subs = reserves.filter((id) => { const c = byId.get(id); return c != null && mayJoin(c); }).slice(0, toReplace);
+  const restart = leaving.length === members.size; // empty, or emptying on this pass
+  // R11: a card that left since the latest applied change was published (or since launch, before the first) is back
+  // only when a later change applies — not on the 1st, when the next one is only announced (its adds join with notice,
+  // at apply). A fresh start (C) resets it: nobody is barred for leaving up to it (its own pass included), on that pass
+  // or the ones that finish the refill.
+  const leftSince = restart ? new Set<string>() : new Set((await db.query<{ market_id: string }>(
+    `SELECT market_id FROM index_members WHERE basket = $1 AND left_at IS NOT NULL AND left_at >= $2
+        AND left_at > COALESCE((SELECT max(joined_at) FROM index_members WHERE basket = $1 AND join_reason = 'restart'), '-infinity'::timestamptz)`,
+    [b.key, latest?.bar_from ?? eraStart],
+  )).rows.map((r) => r.market_id));
+  const reserves = restart ? [] : (latest?.reserves ?? []).filter((id) => !leftSince.has(id));
+  const leavingIds = new Set(leaving.map((l) => l.marketId));
+  // the announced change's adds join at apply, with notice (R1) — never early as a refill, nor another printing of
+  // theirs (R12). Until it applies, the basket is filled only up to what it will hold AFTER it: its adds counted in,
+  // its removes out, against the size it describes.
+  const pending = latest?.pending ? latest : null;
+  const pendingAdds = pending ? pending.adds.filter((id) => !members.has(id)) : [];
+  const announcedIn = new Set((latest?.announced_in ?? []).filter((id) => !members.has(id)));
+  const announced = new Set([...announcedIn, ...(latest?.announced_out ?? [])]);
+  const staying = new Set([...members].filter((id) => !leavingIds.has(id)));
+  const projected = staying.size + pendingAdds.length - (pending ? pending.removes.filter((r) => staying.has(r.marketId)).length : 0);
+  let row = (await db.query<{ size: number; set_at: Date }>(`SELECT size, set_at FROM index_basket_size WHERE basket = $1`, [b.key])).rows[0];
+  if (!row) {
+    // a basket launched before sizes were kept: its members now, plus the change's removes already out — stored, so
+    // a gap nothing can fill yet is still owed on a later pass
+    const size = members.size + (pending ? pending.removes.filter((r) => !members.has(r.marketId)).length : 0);
+    await setSize(db, b.key, now, size);
+    row = { size, set_at: now };
+  }
+  // a fresh start (C) aims for N, like a launch takes the whole live basket — and keeps aiming for it (its size row)
+  // until the next change applies, even if that change was published before it
+  const restartedSincePublish = pending != null && new Date(row.set_at).getTime() > new Date(pending.published_at).getTime();
+  const target = restart ? b.rules.n : Math.min(b.rules.n, pending && !restartedSincePublish ? (pending.size ?? row.size) : row.size);
+  const toReplace = Math.max(0, Math.min(target - projected, b.rules.n - staying.size)); // and never past N
+  const pool = toReplace > 0 ? await loadCandidates(db, b, now, 'pool', [...members, ...reserves, ...announced], members, await exclusions(db)) : [];
+  const held = new Set(pool.filter((c) => (c.member && !leavingIds.has(c.marketId)) || announcedIn.has(c.marketId)).map((c) => c.productKey));
+  const subs = substitutes(pool, reserves, toReplace, new Set([...leftSince, ...leavingIds, ...announced]), held);
+  if (!leaving.length && !subs.length) return;
+  const fromReserve = new Set(reserves);
   await db.tx(async (q) => {
     await leave(q, b.key, leaving, now);
-    await join(q, b.key, subs, now, 'reserve');
+    await join(q, b.key, subs.filter((id) => fromReserve.has(id)), now, 'reserve');
+    await join(q, b.key, subs.filter((id) => !fromReserve.has(id)), now, restart ? 'restart' : 'refill');
+    // a fresh start aims for N until the next change sets the size: cards still coming back (an outage ends unevenly)
+    // keep joining on later passes
+    if (restart && subs.length) await setSize(q, b.key, now, b.rules.n);
   });
+}
+
+/** Whether the rules govern a basket now: 'governed' once launched (an open member, or its last membership closed for a
+ *  cause), 'off' when its lists were closed by the switch-off, 'new' when never launched. */
+async function basketState(q: Queryer, key: string): Promise<'governed' | 'off' | 'new'> {
+  // the latest event: an open membership wins; else the latest close — a membership's (its reason) or a switch-off marker
+  const r = (await q.query<{ open: boolean; reason: string | null }>(
+    `SELECT open, reason FROM (
+       SELECT left_at IS NULL AS open, leave_reason AS reason, COALESCE(left_at, 'infinity'::timestamptz) AS t FROM index_members WHERE basket = $1
+       UNION ALL SELECT false, 'rules-off', at FROM index_rules_off WHERE basket = $1
+     ) e ORDER BY open DESC, t DESC, (reason = 'rules-off') DESC LIMIT 1`,
+    [key],
+  )).rows[0];
+  if (!r) return 'new';
+  return r.open || r.reason !== 'rules-off' ? 'governed' : 'off';
 }
 
 /** One v3 step per governed basket (each isolated: one basket's error never blocks the others or the pass); returns
@@ -290,10 +374,13 @@ export async function runIndexRules(db: Db, now: Date): Promise<Map<string, Set<
 export async function retireIndexRules(db: Db, now: Date): Promise<void> {
   const open = await db.query(`SELECT 1 FROM index_members WHERE left_at IS NULL LIMIT 1`);
   const pending = await db.query(`SELECT 1 FROM index_changes WHERE applied_at IS NULL AND NOT cancelled LIMIT 1`);
-  if (!open.rows.length && !pending.rows.length) return; // nothing to close: no write
+  const emptied: string[] = []; // governed while empty (C): no open row to close, so they get the switch-off marker
+  for (const b of governedBaskets()) if ((await basketState(db, b.key)) === 'governed' && !(await currentMembers(db, b.key)).size) emptied.push(b.key);
+  if (!open.rows.length && !pending.rows.length && !emptied.length) return; // nothing to close: no write
   await db.tx(async (q) => {
     await q.query(`UPDATE index_members SET left_at = $1, leave_reason = 'rules-off' WHERE left_at IS NULL`, [now]);
     await q.query(`UPDATE index_changes SET cancelled = true WHERE applied_at IS NULL AND NOT cancelled`);
+    for (const key of emptied) await q.query(`INSERT INTO index_rules_off(basket, at) VALUES($1, $2)`, [key, now]);
   });
 }
 
@@ -303,35 +390,49 @@ export interface MembershipRow {
   cardId: string;
   joinedAt: Date;
   leftAt: Date | null;
+  leaveReason: string | null;
 }
 
 export async function loadMembershipRows(q: Queryer): Promise<MembershipRow[]> {
-  const r = await q.query<{ basket: string; card_id: string; joined_at: Date; left_at: Date | null }>(
-    `SELECT im.basket, m.card_id, im.joined_at, im.left_at FROM index_members im JOIN markets m ON m.id = im.market_id WHERE m.card_id IS NOT NULL`,
+  // + each switch-off marker of an emptied basket (C), as a zero-length close with reason 'rules-off'
+  const r = await q.query<{ basket: string; card_id: string; joined_at: Date; left_at: Date | null; leave_reason: string | null }>(
+    `SELECT im.basket, m.card_id, im.joined_at, im.left_at, im.leave_reason FROM index_members im JOIN markets m ON m.id = im.market_id WHERE m.card_id IS NOT NULL
+     UNION ALL SELECT basket, '', at, at, 'rules-off' FROM index_rules_off`,
   );
-  return r.rows.map((x) => ({ basket: x.basket, cardId: x.card_id, joinedAt: new Date(x.joined_at), leftAt: x.left_at ? new Date(x.left_at) : null }));
+  return r.rows.map((x) => ({
+    basket: x.basket, cardId: x.card_id, joinedAt: new Date(x.joined_at), leftAt: x.left_at ? new Date(x.left_at) : null, leaveReason: x.leave_reason,
+  }));
 }
 
-/** The member lists as of `at`, by basket, as card ids — for every basket the rules governed at that moment (an open
- *  membership covers it). Any other basket is absent and keeps the old top-N rule (never launched, or switched off). */
+/** The member lists as of `at`, by basket, as card ids — for every basket the rules governed at that moment: one with an
+ *  open membership, or one whose last membership closed for a cause (C: governed while empty — buildBaskets then holds
+ *  its level, never the old top-N rule). Absent = never launched, or switched off ('rules-off'): the old rule. */
 export function membershipAsOf(rows: MembershipRow[], at: Date): Map<string, Set<string>> {
   const t = at.getTime();
   const out = new Map<string, Set<string>>();
+  const lastClose = new Map<string, { at: number; reason: string | null }>();
   for (const r of rows) {
-    if (r.joinedAt.getTime() > t || (r.leftAt != null && r.leftAt.getTime() <= t)) continue;
+    if (r.joinedAt.getTime() > t) continue;
+    if (r.leftAt != null && r.leftAt.getTime() <= t) {
+      const was = lastClose.get(r.basket);
+      if (!was || r.leftAt.getTime() > was.at) lastClose.set(r.basket, { at: r.leftAt.getTime(), reason: r.leaveReason });
+      continue;
+    }
     let s = out.get(r.basket);
     if (!s) out.set(r.basket, (s = new Set()));
     s.add(r.cardId);
   }
+  for (const [basket, close] of lastClose) if (!out.has(basket) && close.reason !== 'rules-off') out.set(basket, new Set());
   return out;
 }
 
 export interface BasketView {
   basket: string;
-  governed: boolean; // false = the old rule (v3 not on for this basket yet)
+  governed: boolean; // false = the old rule (v3 not on for this basket yet, or switched off); true even while empty (C)
   members: { marketId: string; symbol: string; name: string; joinedAt: string; joinReason: string; priceE6: string | null; weightBps: number | null }[];
   upcoming: { changeDate: string; effectiveAt: string; adds: { marketId: string; name: string }[]; removes: { marketId: string; name: string; reason: string }[] } | null;
-  log: { changeDate: string; appliedAt: string; adds: { marketId: string; name: string }[]; removes: { marketId: string; name: string; reason: string }[] }[];
+  // decision D: what each change actually did — who joined and left when it applied — plus announced cards that didn't join
+  log: { changeDate: string; appliedAt: string; adds: { marketId: string; name: string }[]; removes: { marketId: string; name: string; reason: string }[]; notJoined: { marketId: string; name: string }[] }[];
 }
 
 /** R9: the public member list, upcoming change and change log of the basket behind an index market symbol. */
@@ -367,7 +468,16 @@ export async function indexBasketView(q: Queryer, symbol: string): Promise<Baske
       [key],
     )
   ).rows;
-  const ids = [...new Set(changes.flatMap((c) => [...c.adds, ...c.removes.map((r) => r.marketId)]))];
+  const applied = changes.filter((c) => c.applied_at != null).slice(0, 12);
+  // the moves of each applied change: rows that joined or left at its applied_at, plus every row of its announced adds
+  const moves = (
+    await q.query<{ market_id: string; joined_at: Date; left_at: Date | null; join_reason: string; leave_reason: string | null }>(
+      `SELECT market_id, joined_at, left_at, join_reason, leave_reason FROM index_members
+        WHERE basket = $1 AND (joined_at = ANY($2::timestamptz[]) OR left_at = ANY($2::timestamptz[]) OR market_id = ANY($3))`,
+      [key, applied.map((c) => c.applied_at), applied.flatMap((c) => c.adds)],
+    )
+  ).rows;
+  const ids = [...new Set([...changes.flatMap((c) => [...c.adds, ...c.removes.map((r) => r.marketId)]), ...moves.map((m) => m.market_id)])];
   const names = new Map(
     (await q.query<{ id: string; display_name: string }>(`SELECT id, display_name FROM markets WHERE id = ANY($1)`, [ids])).rows.map((r) => [r.id, r.display_name]),
   );
@@ -378,13 +488,30 @@ export async function indexBasketView(q: Queryer, symbol: string): Promise<Baske
   const pending = changes.filter((c) => c.applied_at == null).at(-1); // the earliest (rows are newest first) — applyIfDue's next
   return {
     basket: key,
-    governed: members.length > 0, // the rules govern it now (an open member list)
+    governed: (await basketState(q, key)) === 'governed',
     members: members.map((m) => ({
       marketId: m.market_id, symbol: m.symbol, name: m.display_name, joinedAt: new Date(m.joined_at).toISOString(), joinReason: m.join_reason,
       priceE6: px.get(m.card_id)?.toString() ?? null, weightBps: weightBps(m.card_id),
     })),
     upcoming: pending ? { changeDate: pending.change_date, effectiveAt: new Date(pending.effective_at).toISOString(), ...named(pending) } : null,
-    log: changes.filter((c) => c.applied_at != null).slice(0, 12).map((c) => ({ changeDate: c.change_date, appliedAt: new Date(c.applied_at!).toISOString(), ...named(c) })),
+    log: applied.map((c) => {
+      const at = new Date(c.applied_at!).getTime();
+      const t = (d: Date | null) => (d == null ? null : new Date(d).getTime());
+      // what the change itself did: its joins ('change'), and its announced removes closed at apply — not the
+      // cause moves the same pass made afterwards (removeForCause shares the timestamp)
+      const announcedOut = new Set(c.removes.map((r) => r.marketId));
+      const joined = moves.filter((m) => t(m.joined_at) === at && m.join_reason === 'change').map((m) => m.market_id);
+      const left = moves.filter((m) => t(m.left_at) === at && announcedOut.has(m.market_id));
+      // an announced add already in at apply (it joined meanwhile as a reserve or refill) did join — just earlier
+      const inBefore = (id: string) => moves.some((m) => m.market_id === id && t(m.joined_at)! < at && (m.left_at == null || t(m.left_at)! >= at));
+      const nm = (id: string) => ({ marketId: id, name: names.get(id) ?? id });
+      return {
+        changeDate: c.change_date, appliedAt: new Date(at).toISOString(),
+        adds: joined.map(nm),
+        removes: left.map((m) => ({ ...nm(m.market_id), reason: m.leave_reason ?? '' })),
+        notJoined: c.adds.filter((id) => !joined.includes(id) && !inBefore(id)).map(nm),
+      };
+    }),
   };
 }
 

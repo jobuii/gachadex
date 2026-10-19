@@ -15,7 +15,7 @@ const REASONS = {
 const reasonLabel = (r) => REASONS[r] ?? r;
 const fullTime = (iso) => `${new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC`;
 
-function ChangeLists({ adds, removes }) {
+function ChangeLists({ adds, removes, notJoined }) {
   return (
     <div className="ib-chg">
       <div>
@@ -28,6 +28,13 @@ function ChangeLists({ adds, removes }) {
           ? removes.map((r) => <div key={r.marketId}>{r.name} <span className="ib-reason">{reasonLabel(r.reason)}</span></div>)
           : <div className="muted">—</div>}
       </div>
+      {notJoined?.length > 0 && (
+        <div className="ib-chg-skip">
+          <div className="ib-chg-h">Announced, didn’t join ({notJoined.length})</div>
+          {notJoined.map((a) => <div key={a.marketId} className="muted">{a.name}</div>)}
+          <div className="ib-chg-why">When the change took effect, these no longer met the joining rules or the index was full.</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -104,7 +111,7 @@ export function IndexBasketDrawer({ market, initialTab = 'members', onClose }) {
               {view.log.map((c, i) => (
                 <details key={c.changeDate} open={i === 0}>
                   <summary><span className="ib-date">{shortDate(c.changeDate)}</span> <span className="ib-pill">+{c.adds.length} / −{c.removes.length}</span> <span className="muted">applied {fullTime(c.appliedAt)}</span></summary>
-                  <ChangeLists adds={c.adds} removes={c.removes} />
+                  <ChangeLists adds={c.adds} removes={c.removes} notJoined={c.notJoined} />
                 </details>
               ))}
             </div>

@@ -146,7 +146,7 @@ export function SidebarMarkets({ markets, loading, selected, onSelect, onListed,
     };
   }, [q, game, tab, user]);
 
-  // Default card list = the featured top-250, highest price first. A search widens to every locally
+  // Default card list = the featured set (D10: top 400 singles per game), highest price first. A search widens to every locally
   // tracked market (long-tail listings included) and adds the whole-catalog section below. Sorted by
   // the REST snapshot price (not live marks) so rows don't reshuffle under the cursor on every tick.
   const list = useMemo(() => {

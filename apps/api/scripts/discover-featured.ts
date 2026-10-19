@@ -5,7 +5,7 @@
  *   DATABASE_URL=<db> TCGPRICELOOKUP_API_KEY=<key> npx tsx scripts/discover-featured.ts <game>            # dry run
  *   DATABASE_URL=<db> TCGPRICELOOKUP_API_KEY=<key> npx tsx scripts/discover-featured.ts <game> --apply    # rebalance
  *
- * Flags: --apply (write), --fresh (discard a previous crawl checkpoint), --top N (default 250),
+ * Flags: --apply (write), --fresh (discard a previous crawl checkpoint), --top N singles (default FEATURED_SINGLES_PER_GAME, 400),
  * --min-usd X (default 10). A full crawl is ~9 min/game at the provider's 1 req/s; interrupted runs
  * resume from the checkpoint. SEQUENCING (plan P5): run pokemon only at cutover — pre-cutover the live
  * pokemontcg feed re-stamps its own featured set every pass and the two would fight. OP/MTG: any time.
@@ -37,7 +37,7 @@ const apply = flag('--apply');
 console.log(`discover-featured: ${game} ${apply ? 'APPLY' : 'dry run'} (pass --apply to rebalance)\n`);
 
 const report = await discoverGame(db, new TcgPriceLookupClient(db), game, {
-  topN: num('--top', 250),
+  topN: num('--top', config.featuredSinglesPerGame), // D10: 400 singles per game (sealed: its own featuredSealedPerGame)
   minPriceUsd: num('--min-usd', 10),
   apply,
   fresh: flag('--fresh'),

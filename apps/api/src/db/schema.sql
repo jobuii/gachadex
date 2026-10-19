@@ -487,8 +487,8 @@ CREATE TABLE IF NOT EXISTS index_members (
   market_id    TEXT NOT NULL REFERENCES markets(id),
   joined_at    TIMESTAMPTZ NOT NULL,
   left_at      TIMESTAMPTZ,
-  join_reason  TEXT NOT NULL,           -- launch | change | reserve
-  leave_reason TEXT                     -- rank | printing | hand | delisted | stale | no-psa10
+  join_reason  TEXT NOT NULL,           -- launch | change | reserve | refill | restart
+  leave_reason TEXT                     -- rank | printing | hand | delisted | stale | no-psa10 | ineligible | rules-off
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_index_members_current ON index_members(basket, market_id) WHERE left_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_index_members_basket ON index_members(basket, joined_at);
@@ -507,6 +507,23 @@ CREATE TABLE IF NOT EXISTS index_changes (
   reserves     TEXT[] NOT NULL,
   cancelled    BOOLEAN NOT NULL DEFAULT false, -- the rules were switched off before it applied (never applied)
   UNIQUE (basket, change_date)
+);
+-- decision B: the size of the basket the change describes (members − removes + adds) — kept from its apply until the
+-- next change; until it applies, refills stop at it (NULL: a change published before sizes were kept)
+ALTER TABLE index_changes ADD COLUMN IF NOT EXISTS size INT;
+-- Decision C: a basket stays governed while empty (all members left for a cause). Switching the rules off must still end
+-- it: open lists close with leave_reason 'rules-off', and an EMPTY governed basket gets this marker instead.
+CREATE TABLE IF NOT EXISTS index_rules_off (
+  id     BIGSERIAL PRIMARY KEY,
+  basket TEXT NOT NULL,
+  at     TIMESTAMPTZ NOT NULL
+);
+-- Decision B: the size a governed basket keeps between change dates — set at launch and when a change applies. A member
+-- leaving for a cause is replaced, on that pass or a later one, until the basket is back to this size.
+CREATE TABLE IF NOT EXISTS index_basket_size (
+  basket TEXT PRIMARY KEY,
+  size   INT NOT NULL,
+  set_at TIMESTAMPTZ NOT NULL
 );
 -- R11: cards an operator removed by hand — out of every basket until cleared (DELETE = cleared).
 CREATE TABLE IF NOT EXISTS index_exclusions (
